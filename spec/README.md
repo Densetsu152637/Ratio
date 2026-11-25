@@ -1,8 +1,19 @@
 # The Ratio specification
 
-Version: draft 0.5 (2026-11-26). Status: design; nothing is implemented.
+Version: draft 0.6 (2026-11-26). Status: design; stage 1 of the implementation (the token
+reader) is built in this repository.
 
-**Changes in draft 0.5.** Design review round 4: declassifying a conversation and subscribing
+**Changes in draft 0.6.** The repository split: Ratio is built as a language in this repository,
+with its own Cargo workspace, CI and releases, and Imperium becomes a host that depends on a
+release tag (R15 revised). Chapter 10 assigns each of the 28 stages to a repository (stages 1 to
+12 here, the engine host, daemon, gates, clients and headless evaluation in Imperium, four stages
+in both), defines the boundary (the `Host` trait as the public API of the `ratio` library,
+semantic versioning with `HOST_API_VERSION` and `IR_VERSION`, pinning by tag, where cross-repository
+tests live) and says which side owns each security requirement; chapter 08 gains the same split
+for its subjects. The specification is no longer pinned by revision; the conformance corpus names
+the chapters it tests instead. No language change.
+
+**Changes in draft 0.5** (kept for reference). Design review round 4: declassifying a conversation and subscribing
 with `secrets: true` are desktop-only, through a single-use challenge and native dialog (no CLI
 path); tool-call arguments on labelled conversations and engine state written from labelled
 values (plans, aids' state, titles including auto-titles, authored source) carry the label, which
@@ -53,10 +64,25 @@ engine seams and resized stages.
 | [05 Shaping model thinking](05-thinking.md) | Prompts and `TrustedPrompt`, thinking steps, scratchpads, effort, sampling, tool choice, structured generation, stopping |
 | [06 Standard library](06-stdlib/README.md) | Every built-in, by module, with signature, semantics, failures and permission |
 | [07 Safety and security](07-security.md) | Sources and trust, no `eval`, authored harnesses, permissions, limits, prompt injection, threat model |
-| [08 Integration with Imperium](08-imperium.md) | Sources, selection and pinning (item 58), the default harness and parity, Consul (item 64), hooks, the Agents panel and live harness view, code mode, headless evals, protocol |
+| [08 Integration with Imperium](08-imperium.md) | Sources, selection and pinning (item 58), the default harness and parity, Consul (item 64), hooks, the Agents panel and live harness view, code mode, headless evals, protocol, which repository owns what |
 | [09 Examples](09-examples.md) | Nine complete programs |
-| [10 Implementation plan](10-implementation.md) | The `imperium-ratio` crate in 28 stages, engine seams, the pinned specification, CI-only testing, conformance suite |
+| [10 Implementation plan](10-implementation.md) | The crates of this repository, the 28 stages split between Ratio and Imperium, the `Host` boundary and its versions, engine seams, the conformance suite, testing |
 | [11 Decisions and open questions](11-open-questions.md) | The user's decisions on Q1 to Q12; Q9 still open |
+
+## The repository
+
+This specification is the `spec/` folder of the Ratio repository, next to the implementation:
+
+| Path | Contents |
+| --- | --- |
+| `spec/` | This specification |
+| `crates/ratio/` | The `ratio` library (package `ratio-lang`), the public facade hosts depend on |
+| `crates/ratio-syntax/` | The token reader (stage 1); the parser from stage 2 |
+| `conformance/` | The conformance corpus by chapter, `spec-map.txt` (which chapters each directory tests) and `builtins.txt` |
+| `scripts/` | The checks CI runs |
+
+The repository's [README](../README.md) explains how to build and test it; chapter 10 explains how
+the work is split with Imperium.
 
 ## Conventions
 
@@ -88,7 +114,7 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | R12 | **No `eval`** in a running program; every harness a model runs through `run_harness` gets untrusted arguments and must have untrusted parameters; models write harnesses only through the **authored-harness** path (stored, checked, pinned by closure hash, taint forced at the boundary, contained by default, caller authority only for a user-approved closure at the authority shown, never above the caller) | 07 |
 | R13 | **Every side effect is an engine call**, decided by Imperium's dispatch (rules, floor, modes, hooks, approvals, events); delegation and session control are tool-gated; Ratio holds no authority of its own | 07, 08 |
 | R14 | **`std:default` replaces the native loop** after the parity suite passes and one release cycle (the user's decision); until then the Rust loop is the default | 08 |
-| R15 | Built as **one crate**, `imperium-ratio`, independent of the engine behind a concurrent `Host` trait; the specification stays in this repository and Imperium pins a revision | 10 |
+| R15 | Built as a **language in its own repository** (this one: specification, crates, conformance suite, CI, releases), independent of the engine behind a concurrent `Host` trait; Imperium implements the trait and depends on a release tag | 10 |
 | R16 | **Secrecy is a run-time label** (`Secret<T>` statically only where known), opt-in and off by default; labelled values and the conversations they enter never reach network tools, hosted models, commands, non-secret writes, delegation or stored outputs, enforced at the host and at dispatch, and redacted from every event leaving the daemon | 03, 07 |
 
 ## Size of the standard library

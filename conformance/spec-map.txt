@@ -1,0 +1,8 @@
+# Which part of the specification each conformance directory tests.
+#
+# One line per directory under conformance/ that holds .ratio files: the directory name, then
+# one or more references `<chapter file>#<heading anchor>` into spec/. The facade crate's test
+# (crates/ratio/tests/spec.rs) fails when a directory is missing here or a reference names a
+# chapter or heading that does not exist, so the corpus and the specification move together.
+
+syntax 02-syntax.md#lexical-structure 02-syntax.md#strings-and-interpolation 07-security.md#resource-limits 10-implementation.md#the-conformance-suite
