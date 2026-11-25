@@ -22,30 +22,27 @@ the intended authors.
 item or record field; `harnesses.list` shows it and schema derivation uses it as a field's
 `description`.
 
-**Statement ends.** The grammar uses `;` as a terminator. The lexer inserts one at a line end when
-the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or one of `break`,
-`continue`, `return`, `none`, `true`, `false`, **unless** the next non-blank line starts with
-`.`, `?.`, `|>`, `??`, `and`, `or`, `else`, `catch` or `with`. So pipelines and `else` on the
-next line continue the expression. Insertion follows the innermost open delimiter: it applies
-inside a block or a prompt body, and not inside `( )`, `[ ]` or a record literal. Nor is a
-semicolon inserted inside a declaration head (from `fn`, `harness` or `prompt` to the `{` that
-opens its body), so a harness's `with` configuration and its body may each start on a new line.
-Since the lexer needs the parser's delimiter context, insertion is done by the parser's token
-reader, not by a separate pass.
-
 **Identifiers.** `[A-Za-z_][A-Za-z0-9_]*`. By convention types are `UpperCamel`; variants of
 option-like enums (unit variants only, such as `Effort.high`) are `snake_case`, because they are
 also their JSON spelling; other variants are `UpperCamel`; everything else is `snake_case`. The
-checker warns on other spellings. `_` alone is
-the wildcard pattern.
+checker warns on other spellings. `_` alone is the wildcard pattern.
 
-**Keywords** (reserved): `and as break catch const continue defer do else enum false fn for
-harness if import in is let loop match meta none not or par prompt pub race raise repeat return
-state test true try type var while with`.
+**Keywords** (reserved everywhere except after `.` and `::`, see below): `and as break catch const
+continue defer do else enum false fn for harness if import in is let loop match none not or
+prompt pub raise repeat return test true try type var while with`.
 
-**Contextual keywords** (reserved only where noted): the prompt section names `system instruct
-task data example format steps context note include` (at the start of a prompt section), and
-`timeout` (after `with`).
+**Contextual keywords.** These are ordinary identifiers except in one position each:
+
+| Word | Keyword only | Elsewhere |
+| --- | --- | --- |
+| `meta` | at the start of the file's `meta { … }` header | the `meta` module (`meta.frame()`) |
+| `state` | at the start of an item (`state: T = …`) | the `state` module (`state.get()`) |
+| `par`, `race` | when the next token is `{` | the functions `par([…])`, `race([…])` |
+| `timeout` | after `with` | an ordinary name |
+| `system instruct task data example format steps context note include image` | at the start of a prompt section | ordinary names (`context.main()` inside a prompt section is the `context` section followed by an expression) |
+
+**Members.** After `.`, `?.` and `::`, any keyword is an identifier, so `model.loop`,
+`meta.harness` and `e.kind is Denied` need no escaping.
 
 **Literals.**
 
@@ -63,9 +60,48 @@ task data example format steps context note include` (at the start of a prompt s
 | Long string | `"""` … `"""` | `Str`; common indentation and the first and last blank lines are removed |
 | Raw long string | `r"""` … `"""` | `Str`, no interpolation, same dedent |
 
-String escapes: `\n \r \t \\ \" \{ \} \u{1F600}`. In an interpolating string, `{expr}` inserts
-`text.show(expr)` (chapter 06); `{expr:fmt}` applies a format spec (`{x:.2}` two decimals,
-`{n:>6}` right-aligned width 6, `{v:json}` compact JSON).
+### Strings and interpolation
+
+The lexer has a mode stack. In **code mode** it reads tokens; `"`, `"""`, `r"` and `r"""` push a
+**string mode**. In string mode:
+
+```ebnf
+string_body     = { string_char | escape | interpolation } ;
+string_char     = ? any character except "\", "{", "}" and the closing quote;
+                    a line break only in long strings ? ;
+escape          = "\" , ( "n" | "r" | "t" | "\" | '"' | "{" | "}" | "u{" , hex , { hex } , "}" ) ;
+interpolation   = "{" , code_tokens , [ ":" , format_spec ] , "}" ;
+format_spec     = { ? any character except "{", "}" and line breaks ? } ;
+```
+
+- `{` pushes code mode with a brace depth of 0. In it, `(`, `[` and `{` raise the depth and
+  `)`, `]` and `}` lower it; a `:` at depth 0 starts the format spec (so a record literal or a
+  `match` inside an interpolation must be parenthesised), and a `}` at depth 0 ends the
+  interpolation and pops back to string mode.
+- Interpolations nest: a string inside an interpolation pushes another string mode, so
+  `"{if ok { "yes" } else { "no" }}"` is valid. The depth of nesting is limited (chapter 07).
+- In a short string an interpolation may not contain a line break; in a long string it may.
+- A lone `}` in string mode is an error; write `\}`.
+- Raw strings have no escapes and no interpolation; `{` and `}` are characters.
+- `{expr}` inserts `text.show(expr)`; `{expr:fmt}` applies a format spec: `.2` (two decimals),
+  `>6` and `<6` (right and left alignment in a width), `json` (compact JSON).
+
+**Statement ends.** The grammar uses `;` as a terminator. The parser's token reader inserts one at
+a line end when **all** of these hold:
+
+1. the innermost open delimiter is a **block** or a **prompt body** (never `( )`, `[ ]`, a record
+   literal or record type, an enum body, a `match` or `catch` arm list, or a declaration head from
+   `fn`, `harness` or `prompt` up to the `{` of its body);
+2. the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or one of `break`,
+   `continue`, `return`, `none`, `true`, `false`;
+3. the next non-blank line does not start with `.`, `?.`, `|>`, `??`, `and`, `or`, `else` or
+   `catch`.
+
+So pipelines and `else` on the next line continue an expression; inside a `match`, `catch`, enum
+or record the line breaks are only whitespace and the entries are separated by commas; a
+harness's `with` configuration and body may start on lines of their own. A `with` at the start of
+a line in a block always begins a new `with` expression statement; a call override
+(`f(x) with { … }`) must start on the call's line.
 
 ## Operators and precedence
 
@@ -83,7 +119,7 @@ From lowest to highest binding:
 | 8 | `+ -` | left | Numbers, durations, money; `+` also joins strings and lists |
 | 9 | `* / %` | left | `/` on `Int` truncates toward zero; division by zero is `Invalid` |
 | 10 | `-` | prefix | Negation |
-| 11 | `f(…)`, `.name`, `?.name`, `[i]`, `with {…}` | postfix, left | Call, field or method, optional chaining, index, call overrides |
+| 11 | `f(…)`, `f::<T>(…)`, `.name`, `?.name`, `[i]`, `with {…}` | postfix, left | Call, call with type arguments, field or method, optional chaining, index, call overrides |
 
 Equality is structural on values. Handles (chapter 03) compare by identity. Comparison of
 `Float` follows IEEE 754 (`NaN != NaN`); `list.sort` orders `NaN` last.
@@ -92,7 +128,8 @@ Equality is structural on values. Handles (chapter 03) compare by identity. Comp
 
 The grammar is EBNF (ISO 14977 style: `{ }` repetition, `[ ]` option, `|` choice, `( )`
 grouping, terminals in double quotes). `IDENT`, `INT`, `QUANTITY`, `FLOAT`, `DURATION`, `MONEY`,
-`STRING` and `RAW_STRING` are lexical tokens defined above; `;` includes inserted semicolons.
+`STRING` and `RAW_STRING` are lexical tokens defined above (`STRING` includes its
+interpolations); `;` includes inserted semicolons. `MEMBER` is an identifier or any keyword.
 
 ```ebnf
 module          = [ meta_decl ] , { item } , EOF ;
@@ -106,7 +143,9 @@ attribute       = "@" , IDENT , [ "(" , [ arguments ] , ")" ] ;
 
 import_decl     = "import" , import_path , [ "as" , IDENT ]
                 , [ "{" , IDENT , { "," , IDENT } , "}" ] ;
-import_path     = STRING | IDENT , { "." , IDENT } ;
+import_path     = STRING | source_name ;
+source_name     = [ IDENT , ":" ] , IDENT , { "." , IDENT } , [ "@" , STRING ] ;
+                  (* e.g. std:debate, user:critics.strict, plugin:acme/review @"^1" *)
 
 type_decl       = "type" , IDENT , [ type_params ] , "=" , type ;
 enum_decl       = "enum" , IDENT , [ type_params ] , "{" , variant , { "," , variant } , [ "," ] , "}" ;
@@ -140,7 +179,7 @@ statement       = let_stmt | var_stmt | assign_stmt | defer_stmt | expr ;
 let_stmt        = "let" , pattern , [ ":" , type ] , "=" , expr ;
 var_stmt        = "var" , IDENT , [ ":" , type ] , "=" , expr ;
 assign_stmt     = place , ( "=" | "+=" | "-=" | "*=" | "/=" ) , expr ;
-place           = IDENT , { "." , IDENT | "[" , expr , "]" } ;
+place           = IDENT , { "." , MEMBER | "[" , expr , "]" } ;
 defer_stmt      = "defer" , block ;
 
 (* Expressions *)
@@ -159,18 +198,20 @@ add_expr        = mul_expr , { ( "+" | "-" ) , mul_expr } ;
 mul_expr        = unary_expr , { ( "*" | "/" | "%" ) , unary_expr } ;
 unary_expr      = "-" , unary_expr | postfix_expr ;
 postfix_expr    = primary , { postfix } ;
-postfix         = [ type_args ] , "(" , [ arguments ] , ")"
-                | "." , IDENT
-                | "?." , IDENT
+postfix         = [ "::" , type_args ] , "(" , [ arguments ] , ")"
+                | "." , MEMBER
+                | "?." , MEMBER
                 | "[" , expr , "]"
-                | "with" , record_lit ;                  (* call overrides, chapter 04 *)
-type_args       = "<" , type , { "," , type } , ">" ;      (* only directly before "(" *)
-arguments       = argument , { "," , argument } , [ "," ] ;
-argument        = [ IDENT , ":" ] , expr ;
+                | "with" , record_lit ;                  (* call overrides, chapter 04; same line *)
+type_args       = "<" , type , { "," , type } , ">" ;
+arguments       = positional , { "," , positional } , { "," , named } , [ "," ]
+                | named , { "," , named } , [ "," ] ;
+positional      = expr ;
+named           = IDENT , ":" , expr ;
 
 primary         = literal | IDENT | "(" , expr , ")" | tuple_lit | list_lit | record_lit
-                | if_expr | match_expr | for_expr | while_expr | loop_expr | repeat_expr
-                | try_expr | par_expr | race_expr | with_expr | do_expr
+                | variant_lit | if_expr | match_expr | for_expr | while_expr | loop_expr
+                | repeat_expr | try_expr | par_expr | race_expr | with_expr | do_expr
                 | closure | prompt_expr ;
 literal         = INT | QUANTITY | FLOAT | DURATION | MONEY | STRING | RAW_STRING
                 | "true" | "false" | "none" ;
@@ -179,6 +220,7 @@ list_lit        = "[" , [ list_item , { "," , list_item } , [ "," ] ] , "]" ;
 list_item       = [ ".." ] , expr ;                       (* ..xs splices a list *)
 record_lit      = "{" , [ field_init , { "," , field_init } , [ "," ] ] , "}" ;
 field_init      = IDENT , ":" , expr | IDENT | ".." , expr ;   (* shorthand; spread *)
+variant_lit     = type_name , record_lit ;                (* Denied { by: user }, Ok { value: v } *)
 
 if_expr         = "if" , condition , block , [ "else" , ( if_expr | block ) ] ;
 condition       = "let" , pattern , "=" , expr | expr ;
@@ -199,7 +241,7 @@ do_expr         = "do" , block ;
 closure         = "|" , [ closure_param , { "," , closure_param } ] , "|" , ( expr | block )
                 | "||" , ( expr | block )
                 | "fn" , "(" , [ params ] , ")" , [ "->" , type ] , block ;
-closure_param   = pattern , [ ":" , type ] ;
+closure_param   = alt_pattern , [ ":" , type ] ;          (* no top-level "|" alternatives *)
 
 (* Patterns *)
 pattern         = alt_pattern , { "|" , alt_pattern } ;
@@ -219,6 +261,7 @@ section         = "system" , expr
                 | "instruct" , expr
                 | "task" , expr
                 | "data" , expr , [ "as" , expr ]
+                | "image" , expr , [ "as" , expr ]
                 | "example" , expr , "->" , expr
                 | "format" , type
                 | "steps" , expr
@@ -231,33 +274,39 @@ section         = "system" , expr
 
 ### Disambiguation rules
 
-1. After a keyword that takes a block (`if`, `else`, `for`, `while`, `loop`, `repeat`, `try`,
-   `catch`, `defer`, `do`, `fn`, `harness`, `test`), `{` starts a block; after `with`, the first
-   `{` is the configuration record and the next one the block. Elsewhere in
-   expression position, including a closure body, `{` starts a **record literal** when the next
-   token is `}` or `..`, or an identifier followed by `:`, `,` or `}`; otherwise it starts a block.
-   So `|c| { steps: c.steps }` returns a record and `|c| { let x = f(c); x }` runs a block. A
-   record literal in an `if`, `while` or `match` head must be parenthesised.
-2. `f<T>(x)` passes type arguments. Because comparison operators do not associate, `a < b > (c)`
-   is never a valid comparison, so `IDENT <` followed by types, `>` and `(` is always a type
-   argument list.
-3. A block's value is its last statement when that statement is an expression; otherwise
-   `()` (Unit). There is no trailing-semicolon rule: inserted semicolons do not change a block's
-   value.
-4. `|` begins a closure in primary position and separates patterns in a pattern; there is no
-   bitwise-or operator.
-5. In a `match` arm, an identifier that resolves to a variant of the scrutinee's enum (rule 9)
-   or a qualified `type_name` naming a variant is a variant pattern; any other bare identifier
-   binds.
-6. `x with { … }` binds tighter than any binary operator and applies only to a call expression
-   whose callee is a harness (chapter 04); on anything else it is a type error.
-7. `in` inside `for … in` is the loop keyword, not the membership operator.
-8. Named arguments follow positional ones; each parameter is given at most once.
-9. **Contextual variants.** Where the expected type is an enum, a bare identifier that is not a
-   binding in scope and names one of its unit variants resolves to that variant
-   (`effort: high`, `context: fresh`, `mode: plan`). Where the expected type is `ToolSet` or
-   `ToolName`, a bare identifier that is not in scope names a tool (`tools: [read_file, grep]`).
-   Everywhere else the qualified form is needed (`Effort.high`).
+1. **Blocks and records.** After a keyword that takes a block (`if`, `else`, `for`, `while`,
+   `loop`, `repeat`, `try`, `catch`, `defer`, `do`, `fn`, `harness`, `test`), `{` starts a block;
+   after `with`, the first `{` is the configuration record and the next one the block. Elsewhere
+   in expression position, including a closure body, `{` starts a **record literal** when the next
+   token is `}` or `..`, or an identifier followed by `:` or `,`; otherwise it starts a block.
+   So `|c| { steps: c.steps }` returns a record, `|c| { x }` is a block returning `x`, and a
+   one-field shorthand record is written `{ x, }`. A record or variant literal in an `if`,
+   `while`, `for` or `match` head must be parenthesised.
+2. **Type arguments** use the turbofish: `json.decode::<Plan>(j)`, `model.generate_as::<Note>(p)`.
+   Bare `<` is always the comparison operator in expressions.
+3. **Variant literals.** `Name { … }` in expression position (outside heads, rule 1) constructs
+   the payload variant `Name`, which must resolve to a variant with exactly those fields.
+4. **Block values.** A block's value is its last statement when that statement is an expression;
+   otherwise `()` (Unit). Inserted semicolons do not change a block's value.
+5. `|` begins a closure in primary position and separates patterns in a pattern; there is no
+   bitwise-or operator. A closure parameter is a single pattern without top-level `|`.
+6. **Patterns.** In a `match` or `catch` arm, an identifier that resolves to a variant of the
+   scrutinee's enum (rule 10) or a qualified `type_name` naming a variant is a variant pattern;
+   any other bare identifier binds.
+7. `x with { … }` binds tighter than any binary operator, must start on the line of the call, and
+   applies only to a call expression whose callee is a harness (chapter 04); on anything else it
+   is a type error.
+8. `in` inside `for … in` is the loop keyword, not the membership operator.
+9. **Arguments.** Positional arguments come first, then named ones; each parameter is given at
+   most once. A closure argument after named ones must be named (`par_map(xs, f: |x| …, limit: 4)`)
+   or moved before them (`par_map(xs, |x| …, limit: 4)`).
+10. **Contextual variants.** Where the expected type is an enum, a bare identifier that is not a
+    **local** binding and names one of its unit variants resolves to that variant
+    (`effort: high`, `context: fresh`, `mode: plan`); names from the prelude and imports do not
+    block this, so `fail` matches `Verdict.fail` even though `fail(…)` is also a function. Where
+    the expected type is `ToolSet` or `ToolName`, a bare identifier that is not a local binding
+    names a tool (`tools: [read_file, grep]`). Everywhere else the qualified form is needed
+    (`Effort.high`).
 
 ## A complete small program
 
@@ -271,9 +320,9 @@ type FileNote = {
   risky: Bool "True when the file has unsafe code or panics on input",
 }
 
-prompt summarise_file(path: Untrusted<Str>, text: Untrusted<Str>) {
+prompt summarise_file(path: Untrusted<Str>, body: Untrusted<Str>) {
   instruct "Summarise this Rust file for a reviewer."
-  data text as path
+  data body as path
   format FileNote
 }
 
@@ -281,10 +330,10 @@ harness summarise(dir: Str) -> [Untrusted<FileNote>]
   with { tools: [glob, read_file], budget: { tokens: 200k, wall: 10m } }
 {
   let files = tools.glob("*.rs", path: dir).paths |> list.take(40)
-  par_map(files, limit: 4, |path| {
+  par_map(files, |path| {
     let body = tools.read_file(path).text
-    model.generate_as<FileNote>(summarise_file(path, body))
-  })
+    model.generate_as::<FileNote>(summarise_file(path, body))
+  }, limit: 4)
   |> list.sort_by(|n| n.path)
 }
 ```

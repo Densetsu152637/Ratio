@@ -1,21 +1,22 @@
 # 09 Examples
 
-Nine complete packages. Each is a whole `.ratio` file that type checks against this
-specification; together they use most of the language and a large part of the standard library.
-They are also the first entries of the conformance suite (chapter 10), run against the scripted
-host.
+Nine complete packages. Each is a whole `.ratio` file, re-checked by hand against chapters 02 to
+06 of this draft (argument order, turbofish type arguments, record and block disambiguation,
+semicolon insertion, contextual variants, taint and `Brief` sinks, `sees`, tool gating). They are
+also the first entries of the conformance suite (chapter 10), where the checker and the scripted
+host will confirm them mechanically.
 
 | # | Package | Shows |
 | --- | --- | --- |
 | 1 | `std:default` | The native agent loop |
 | 2 | `std:plan-execute-verify` | Planning, step execution with acceptance checks, re-planning, verification |
 | 3 | `std:self-consistency` | Sampling and voting, escalation on low agreement |
-| 4 | `debate` | Two harnesses on different models argue; a third judges |
-| 5 | `tree-of-thought` | Search over partial solutions with memoised evaluation |
-| 6 | `research` | Retrieval over memory, earlier sessions and the web, reranking, cited answers, verification |
+| 4 | `user:debate` | Two harnesses on different models argue; a third judges |
+| 5 | `user:tree-of-thought` | Search over partial solutions with memoised evaluation |
+| 6 | `user:research` | Retrieval over memory, earlier sessions and the web, reranking, cited answers, verification |
 | 7 | `std:consul-escalation` | Roadmap item 64 |
 | 8 | `std:tdd-fix` | A test-driven code-fix subagent |
-| 9 | `digest` | Map-reduce over an input too large for one context |
+| 9 | `user:digest` | Map-reduce over an input too large for one context |
 
 ## 1. The default agent loop
 
@@ -97,7 +98,7 @@ pub harness turn(turn: Turn) -> Reply
     let start = context.mark(conv)
     context.append_user(conv, prompt {
       instruct "Carry out this step of the plan, and only this step. Say when it is done."
-      task step.title
+      task as_task(step.title, because: "a step of the plan this harness's planner wrote")
     })
     model.loop(conv, max_steps: STEP_BUDGET)
     let verdict = accept(step, context.excerpt(conv, from: start))
@@ -131,6 +132,9 @@ fn mark(p: Untrusted<Plan>, i: Int, status: StepStatus) -> Untrusted<Plan> {
 }
 ```
 
+The step title reaches the `task` section only through `as_task`, which is journalled with its
+reason; the acceptance criterion and the transcript go to the checker as framed data.
+
 ## 3. Self-consistency voting
 
 Samples several worked solutions, votes on the normalised final answers, and when agreement is
@@ -150,11 +154,13 @@ type Solution = {
 type Adjudication = { answer: Str, why: Str }
 type Voted = { answer: Untrusted<Str>, agreement: Float, samples: Int, adjudicated: Bool }
 
+/// Budget: n samples with up to two repairs each, plus one adjudication with repairs
+/// (3n + 3 model calls at most); 32 covers n up to 9.
 pub harness solve(question: UserText, n: Int = 7) -> Voted
-  with { context: none, sampling: { temperature: 0.7 }, budget: { model_calls: 16 } }
+  with { context: none, sampling: { temperature: 0.7 }, budget: { model_calls: 32 } }
 {
   let vote = think.self_consistency(n,
-    || model.generate_as<Solution>(prompt {
+    || model.generate_as::<Solution>(prompt {
       instruct "Solve the problem. Work briefly in `reasoning`, then give only the final answer."
       task question
       format Solution
@@ -165,8 +171,8 @@ pub harness solve(question: UserText, n: Int = 7) -> Voted
     return { answer: vote.key, agreement: vote.agreement, samples: n, adjudicated: false }
   }
 
-  let candidates = vote.counts.keys().filter(|k| k != "<error>")
-  let pick = model.generate_as<Adjudication>(prompt {
+  let candidates = vote.counts.keys()
+  let pick = model.generate_as::<Adjudication>(prompt {
     instruct "Several attempts disagree. Decide which candidate answer is correct, solving the problem yourself if none is."
     task question
     data text.join(candidates, "\n") as "candidate answers"
@@ -176,12 +182,7 @@ pub harness solve(question: UserText, n: Int = 7) -> Voted
 }
 
 fn normalise(a: Untrusted<Str>) -> Untrusted<Str> {
-  a.trim().lower().replace(",", "").trim_end_matches_dot()
-}
-
-// A local helper, since `text` has no dedicated function for it.
-fn trim_end_matches_dot(s: Untrusted<Str>) -> Untrusted<Str> {
-  s.strip_suffix(".") ?? s
+  a.trim().lower().replace(",", "").trim_end_matches(".")
 }
 
 @turn
@@ -198,8 +199,6 @@ pub harness turn(turn: Turn) -> Reply
 }
 ```
 
-`…trim_end_matches_dot()` calls a user function as a method (chapter 03, modules).
-
 ## 4. Debate between two harnesses with a judge
 
 Each side is a harness on a different model with its own system prompt; the judge runs on a
@@ -213,19 +212,23 @@ const RUBRIC = "Decide which side argued better on the evidence and reasoning gi
 fn argue(t: DebateTurn, side: Str) -> Untrusted<Str> {
   model.generate(prompt {
     system "You are a debater arguing {side} the proposition. Be honest: no invented facts, and concede points you cannot answer."
-    task t.question
+    data t.question as "proposition"
     if t.round > 1 { data text.show(t.record) as "the debate so far" }
-    instruct "Round {t.round}: make your strongest case {side}, and answer the other side's latest points."
+    instruct "Round {t.round}: make your strongest case {side} the proposition, and answer the other side's latest points."
   })
 }
 
 harness pro(t: DebateTurn) -> Untrusted<Str>
   with { model: "consul", context: none, effort: high }
-{ argue(t, "for") }
+{
+  argue(t, "for")
+}
 
 harness con(t: DebateTurn) -> Untrusted<Str>
   with { model: model.route(tier: strong, location: cloud), context: none, effort: high }
-{ argue(t, "against") }
+{
+  argue(t, "against")
+}
 
 harness judge(r: DebateRecord) -> Untrusted<Judgement>
   with { model: model.route(tier: frontier), context: none, effort: max, sampling: { temperature: 0.0 } }
@@ -240,12 +243,20 @@ pub harness turn(turn: Turn) -> Reply
   let conv = context.main()
   context.append_turn(conv, turn)
   let d = think.debate(turn.message, sides: [pro, con], judge: judge, rounds: 2)
-  let side = match d.verdict.verdict { pass => "for", fail => "against", unsure => "neither side" }
+  let side = match d.verdict.verdict {
+    pass => "for",
+    fail => "against",
+    unsure => "neither side",
+  }
   let out = "Verdict: {side} (score {d.verdict.score:.2}).\n\n{d.verdict.reasons}"
   context.append_assistant(conv, out)
   { text: out, status: ReplyStatus.done }
 }
 ```
+
+`fail` in the `match` is the `Judgement` variant: contextual variants are not blocked by the
+prelude's `fail` function (chapter 02, rule 10). The proposition reaches the debaters as data,
+since `DebateTurn.question` is untrusted.
 
 ## 5. Tree-of-thought search
 
@@ -280,7 +291,7 @@ pub harness search(problem: UserText) -> Untrusted<Str>
 }
 
 fn propose(problem: UserText, n: Untrusted<Node>) -> [Untrusted<Node>] {
-  model.generate_as<Proposals>(prompt {
+  model.generate_as::<Proposals>(prompt {
     instruct "Propose up to four different next steps. Each must follow from the current state."
     task problem
     data text.join(n.steps, "\n") as "steps so far"
@@ -291,7 +302,7 @@ fn propose(problem: UserText, n: Untrusted<Node>) -> [Untrusted<Node>] {
 }
 
 fn evaluate(problem: UserText, n: Untrusted<Node>) -> Untrusted<Evaluation> {
-  model.generate_as<Evaluation>(prompt {
+  model.generate_as::<Evaluation>(prompt {
     instruct "Rate how likely this partial solution is to lead to a correct solution, and say whether it already is one."
     task problem
     data text.join(n.steps, "\n") as "partial solution"
@@ -300,7 +311,12 @@ fn evaluate(problem: UserText, n: Untrusted<Node>) -> Untrusted<Evaluation> {
 }
 
 fn score_of(e: Untrusted<Evaluation>) -> Float {
-  match e.rating { sure => 1.0, likely => 0.6, unlikely => 0.2, impossible => 0.0 }
+  match e.rating {
+    sure => 1.0,
+    likely => 0.6,
+    unlikely => 0.2,
+    impossible => 0.0,
+  }
 }
 
 @turn
@@ -316,7 +332,8 @@ pub harness turn(turn: Turn) -> Reply
 ```
 
 `rate(n).solved` and `score_of(rate(n))` read trusted fields (a `Bool` and a unit enum) of an
-untrusted record, so the search's control flow needs no `trust`.
+untrusted record, so the search's control flow needs no `trust`. Memo hits are recorded on the
+tape, so a replay rates the same nodes.
 
 ## 6. Retrieval over memory, earlier sessions and the web
 
@@ -339,7 +356,7 @@ pub harness research(question: UserText, use_web: Bool = true) -> Answer
     budget: { tokens: 200k, wall: 4m },
   }
 {
-  let qs = model.generate_as<Queries>(prompt {
+  let qs = model.generate_as::<Queries>(prompt {
     instruct "Write up to four short search queries that together cover the question."
     task question
     format Queries
@@ -350,7 +367,9 @@ pub harness research(question: UserText, use_web: Bool = true) -> Answer
     memory.search_sessions(question, limit: 5)
     if use_web and tools.has("web_search") {
       qs |> list.take(2) |> list.flat_map(|q| tools.web_search(q, count: 5)) |> list.unique_by(|h| h.url)
-    } else { [] }
+    } else {
+      []
+    }
   }
 
   let from_memory = mem_hits |> list.take(4) |> list.map(|h| {
@@ -358,10 +377,14 @@ pub harness research(question: UserText, use_web: Bool = true) -> Answer
     { origin: "memory:{h.name}", title: e.description, text: e.body }
   })
   let from_sessions = past_hits |> list.map(|h| { origin: "session:{h.session_id}", title: h.title, text: h.snippet })
-  let pages = par_map_settled(web_hits |> list.take(5), limit: 3, |h| {
+  let pages = par_map_settled(web_hits |> list.take(5), |h| {
     let p = tools.web_fetch(h.url, limit: 12000)
     { origin: h.url, title: p.title, text: p.text }
-  }) |> list.filter_map(|r| match r { Ok { value } => value, Err { error } => none })
+  }, limit: 3)
+    |> list.filter_map(|r| match r {
+      Ok { value } => value,
+      Err { error } => none,
+    })
 
   let candidates = from_memory + from_sessions + pages
   if candidates.is_empty() {
@@ -369,7 +392,7 @@ pub harness research(question: UserText, use_web: Bool = true) -> Answer
   }
   let sources = rerank(question, candidates) |> list.take(6)
 
-  let cited = model.generate_as<Cited>(prompt {
+  let cited = model.generate_as::<Cited>(prompt {
     instruct "Answer from the numbered sources only. Cite every claim with source numbers. Say what the sources do not settle."
     task question
     for (i, s) in sources.enumerate() { data s.text as "[{i + 1}] {s.title}" }
@@ -388,7 +411,7 @@ fn rerank(question: UserText, xs: [Source]) -> [Source] {
       vec.top_k(vs[0], vs |> list.drop(1), k: xs.len()) |> list.map(|(i, _)| xs[i])
     },
     || model.rank(xs, show: |s| s.title + "\n" + s.text.truncate(1500), criteria: "relevance to: {question}")
-         |> list.map(|r| r.value),
+      |> list.map(|r| r.value),
   ])
 }
 
@@ -407,11 +430,17 @@ pub harness turn(turn: Turn) -> Reply
 }
 ```
 
+`research` is a `none`-context frame with an empty `sees`: it reads nothing ambient, only what its
+tools return. If any memory it reads is marked private, the result is `Secret`, and the checker
+then refuses `tools.web_search` on queries derived from it.
+
 ## 7. Consul escalation (roadmap item 64)
 
 The `@task` entry runs a subagent's turn with the native loop's structure, counts rejections, and
-switches the rest of the turn to Consul after the second; the `@turn` entry has Consul critique
-the root's plan whenever it changes. Chapter 08 maps each requirement of item 64 to this code.
+switches the rest of the turn to Consul after the second; after the takeover, Consul's own results
+are reviewed by a different model. The `@turn` entry has Consul critique the root's plan whenever
+it changes, before execution when the plan arrives alone. Chapter 08 maps each requirement of
+item 64 to this code.
 
 ```ratio
 meta {
@@ -421,7 +450,9 @@ meta {
 }
 
 /// The model table id of Imperium's house model Consul.
-const CONSUL = "consul"
+const CONSUL: ModelRef = "consul"
+/// Reviews Consul's own results after a takeover: a model does not grade its own work.
+const INDEPENDENT_CRITIC: ModelRef = model.route(tier: frontier)
 /// Rejections, within one turn of one subagent task, before Consul takes over. Not a setting.
 const TAKEOVER_AFTER = 2
 const RESULT_RUBRIC = "Accept only a result that does what the task asked, says what was verified and what was not, and claims nothing the transcript does not show."
@@ -433,10 +464,8 @@ pub harness task(task: Task) -> Report
   with { context: main }
 {
   let conv = context.main()
-  context.append_user(conv, prompt {
-    task task.brief
-    note "If you cannot continue without an answer from whoever gave you this task, reply with one line starting {QUESTION_MARK} and nothing else."
-  })
+  context.append_task(conv, task)
+  context.notice(conv, "If you cannot continue without an answer from whoever gave you this task, reply with one line starting {QUESTION_MARK} and nothing else.")
 
   var rejections = 0
   var consul = false
@@ -456,8 +485,9 @@ pub harness task(task: Task) -> Report
       if let q = reply.text.trim().strip_prefix(QUESTION_MARK) {
         raise question(q.trim())
       }
-      // A result: Consul reviews it before it is reported. A refusal is a rejection.
-      let review = think.critique(reply.text, rubric: RESULT_RUBRIC, opts: { model: CONSUL })
+      // A result is reviewed before it is reported; a refusal is a rejection.
+      let critic: ModelRef = if consul { INDEPENDENT_CRITIC } else { CONSUL }
+      let review = think.critique(reply.text, RESULT_RUBRIC, opts: { model: critic })
       if review.pass {
         eval.label("finished_by", if consul { "consul" } else { "subagent" })
         break { text: reply.text, ok: true }
@@ -506,25 +536,39 @@ pub harness turn(turn: Turn) -> Reply
     let reply = model.chat(conv)
     steps += 1
     if reply.tool_calls.is_empty() {
-      if context.pending(conv).any(|p| p.kind is steering) { continue }
+      if context.pending(conv).any(|p| p.kind is steering) {
+        continue
+      }
       break { text: reply.text, status: ReplyStatus.done }
     }
-    tools.dispatch_all(conv, reply.tool_calls)
+
+    let calls = reply.tool_calls
+    let plan_alone = calls.len() == 1 and calls[0].name == "update_plan"
+    tools.dispatch_all(conv, calls)
 
     let plan = session.plan()
-    if hash.stable(plan) != last_plan_hash {
-      last_plan_hash = hash.stable(plan)
+    let h = hash.stable(plan)
+    if h != last_plan_hash {
+      last_plan_hash = h
       if let p = plan {
-        let review = think.critique(text.show(p), rubric: PLAN_RUBRIC, opts: { model: CONSUL })
+        let review = think.critique(text.show(p), PLAN_RUBRIC, opts: { model: CONSUL })
         if not review.pass {
-          context.notice(conv, "Consul reviewed your plan and found problems. Revise the plan with update_plan before you act on it.",
-            data: text.show(review.issues))
+          let advice = if plan_alone {
+            "Consul reviewed your new plan before any step ran and found problems. Revise the plan with update_plan before acting on it."
+          } else {
+            "Consul reviewed your plan after the other calls sent with it had already run, and found problems. Check those calls' results, then revise the plan with update_plan."
+          }
+          context.notice(conv, advice, data: text.show(review.issues))
         }
       }
     }
   }
 }
 ```
+
+The rubric is passed positionally (`think.critique(work, rubric, opts:)`), so positional
+arguments come before the named `opts`. `session.notify` interpolates `task.title`, which is
+untrusted; notifications accept untrusted text and show it as plain text.
 
 ## 8. Test-driven code fix
 
@@ -536,12 +580,14 @@ meta { name: "std:tdd-fix", version: "1.0.0", description: "Fix code until the t
 
 const ATTEMPTS = 3
 const EDIT_TOOLS: ToolSet = [read_file, grep, glob, list_dir, edit_file, write_file]
+const TEST_PATH = r"(^|/)(tests?|__tests__|spec)/|_test\.(go|py|rs)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|/)test_[^/]*\.py$"
 
 @task
 pub harness fix(task: Task) -> Report
   with { context: main, budget: { tokens: 400k, wall: 30m } }
 {
   let conv = context.main()
+  context.append_task(conv, task)
   let command = test_command()
   let before = eval.run_tests(command)
   eval.metric("failing_before", math.to_float(before.failed))
@@ -552,7 +598,6 @@ pub harness fix(task: Task) -> Report
 
   context.append_user(conv, prompt {
     instruct "Make the failing tests pass by changing the code under test. Do not edit, delete or skip tests. Change as little as possible, and stop when you believe the fix is complete."
-    task task.brief
     data before.raw.truncate(8000) as "test output"
   })
 
@@ -581,22 +626,41 @@ pub harness fix(task: Task) -> Report
   { text: "Could not make the tests pass in {ATTEMPTS} attempts. Last failures:\n{last.raw.truncate(2000)}", ok: false }
 }
 
-/// The test command, from the files at the project root.
+/// The test command, from the files at the project root, checking that a test setup exists
+/// rather than guessing from the language alone.
 fn test_command() -> Str {
   let names = tools.list_dir(".").entries.map(|e| e.name)
-  if "Cargo.toml" in names { "cargo test --quiet" }
-  else if "go.mod" in names { "go test ./..." }
-  else if "pyproject.toml" in names or "pytest.ini" in names { "python -m pytest -q" }
-  else if "package.json" in names { "npm test --silent" }
-  else { raise fail("no-tests", "no known test setup at the project root") }
+  if "Cargo.toml" in names {
+    return "cargo test --quiet"
+  }
+  if "go.mod" in names {
+    return "go test ./..."
+  }
+  if "package.json" in names {
+    let pkg = json.parse(tools.read_file("package.json").text)
+    if json.get(pkg, "/scripts/test") != none {
+      return "npm test --silent"
+    }
+  }
+  let pytest_config = "pyproject.toml" in names and tools.read_file("pyproject.toml").text.contains("pytest")
+  if "pytest.ini" in names or "conftest.py" in names or pytest_config {
+    return "python -m pytest -q"
+  }
+  raise fail("no-tests", "no recognised test setup at the project root")
 }
 
-/// Test files changed in the working tree, by git.
+/// Test files changed or added in the working tree since the last commit, by git.
 fn test_files_touched() -> [Untrusted<Str>] {
-  let r = tools.run_command("git diff --name-only")
-  r.stdout.lines().filter(|p| re.is_match(r"(^|/)(tests?|__tests__)/|_test\.(go|py)$|\.test\.[jt]sx?$|test_[^/]*\.py$", p))
+  let r = tools.run_command("git status --porcelain --untracked-files=all")
+  r.stdout.lines()
+    |> list.map(|l| l.slice(3).after_last(" -> "))
+    |> list.filter(|p| re.is_match(TEST_PATH, p))
 }
 ```
+
+`text.after_last(" -> ")` returns the whole path when there is no rename arrow, and the new name
+of a renamed file otherwise. The subagent runs `session.checkpoint`, a pseudo-tool its entry frame
+has; a frame without `session_checkpoint` in its tools would get `Denied`.
 
 ## 9. Map-reduce over a large input
 
@@ -615,11 +679,13 @@ pub harness digest(input: Untrusted<Str>, focus: Str = "the main points, decisio
   let a = context.store(input)
   let parts = context.chunks(a, chunk_tokens: window / 2)
 
-  let notes = par_map(parts, limit: 4, |part| retry(|| model.summarize(part, max_words: 200, focus: focus,
-    opts: { model: model.route(tier: basic, location: local) })))
+  let notes = par_map(parts, |part| retry(|| model.summarize(part, max_words: 200, focus: focus,
+    opts: { model: model.route(tier: basic, location: local) })), limit: 4)
   eval.metric("chunks", math.to_float(parts.len()))
 
-  if notes.len() == 1 { return notes[0] }
+  if notes.len() == 1 {
+    return notes[0]
+  }
   model.generate(prompt {
     instruct "Merge these partial summaries into one summary of the whole input. Keep every distinct point once; keep the order of the original."
     note "Focus on {focus}."

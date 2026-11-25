@@ -15,7 +15,7 @@ rejects, say, `Money * Money`).
 
 | Submodule | Covers | Built-ins |
 | --- | --- | --- |
-| [`text`](#text) | Strings | 44 |
+| [`text`](#text) | Strings | 45 |
 | [`re`](#re) | Regular expressions | 9 |
 | [`json`](#json) | JSON, schemas, pointers, patches | 14 |
 | [`list`](#list) | Lists | 47 |
@@ -70,6 +70,7 @@ Lengths and indexes count Unicode scalar values. Case mapping is Unicode's defau
 | `text.after_last` | `(s: S, sep: S) -> S` | Text after the last `sep`, or empty | — |
 | `text.strip_prefix` | `(s: S, prefix: S) -> S?` | `s` without the prefix, or `none` | — |
 | `text.strip_suffix` | `(s: S, suffix: S) -> S?` | `s` without the suffix, or `none` | — |
+| `text.trim_end_matches` | `(s: S, suffix: S) -> S` | `s` with every trailing repetition of `suffix` removed (`"1.00."` without `"."` is `"1.00"`) | `Invalid` (empty `suffix`) |
 | `text.dedent` | `(s: S) -> S` | Removes the common leading whitespace of non-blank lines | — |
 | `text.indent` | `(s: S, prefix: Str = "  ") -> S` | Prefixes every non-blank line | — |
 | `text.wrap` | `(s: S, width: Int = 80) -> S` | Re-flows paragraphs to `width`, never splitting words | — |
@@ -111,7 +112,7 @@ interpreter. Patterns are at most 4 KiB and are compiled once per call site.
 | `json.validate` | `(j: Json, schema: Json) -> [Violation]` | Validates against any JSON Schema (draft 2020-12, no remote references); `{ pointer, message }` per violation | `Invalid` (bad schema) |
 | `json.get` | `(j: Json, pointer: Str) -> Json?` | RFC 6901 pointer lookup | `Invalid` (bad pointer) |
 | `json.set` | `(j: Json, pointer: Str, v: Json) -> Json` | A copy with the value at the pointer replaced or added | `Invalid` |
-| `json.keys` | `(j: Json) -> [Str]` | An object's keys in document order; empty for non-objects | — |
+| `json.keys` | `(j: Json) -> [Untrusted<Str>]` | An object's keys in document order; empty for non-objects. Keys come from the data and are untrusted | — |
 | `json.type_of` | `(j: Json) -> JsonType` | `null`, `bool`, `number`, `string`, `array`, `object` | — |
 | `json.merge` | `(a: Json, b: Json) -> Json` | RFC 7396 merge patch of `b` onto `a` | — |
 | `json.patch` | `(j: Json, ops: Json) -> Json` | Applies an RFC 6902 patch | `Invalid` (failed `test`, bad path) |
@@ -325,7 +326,7 @@ Both `/` and `\` are separators on input; output uses `/`.
 
 | Built-in | Signature | Semantics | Fails with |
 | --- | --- | --- | --- |
-| `url.parse` | `(s: S) -> Url?` | `{ scheme, host, port?, path, query: Map<Str, S>, fragment? }`, parsed as the WHATWG parser does (the one `web_fetch` uses) | — |
+| `url.parse` | `(s: S) -> Url?` | `{ scheme, host, port?, path, query: Map<S, S>, fragment? }` (query keys come from the URL, so they carry its trust), parsed as the WHATWG parser does (the one `web_fetch` uses) | — |
 | `url.host` | `(s: S) -> S?` | The host, lower case, ASCII form | — |
 | `url.with_query` | `(s: S, params: Map<Str, S>) -> S` | Adds or replaces query parameters, encoded | `Invalid` (not a URL) |
 | `url.encode` | `(s: S) -> S` | Percent-encodes a component | — |
@@ -339,5 +340,5 @@ Both `/` and `\` are separators on input; output uses `/`.
 | `codec.base64_decode` | `(s: S) -> S?` | Decodes Base64 to UTF-8 text; `none` when not valid or not UTF-8 | — |
 | `codec.hex_encode` | `(s: S) -> S` | Lower-case hex of the UTF-8 bytes | — |
 | `codec.hex_decode` | `(s: S) -> S?` | Decodes hex to UTF-8 text | — |
-| `codec.csv_parse` | `(s: S, header: Bool = true, delimiter: Str = ",") -> [Map<Str, S>]` | RFC 4180 CSV into rows (keys from the header, else `c1`, `c2`, …) | `Invalid` (ragged rows, with the line) |
+| `codec.csv_parse` | `(s: S, header: Bool = true, delimiter: Str = ",") -> [Map<S, S>]` | RFC 4180 CSV into rows (keys from the header, which carry the text's trust; else `c1`, `c2`, …) | `Invalid` (ragged rows, with the line) |
 | `codec.csv_write` | `(rows: [Map<Str, S>], delimiter: Str = ",") -> S` | Rows to CSV, header from the first row's keys | `Invalid` (missing keys) |

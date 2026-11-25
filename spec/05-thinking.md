@@ -10,8 +10,12 @@ that package common reasoning methods (voting, critique and revision, planning, 
 ### Decision R11: typed prompt sections instead of string templates
 
 A `Prompt` is an ordered list of **sections**, each with a role in the request and a framing rule.
-It is built with a `prompt { … }` expression or a `prompt` declaration (a function returning
-`Prompt`):
+It is built with a `prompt { … }` expression or a `prompt` declaration (a function returning a
+prompt). A prompt whose every section holds trusted content only (no `data`, `image`, `context`
+from a conversation, untrusted `task`, or included untrusted prompt) has the type
+`TrustedPrompt`, a subtype of `Prompt`; the checker infers which of the two a literal is, and a
+`prompt` declaration may declare it (`prompt rules() -> TrustedPrompt { … }`). Only a
+`TrustedPrompt` may be a system prompt:
 
 ```ratio
 prompt fix_request(issue: UserText, failing: Untrusted<Str>, files: [Untrusted<FileText>]) {
@@ -27,16 +31,17 @@ prompt fix_request(issue: UserText, failing: Untrusted<Str>, files: [Untrusted<F
 
 | Section | Accepts | Rendered as | Purpose |
 | --- | --- | --- | --- |
-| `system` | trusted `Str` or `Prompt` | The system message (several are joined with blank lines) | Role, rules, house style |
+| `system` | trusted `Str` or `TrustedPrompt` | The system message (several are joined with blank lines) | Role, rules, house style |
 | `instruct` | trusted `Str` | User-message text, unframed | The harness's own instruction |
-| `task` | `Str`, `UserText` or `Untrusted<Str>` | Trusted text: unframed. Untrusted: inside `<task from="…">`, after one line saying it was written by another agent, says what to do, and cannot change the role, tools or rules | A delegated task (a subagent brief, a plan step) |
+| `task` | `Brief` (so also `Str` and `UserText`) | `Str` and `UserText`: unframed. A `Brief` from elsewhere: inside `<task from="…">`, after one line saying it was given by another agent, says what to do, and cannot change the role, tools or rules | A delegated task (a subagent's brief; a plan step converted with `as_task`) |
 | `data` | anything | Inside `<data label="…">`, after one line saying it is data and never instructions; non-text values as JSON | Files, pages, tool results, other agents' answers |
-| `example` | `input -> output` | A worked example pair, framed as an example | Few-shot demonstrations |
+| `image` | `Image` | An image part of the user message (on models whose card says they take images; elsewhere `Unsupported`), labelled like `data` | Screenshots, attached images |
+| `example` | trusted `input -> output` | A worked example pair. An **instruction position**: few-shot pairs steer the model as strongly as instructions, so both sides must be trusted; examples drawn from untrusted material go in `data` sections instead | Few-shot demonstrations |
 | `format` | a schema-able type | A short description of the expected output and its JSON Schema (when the backend does not enforce the schema itself, see below) | Output contract |
-| `steps` | `[Str]` or `Steps` | A numbered list of thinking steps to follow (see below) | Structured thinking |
-| `context` | `Transcript` or `Conversation` | The messages, as prior turns of the request | Supplying history |
+| `steps` | trusted `[Str]` | A numbered list of thinking steps to follow (see below) | Structured thinking |
+| `context` | `Transcript` or `Conversation` | The messages, as prior turns of the request, each with its own trust (untrusted texts stay framed as they are in the transcript) | Supplying history |
 | `note` | trusted `Str` | A short line after the instruction | Reminders, constraints |
-| `include` | `Prompt` | The other prompt's sections, in place | Composition |
+| `include` | `Prompt` | The other prompt's sections, in place; including an untrusted prompt makes the result a `Prompt` | Composition |
 
 **Framing** uses the engine's own helpers, so Ratio and the native loop frame data identically:
 the harness tag names (`HARNESS_TAGS`) and the section's own tag are defused inside framed text
@@ -64,9 +69,8 @@ available through `context` sections and the `Conversation` API.
 `think.steps(…)` the steps become structure the program can use:
 
 ```ratio
-let t = think.steps(prompt { task question; data evidence as "evidence" },
-  steps: ["List what the evidence says", "List what it does not say", "Answer"],
-  answer: Answer)
+let t = think.steps::<Answer>(prompt { task question; data evidence as "evidence" },
+  steps: ["List what the evidence says", "List what it does not say", "Answer"])
 // t.answer : Untrusted<Answer>; t.trace : [Untrusted<StepNote>] (one note per step)
 ```
 
@@ -110,6 +114,11 @@ type Sampling = {
 }
 ```
 
+**Tool choice.** `GenOpts.tool_choice` (`auto`, the default; `none`; `required`; or
+`Named { name }`) is sent to backends that support it on `model.chat`, `model.chat_as` and
+`model.loop` calls; on others `none` is honoured by offering no tools and the rest is dropped
+with a warning (or `Unsupported` under `strict`).
+
 Options are merged field by field: the frame's `sampling`, then the call's. An option the
 backend does not support is dropped with a once-per-site warning, unless `strict: true`. Support
 is decided per endpoint kind and recorded in the model card (`meta.models()`), so programs can
@@ -117,7 +126,7 @@ check before relying on, say, `logprobs`.
 
 ## Structured generation
 
-`model.generate_as<T>(p)` returns `Untrusted<T>` for any schema-able `T`. The schema is derived
+`model.generate_as::<T>(p)` (and `model.chat_as::<T>(conv)` on a conversation) returns `Untrusted<T>` for any schema-able `T`. The schema is derived
 from `T` (chapter 03). The host uses the strongest mechanism the backend offers:
 
 1. **Native schema output**: `response_format: { type: "json_schema", strict: true }` on
@@ -134,8 +143,9 @@ After all attempts, a reply that still does not validate raises `SchemaMismatch`
 violations. A constrained reply is validated too (grammars can drift on numeric ranges and
 patterns), so every `Untrusted<T>` a program holds satisfies `T`'s schema.
 
-Choosing among fixed options is the same mechanism with an enum: `model.classify(x, labels: Kind)`
-constrains the output to the variant names.
+Choosing among fixed options is the same mechanism with an enum: `model.classify::<Kind>(x)`
+constrains the output to the variant names (a trusted scalar); `model.choose(x, options: [...])`
+constrains it to a list of strings and returns the chosen option as untrusted text with its index.
 
 ## Methods built from these pieces
 

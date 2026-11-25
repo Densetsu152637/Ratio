@@ -50,6 +50,7 @@ remote runtime without `glob`) raises `NotFound` naming the tool.
 | `tools.browser_tabs` | `() -> Untrusted<[TabInfo]>` | `{ id, title, url, active }` per tab | `ToolFailed` | `tool:browser_tabs` |
 | `tools.browser_switch` | `(tab: Str) -> Untrusted<PageView>` | Makes a tab active and returns its text | `Denied`, `NotFound` | `tool:browser_switch` |
 | `tools.browser_close` | `(tab: Str) -> ()` | Closes a tab (not the last) | `NotFound`, `Invalid` (last tab) | `tool:browser_close` |
+| `tools.browser_screenshot` | `() -> Image` | A screenshot of the active tab, for `image` prompt sections on models that take images. Imperium today shows screenshots to the user only; a model-facing screenshot is an engine dependency (chapter 10) | `ToolFailed` (no browser), `NotFound` (not yet available) | `tool:browser_screenshot` |
 | `tools.browser_download` | `(url: Untrusted<Str>, filename: Str? = none) -> Untrusted<Downloaded>` | Saves a download the page offered into the session's downloads folder; always asks, every time; `{ path, bytes, final_url, renamed: Bool }` | `Denied`, `ToolFailed` | `tool:browser_download` |
 | `tools.preview_open` | `(target: PreviewTarget) -> Preview` | Shows a loopback page in the desktop's Preview panel: `PreviewTarget` is `Url { url }` or `Command { command, port }` (judged as `run_command`) | `Denied`, `ToolFailed` | `tool:preview_open` |
 | `tools.preview_close` | `() -> ()` | Closes the preview and stops its server | — | `tool:preview_close` |
@@ -66,7 +67,7 @@ remote runtime without `glob`) raises `NotFound` naming the tool.
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `tools.mcp_servers` | `() -> [McpServerInfo]` | The session's connected MCP servers and their tool names, `{ name, tools: [Str], resources: Bool, prompts: Bool }`; descriptions are untrusted | — | `engine` |
+| `tools.mcp_servers` | `() -> [McpServerInfo]` | The session's connected MCP servers, `{ name: Str, tools: [Untrusted<Str>], resources: Bool, prompts: Bool }`: the server name comes from the user's configuration; tool names and descriptions come from the server and are untrusted | — | `engine` |
 | `tools.mcp_call` | `(server: Str, tool: Str, arguments: Json) -> Untrusted<McpResult>` | Calls `mcp__<server>__<tool>`; `{ text, content: [Json], is_error }`. A tool-reported error raises `ToolFailed` | `NotFound`, `Denied`, `ToolFailed`, `Timeout` | `tool:mcp__<server>__<tool>` |
 | `tools.mcp_resources` | `(server: Str, cursor: Str? = none) -> Untrusted<McpListing>` | One page of the server's resources and templates | `NotFound`, `Denied` | `tool:mcp__<server>__resources_list` |
 | `tools.mcp_read_resource` | `(server: Str, uri: Untrusted<Str>) -> Untrusted<Str>` | A resource's text, framed by the engine as untrusted, at most 60,000 characters | `NotFound`, `Denied` | `tool:mcp__<server>__resources_read` |
@@ -83,6 +84,7 @@ as today and are not visible to Ratio.
 | `tools.tool_search` | `(query: Str? = none, names: [Str] = []) -> [ToolSchema]` | Schemas of tools in the frame's universe matching the query or names, as item 61's `tool_search` returns them; descriptions of MCP and plugin tools are untrusted | — | `tool:tool_search` |
 | `tools.call_tool` | `(name: Str, arguments: Json) -> Untrusted<ToolResult>` | Runs any tool of the frame's universe by name through the same checks, as item 61's `call_tool` | `NotFound`, `Denied`, `ToolFailed`, `Invalid` (arguments do not match the schema) | the named tool's |
 | `tools.dispatch` | `(conv: Conversation, call: ToolCall) -> ToolResult` | Runs one call **a model made** on `conv`, exactly as the native loop does, and appends the paired result message to `conv`. Never raises for tool outcomes: `ToolResult.outcome` is `ok`, `failed` (the tool reported an error, or a command exited non-zero), `Denied { by }` or `Blocked { hook }`, and the text is what the model is shown. A call to a tool outside the frame's set gets the engine's refusal text | `Invalid` (call not pending on `conv`) | the called tool's |
+| `tools.refuse` | `(conv: Conversation, call: ToolCall, reason: Str) -> ToolResult` | Answers a pending tool call **without running it**: appends a result with `outcome: Refused { reason }` and the text "Not run: <reason>" (framed as the harness's own note), so the pairing invariant holds and the model learns why. For harnesses that veto calls (a policy, a budget, a reviewer) before dispatch | `Invalid` (call not pending on `conv`) | `engine` |
 | `tools.dispatch_all` | `(conv: Conversation, calls: [ToolCall], concurrent: Bool = true) -> [ToolResult]` | Dispatches every pending call of the last assistant message; independent calls run concurrently when `concurrent` and the engine allows it; results are appended in call order | as `dispatch` | the called tools' |
 | `tools.offered` | `() -> [ToolSchema]` | The tools a `model.chat` in this frame offers by default (the frame's set, after profiles, agent files and item 61's loading mode) | — | `engine` |
 | `tools.spec` | `(name: Str) -> ToolSchema?` | One tool's schema, if it is in the frame's universe | — | `engine` |
@@ -93,6 +95,8 @@ as today and are not visible to Ratio.
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
+| `tools.skills` | `() -> [SkillInfo]` | The skills the session can load, `{ name, description: Untrusted<Str>, origin: builtin \| user \| plugin \| project, loaded: Bool }`, as the skill index lists them | — | `engine` |
+| `tools.plugins` | `() -> [PluginInfo]` | Installed plugins, `{ name, origin, enabled: Bool, active: Bool, withheld: Bool, has_harnesses: Bool, description: Untrusted<Str> }` | — | `engine` |
 | `tools.load_skill` | `(name: Str) -> Untrusted<Str>` | Loads a skill's instructions as `load_skill` does; the text is untrusted for Ratio's purposes (a program decides where it goes; the native loop puts it in the conversation) | `NotFound` | `tool:load_skill` |
 | `tools.activate_plugin` | `(name: Str) -> ()` | Activates a plugin for the session, as `activate_plugin` (never starts withheld code) | `NotFound`, `Denied` | `tool:activate_plugin` |
 | `tools.set_model_card` | `(model: Str, card: Str?) -> ()` | Sets or clears a model's card, journalled and undoable | `NotFound`, `Denied` | `tool:set_model_card` |

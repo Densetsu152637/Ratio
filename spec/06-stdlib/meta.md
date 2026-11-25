@@ -4,12 +4,14 @@
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `meta.harnesses` | `(query: Str? = none) -> [HarnessInfo]` | Registered packages this package may load (chapter 03, trust follows source): `{ name, version, source: builtin \| user \| plugin \| project, description, entries: [turn \| task], public: [Signature], hash, trust_sites: Int }`, best match first | — | `meta` |
-| `meta.harness` | `<H>(name: Str) -> H` | Loads a public harness of a registered package by `name` (`package.harness`, with an optional `@range`), checking that its signature is the harness type `H` the caller expects. `name` must be trusted text (chapter 03, sinks). The package is parsed and checked once per session and cached by hash | `NotFound`, `Invalid` (signature differs, with both), `Denied` (trust rules) | `meta` |
+| `meta.harnesses` | `(query: Str? = none) -> [HarnessInfo]` | Registered packages this package may load (chapter 03, trust follows source): `{ name (source-qualified), version, source: std \| user \| plugin \| project \| authored, description: Untrusted<Str>, entries: [turn \| task], public: [Signature], hash, trust_sites: Int, offered: Bool }`, best match first | — | `meta` |
+| `meta.harness` | `<H>(name: Str) -> H` | Loads a public harness of a registered package by source-qualified `name` (`std:debate.judge`, with an optional `@range`; a bare name resolves by trust order, chapter 03), checking that its signature is the harness type `H` the caller expects (`meta.harness::<harness(Str) -> Untrusted<Str>>("user:critics.strict")`). An authored harness loads only under the authored rules of chapter 07. `name` must be trusted text (chapter 03, sinks). The package is parsed and checked once per session and cached by hash | `NotFound`, `Invalid` (signature differs, with both), `Denied` (trust rules) | `meta` |
 | `meta.has_harness` | `(name: Str) -> Bool` | Whether `meta.harness` would find it (ignoring the signature) | — | `meta` |
 | `meta.signature` | `<H>(h: H) -> Signature` | A harness's parameters and result, with their JSON Schemas: `{ name, params: [{ name, type, schema, default? }], returns: { type, schema } }` | — | `pure` |
 | `meta.package` | `() -> PackageInfo` | This package: `{ name, version, hash, source, path }` | — | `meta` |
-| `meta.trust_sites` | `() -> [Site]` | Every `trust` call site of this package (what `harnesses.check` lists) | — | `meta` |
+| `meta.trust_sites` | `() -> [Site]` | Every `trust`, `as_task` and `declassify` site of this package and, transitively, of everything it imports or can load (what `harnesses.check` lists) | — | `meta` |
+| `meta.author` | `(name: Str, source: Untrusted<Str>, description: Untrusted<Str>) -> AuthoredVersion` | Writes a new version of an **authored** harness package to the session's authored area (chapter 07): checks it (parse, types, taint, no trust sites), pins it by IR hash and journals it; returns `{ name: "authored:<name>", version: Int, hash, diagnostics, diff_from_previous? }`. A package with errors is stored but not loadable | `Invalid` (too large, bad name), `Denied` | `tool:`*`write_harness`* |
+| `meta.authored` | `() -> [AuthoredVersion]` | The authored packages of this session and environment, every version, newest first, with who wrote each (agent id) and its approval status | — | `meta` |
 
 ## The frame
 

@@ -15,8 +15,9 @@ stronger model, or check every answer against the test suite before reporting it
 harnesses are callable like functions (chapter 04), those methods compose.
 
 Ratio is not a general-purpose language. It has no file, network, process or clock access of its
-own; every effect is a request to the host, which is Imperium. It is not a language for the model
-to write either (chapter 07, R12).
+own; every effect is a request to the host, which is Imperium. People write most harnesses;
+models may also write them, through a separate, attenuated and journalled path (authored
+harnesses, chapter 07), but a running program never evaluates generated text (R12).
 
 ## What a program is
 
@@ -90,8 +91,13 @@ harnesses as first-class calls; readable by people who are not language designer
 | Bytecode VM instead of an IR walker | Harness programs are small and spend almost all their time waiting on models; a VM's speed buys nothing measurable and costs a second representation to keep correct. Revisit if profiling shows the walker above 1 % of turn time |
 | A separate interpreter process | Isolation is not needed for code with no ambient authority (chapter 07), and a process boundary would add latency to every effect and a second lifecycle to clean up |
 
-Revisit R2 if harnesses from untrusted sources (a public registry) become a requirement: then a
-separate process, or a WebAssembly build of the interpreter itself, becomes worth its cost.
+Authored harnesses (chapter 07) are written by models and so are untrusted source, yet they also
+run in process. That is acceptable because a harness has no ambient authority: everything it can
+do is an engine call checked against its frame, it cannot `trust`, and the interpreter bounds its
+steps, heap, nesting and depth. The interpreter's own memory safety (safe Rust, no `unsafe` in the
+crate) is the remaining surface. Revisit R2 if harnesses from a public registry become a
+requirement, or if the stage 20 review finds the in-process surface too large: then a separate
+process, or a WebAssembly build of the interpreter, becomes worth its cost.
 
 ### Decision R3: determinism and replay
 
@@ -102,11 +108,14 @@ answer.
 **Determinism by construction.** Given the same answers to its effects, a Ratio program computes
 the same result, whatever the timing:
 
-- Values are immutable. `var` bindings are local to one function body and cannot be captured by
-  a closure that runs concurrently (chapter 03), so there are no data races.
-- The only sources of variation are effects: model calls, tool calls, agents, memory, user
-  answers, the clock (`time.now`), randomness (`rand.*`), and which branch of a `race` finished
-  first. All of them go through the host.
+- Values are immutable. Closures capture by value, and concurrent branches may not assign outer
+  `var`s, write package state or share a conversation (chapter 03), so there are no data races.
+- The only sources of variation are effects and scheduling choices. Effects: model calls, tool
+  calls, agents, memory, user answers, the clock and timers (`time.now`, `time.since`,
+  `eval.timer`), randomness (`rand.*`), and cache lookups (`cached`, `memo`, `once`). Scheduling
+  choices: which `race` branch won and where each loser was cancelled, which `par` branch failed
+  first, and whether and where a `timeout` fired. All of them go through the host and onto the
+  tape.
 - Concurrent branches are combined in **program order**, never completion order: `par` returns a
   tuple in written order, `par_map` returns results by index.
 - Iteration over maps is in key order; sets do not exist (use `Map<K, Unit>`, ordered).
@@ -116,9 +125,11 @@ the same result, whatever the timing:
 **The effect tape.** Every effect is identified by an **effect key**:
 
 ```text
-key = (frame path, site id, occurrence)
-frame path = the chain of harness calls and par-branch indexes from the entry, e.g. turn/2:critic/0
-site id    = the IR node's stable id (file hash + node index)
+key        = (frame path, site id, occurrence)
+frame path = one element per frame from the entry, each element = harness name @ call-site id
+             # occurrence of that call site in the parent frame, plus the branch index when the
+             call runs inside par, race or par_map: turn/critic@s41#0/b2
+site id    = the IR node's stable id (package IR hash + node index)
 occurrence = how many times this site has run in this frame (loops)
 ```
 
@@ -160,9 +171,13 @@ One turn, step by step:
 
 1. The user's message arrives. The engine does what it does for every turn before the agent
    sees it: slash-command expansion, `prompt.submit` hooks, mid-session model switch and
-   compaction, checkpoints (`docs/03-agent-engine.md#switching-models-and-compaction`). It then
-   builds the `Turn` value: the message as the user wrote it, attachments, the turn index, and
-   whether the session was resumed.
+   compaction, checkpoints (`docs/03-agent-engine.md#switching-models-and-compaction`), and the
+   input guard for inputs too large for the window (`docs/03-agent-engine.md#large-inputs-and-delegate_chunks`).
+   Harness aids that make a model call of their own (the de-reference step) run here, charged to
+   the turn's budget. It emits `turn_started`, then builds the `Turn` value: `message` (the user's
+   own words, `UserText`), `payloads` (text that came with the turn but was not written by the
+   user, such as the CI log, pull-request comments or issue body an automation prompt embeds:
+   untrusted), attachments, the turn index, and whether the session was resumed.
 2. The engine calls the `@turn` entry with that value inside a fresh **root frame**: the session
    conversation, the session's model and effort, the tools the session offers, the session's
    permission mode and rules, and the session's budgets (chapter 04).
@@ -178,6 +193,18 @@ One turn, step by step:
 5. The entry returns a `Reply`. Its text is the turn's final reply; the engine saves the
    conversation, appends to `<id>.turns.jsonl`, writes the package state if it changed, and emits
    `turn_completed`. An uncaught error becomes `turn_failed` with the error kind and message.
+
+**Entry obligations.** The main conversation must stay a faithful record of the session, so the
+engine checks two things around every entry call:
+
+- Before the first `model.chat` on the main conversation, the entry must have appended the turn
+  (`context.append_turn` in a `@turn` entry; `context.append_task` in a `@task` entry). A
+  `model.chat` on the main conversation before that raises `Invalid`. If the entry returns without
+  ever appending it, the engine appends the turn itself (the user's message as the native loop
+  would build it), records a `ratio_log` warning, and continues.
+- After the entry returns, if the main conversation does not end with an assistant message whose
+  text is the reply's text, the engine appends one, so the next turn sees what the user saw.
+  A `Reply` with status `question` is appended the same way.
 
 **Stop and resume.** `session.control stop` cancels at the next effect boundary: a tool call in
 flight finishes, a model request in flight is cancelled, and the interpreter future is held, not

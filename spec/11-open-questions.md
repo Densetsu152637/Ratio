@@ -1,19 +1,40 @@
-# 11 Open questions
+# 11 Decisions and open questions
 
-Decisions this specification leaves to the user. Each has a recommendation; none blocks stages 1
-to 8.
+The user answered the twelve open questions of draft 0.1. This chapter records each decision and
+where the specification carries it out. One question remains open.
 
-| # | Question | Options | Recommendation |
+## Decided
+
+| # | Question | Decision | Where |
 | --- | --- | --- | --- |
-| Q1 | Should `std:default` eventually replace the native Rust loop as the default harness? | (a) Never: the native loop stays default, Ratio is opt-in. (b) After stage 12's differential suite passes and a release cycle of opt-in use. (c) Replace the native loop entirely and delete it | (b): one loop to maintain in the end, but only after parity is measured; the research session's loop work would then move into Ratio packages |
-| Q2 | May a model ever propose a harness? | (a) No. (b) As an extension install: the model writes a package to a staging folder, the user reviews and approves it in the desktop app, like a code-running plugin | (a) for now; (b) once the plugin approval path (item 51) and Windows signing (item 59) are in place |
-| Q3 | Confidentiality labels: should Ratio add `Secret<T>` (text that may not reach network tool arguments or hosted models)? | (a) No; rely on frame structure. (b) Add `Secret<T>` from `read_file` of files matching secret patterns, from memory marked private, and from `.env`-like sources; network tools and hosted models refuse it | (b) in a later version; it addresses the exfiltration residual risk (T10) that taint cannot |
-| Q4 | Should harness calls appear in the desktop's Agents panel? | (a) Only nested in the transcript (events). (b) As ephemeral agents in the panel while running | (a) at first; (b) if users ask to watch long searches |
-| Q5 | Default limits: are 5,000,000 steps, 64 MiB heap, depth 8 and 500 tool calls per turn right? | Measure with the examples on the eval suites | Keep as draft values; stage 13 sets them from measurements |
-| Q6 | Should `think.*` built-in prompt texts be user-overridable per installation (a prompt pack), or only per call? | (a) Per call only (`instructions:`). (b) Also a `<config>/ratio/prompts/` override folder | (a): overrides per installation would make eval results depend on local files, which `imperium run` avoids on purpose |
-| Q7 | Exposing reasoning text: should `ModelReply` carry the model's reasoning when the backend returns it? | (a) No (today's Imperium keeps none). (b) Yes, as `Untrusted<Str>`, opt-in per call, never journalled | (a); revisit if a research method needs it |
-| Q8 | Plugin harnesses: should enabling a plugin offer its harnesses to the model (`harness.offered`) automatically? | (a) No, the user adds them. (b) Yes for plugins the user approved | (a), consistent with T4 and T6 |
-| Q9 | Should code mode programs (item 65) be able to call Ratio harnesses as functions? | (a) No. (b) Yes, as host functions, with the same attenuation | (a): code mode is for computation over tool results; mixing the two doubles the review surface |
-| Q10 | The file extension and command names: `.ratio`, `imperium harness …`? | Any | `.ratio` and `imperium harness` as written |
-| Q11 | Should the Consul escalation threshold stay a constant (as item 64 says: no setting) even for users who copy the package? | (a) Constant in the built-in; copies may change it. (b) A package parameter | (a), as item 64 asks; a copy is the user's own workflow |
-| Q12 | Where should Ratio's specification live once the crate exists: this repository, or `docs/` of Imperium? | (a) Here, vendored into the crate's conformance suite at a pinned commit. (b) Moved into Imperium | (a): the language can version independently, as the tool schemas do for Emperor |
+| Q1 | Should `std:default` replace the native loop as the default harness? | **Yes**, after the parity suite passes and one release cycle of opt-in use | Chapter 08 (R14 and the parity criterion), chapter 10 (stages 21 and 23) |
+| Q2 | May a model write harnesses? | **Yes**, including for its own use, through the authored-harness path: stored in an authored area, checked and pinned by hash, no trust sites, contained by default, caller authority only for a version the user approves with source and diff, never above the caller, journalled and visible. Plugins (S6) and protected file paths (S7) are unchanged | Chapter 07 (R12, authored harnesses, T7), chapter 08 (tools and events), chapter 10 (stage 19) |
+| Q3 | Add a confidentiality label? | **Yes**: `Secret<T>`, with sources, sinks enforced by the checker and at dispatch, and an always-asking `declassify`. Frames' `sees` (S9) narrows what is visible at all | Chapter 03 (secrecy), chapter 04 (`sees`), chapter 10 (stages 5 and 13) |
+| Q4 | Should harness calls appear in the Agents panel? | **Yes**, and a separate **live harness view** shows the running source, the executing expression and the call stack, with `harness_site` events, throttling and replay stepping | Chapter 04 (harness agents), chapter 08 (clients), chapter 10 (stage 22) |
+| Q5 | Are the default limits right? | **Probably**: keep the draft values, add call-depth and nesting limits, and set the defaults from measurements in the hardening stage | Chapter 07 (limits), chapter 10 (stage 20) |
+| Q6 | May built-in prompt texts be overridden per installation? | **No**. Per call only (`instructions:`), so eval results never depend on local files | Chapter 06 (built-in prompts) |
+| Q7 | May programs see the model's reasoning text? | **No** | Chapter 05 (reasoning effort) |
+| Q8 | Do plugins' harnesses become available to models? | Enabling an approved plugin **offers** its harnesses (they join `harness.offered`), but nothing uses them automatically; selecting one is a separate act. The same holds for authored harnesses. Agent files from plugins and projects may name only their own source's packages or offered ones | Chapter 07 (sources), chapter 08 (settings, subagents) |
+| Q10 | Names | **Keep** `.ratio` and `imperium harness` | Chapters 08 and 10 |
+| Q11 | Does the Consul escalation threshold stay a constant? | **Yes**: `TAKEOVER_AFTER = 2` in the built-in package; a copy is the user's own workflow | Chapter 08 (item 64), chapter 09 (example 7) |
+| Q12 | Where does the specification live? | **In this repository.** Imperium references a pinned revision (submodule or lock file) and vendors the generated `builtins.txt`, checked for drift in CI | Chapter 10 (where the specification lives) |
+
+## Open
+
+### Q9: may code-mode programs call harnesses?
+
+The user's answer was "maybe; flesh this out". Chapter 08 ("Code mode and harnesses") gives the
+use cases, the risks at the boundary (recursion, authority, budgets, replay, visibility), four
+options, and the rules any permitted option needs.
+
+| Option | Summary |
+| --- | --- |
+| A | No calls from programs to harnesses |
+| B | Offered and authored harnesses only, always at contained tier; no `run_script` inside them |
+| C | Offered harnesses at the program's caller's authority, under a `script` profile (no delegation, no user interaction, no `run_script`); approvals count against code mode's approval-wait budget |
+| D | Any harness at full authority (rejected) |
+
+**Recommendation:** B, as a later stage (chapter 10, stage 25) after code mode's own security
+review; C only if real tasks need writes from harnesses inside programs, with its own review.
+
+**Decision pending:** the user's.

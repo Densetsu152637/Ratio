@@ -6,25 +6,27 @@
 | --- | --- | --- |
 | Unit | `()` | The value of statements and of blocks ending in one |
 | Scalars | `Bool`, `Int`, `Float`, `Duration`, `Money` | `Int` is 64-bit signed, overflow raises `Invalid`; `Duration` is whole microseconds; `Money` is exact to 1e-6 USD |
-| Text | `Str`, `Untrusted<Str>` | Unicode scalar values; indexes and lengths count characters, not bytes |
+| Text | `Str`, `UserText`, `Brief`, `Untrusted<Str>` | Unicode scalar values; indexes and lengths count characters, not bytes. `UserText` and `Brief` are text with a known origin (below) |
+| Images | `Image` | `{ mime, width, height }` plus bytes, opaque to programs; from attachments and `tools.browser_screenshot`; always untrusted |
 | Options | `T?` | `none` or a `T`; `T??` is `T?` |
 | Lists | `[T]` | Persistent vectors; indexing out of range raises `Invalid` (use `list.get` for `T?`) |
 | Tuples | `(A, B, …)` | Fixed arity, at most 8 |
 | Records | `{ a: A, b?: B }` | Structural; a field declared with `?` may be absent, and reads as `B?` |
-| Maps | `Map<K, V>` | Ordered by key; `K` is `Str`, `Int`, `Bool` or a unit-only enum. Where a `Map<Str, V>` is expected, a record literal (`{ attempt: "2" }`) builds one |
+| Maps | `Map<K, V>` | Ordered by key; `K` is `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum. Where a `Map<Str, V>` is expected, a record literal (`{ attempt: "2" }`) builds one |
 | Enums | `enum E { A, B { x: Int } }` | Nominal tagged unions; variant payloads are records |
 | Functions | `fn(A, B) -> C` | Named functions and closures; harnesses are functions of a special kind (chapter 04) |
+| Prompts | `Prompt`, `TrustedPrompt` | Built from sections (chapter 05); `TrustedPrompt` holds trusted text only |
 | Dynamic | `Json` | Any JSON value; must be decoded through a schema before typed use |
-| Handles | `Conversation`, `Task<T>`, `Process`, `Tab`, `Scratchpad`, `Mark` | References to things the engine owns; see below |
+| Handles | `Conversation`, `Task<T>`, `Process`, `Scratchpad`, `Mark`, `Pin`, `Artefact`, `Checkpoint` | References to things the engine owns; see below |
 
 All values are **immutable**. "Updating" a record makes a new one (`{ ..r, x: 1 }`); `list.push`
 returns a new list. Persistent structures make this cheap.
 
 **Handles** are the only references. A handle names something the engine owns and keeps (a
-conversation, a subagent task, a background process, a browser tab). Operations on a handle are
-effects. A handle cannot be put in `state`, encoded to JSON, or returned from a harness to a
-caller in a different frame, except `Task<T>` (which the engine tracks across frames) and
-`Conversation` returned as a `Transcript` snapshot value.
+conversation, a subagent task, a background process, a stored artefact). Operations on a handle
+are effects. A handle cannot be put in `state` or a cache, encoded to JSON, or returned from a
+harness to a caller in a different frame, except `Task<T>` and `Artefact` (which the engine tracks
+per session) and `Conversation`, which crosses frames only as a `Transcript` snapshot value.
 
 ## Types
 
@@ -37,30 +39,32 @@ type parameters are allowed on functions and type aliases; harnesses are monomor
 harness signature is a contract recorded in the registry and used to derive schemas.
 
 Records are structural: two record types with the same fields are the same type. A record value
-must have exactly the declared fields (no width subtyping); spread and `record.pick` build
-narrower records explicitly. Enums are nominal.
+must have exactly the declared fields (no width subtyping); spread builds narrower records
+explicitly. Enums are nominal.
 
 **Subtyping** is deliberately small:
 
 - `T` is a subtype of `T?`.
 - `Never`, the type of `raise`, `return`, `break` and `continue`, is a subtype of every type, so
   `else { raise … }` fits any branch type.
-- `UserText` (the user's own message) is a subtype of `Str`: trusted text with a known origin.
 - `T` is a subtype of `Untrusted<T>` (trusted data may always be treated as untrusted).
+- `UserText` is a subtype of `Str`; `Str` is a subtype of `Brief`; `Brief` is a subtype of
+  `Untrusted<Str>`.
+- `TrustedPrompt` is a subtype of `Prompt`.
 - Lists, options, tuples, maps (in values) and records are covariant in their element types.
   This is sound because values are immutable.
 - A function type is contravariant in parameters and covariant in result.
 
 `Json` is the one dynamic type. It comes from `json.parse`, from `tools.call_tool` and MCP
 results, and from `meta` introspection. It supports only JSON operations (`json.get`, `json.keys`,
-indexing that returns `Json?`); it is turned into a typed value by `json.decode<T>(j)`, which
+indexing that returns `Json?`); it is turned into a typed value by `json.decode::<T>(j)`, which
 validates against `T`'s schema and raises `SchemaMismatch` with every violation listed. So a
 dynamic value never reaches typed code unchecked.
 
 Rejected: gradual typing with an `any` type that flows silently into typed code. It would make
-schema derivation partial and taint unsound (an `any` could carry untrusted text into a system
-prompt). Rejected: full Hindley-Milner inference. Signatures are documentation for harness
-authors and for the registry; inferring them would make errors appear far from their cause.
+schema derivation partial and taint unsound. Rejected: full Hindley-Milner inference. Signatures
+are documentation for harness authors and for the registry; inferring them would make errors
+appear far from their cause.
 
 ### Types are schemas
 
@@ -70,7 +74,7 @@ structured generation constrains the model to (chapter 05).
 
 | Ratio type | JSON Schema |
 | --- | --- |
-| `Bool`, `Int`, `Float`, `Str` | `boolean`, `integer`, `number`, `string` |
+| `Bool`, `Int`, `Float`, `Str` (and every text type) | `boolean`, `integer`, `number`, `string` |
 | `Duration` | `string`, pattern `^[0-9]+(ms\|s\|m\|h)$` |
 | `Money` | `string`, pattern `^\$[0-9]+(\.[0-9]{1,6})?$` |
 | `T?` (field) | the field is not `required` |
@@ -82,11 +86,15 @@ structured generation constrains the model to (chapter 05).
 | unit-only `enum` | `string`, `enum` of the variant names in `snake_case` |
 | other `enum` | `oneOf` of objects with a `kind` constant and the payload's fields |
 | `Json` | `{}` |
-| `Untrusted<T>` | the schema of `T` |
+| `Untrusted<T>`, `Secret<T>` | the schema of `T` |
 
-Field descriptions come from the trailing string or `///` comment. Attributes on fields refine
-the schema: `@len(min, max)`, `@range(min, max)`, `@pattern(r"…")`, `@example(value)`. The
-derived schema is part of the IR hash.
+Field descriptions come from the trailing string or `///` comment. Attributes written before a
+field refine the schema: `@len(min, max)`, `@range(min, max)`, `@pattern(r"…")`,
+`@example(value)`. The derived schema is part of the IR hash.
+
+**Type digests.** Every schema-able type also has a **type digest**: `sha256` over its canonical
+form *including* trust and secrecy labels (`Str` and `Untrusted<Str>` digest differently). Digests
+key persisted state and caches (below).
 
 ## Taint: `Untrusted<T>`
 
@@ -98,66 +106,142 @@ Imperium's rule is that tool output, web content, file contents and other agents
 telling the model. Ratio makes it a type rule as well, so a harness author cannot accidentally put
 a web page into a system prompt.
 
-**What is untrusted.** Every built-in that returns text produced outside the harness's own code
-returns an untrusted type: model output, tool results, file contents, web pages, MCP results,
-memory entries, other agents' reports and answers, subagent briefs, command output, environment
-listings. The user's own message in a turn (`Turn.message`, type `UserText`) is trusted: it is
-the instruction channel. An unattended session's starting prompt is trusted the same way, because
-it was written by whoever configured the session.
+**The effect rule.** Every string inside a value an effect returns is untrusted, unless it is an
+**engine-generated identifier** (task ids, process ids, tab ids, session ids, checkpoint ids,
+artefact ids, call ids the engine assigned, enum-valued statuses). This covers the obvious cases
+(model output, tool results, file contents, pages, MCP results, memory entries, reports and
+answers) and the easy-to-miss ones: tool-call names and ids a model wrote, a subagent's title,
+JSON object keys, CSV headers, URL query keys, MCP tool names, model card texts, labels a model
+chose. The standard library's signatures follow the rule, and the conformance suite checks every
+built-in's declared return type against it (chapter 10).
+
+**Text with a known origin.**
+
+| Type | Origin | May go |
+| --- | --- | --- |
+| `Str` | Written in the program, or converted with `trust` | Anywhere |
+| `UserText` | The user's own message (`Turn.message`): typed by the user, or the configured starting prompt of an unattended session | Anywhere a `Str` may |
+| `Brief` | A task given to this agent: its brief from the dispatching agent (`Task.brief`), or text converted with `as_task(x, because:)`; trusted `Str` is a `Brief` too | `task` prompt sections, and anywhere untrusted text may; never instruction positions |
+| `Untrusted<Str>` | Everything else from effects | Anywhere except instruction positions and `task` sections |
+
+`Turn.payloads` holds text that arrived with a turn but was not written by the user: CI logs,
+pull-request comments and issue bodies that automation prompts embed. It is untrusted (chapter
+01); the user's own words are only `Turn.message`.
 
 **`Untrusted<T>` is deep.** It is defined by structure:
 
 | `T` | `Untrusted<T>` is |
 | --- | --- |
-| `Str` | the primitive untrusted text type |
+| `Str`, `UserText`, `Brief` | the primitive untrusted text type |
 | `Bool`, `Int`, `Float`, `Duration`, `Money`, `()` | `T` itself |
 | unit-only enum `E` | `E` itself |
 | `[A]`, `A?`, `(A, B)`, `Map<K, V>` | `[Untrusted<A>]`, `Untrusted<A>?`, … (map keys follow the same rule) |
 | `{ a: A, b: B }` | `{ a: Untrusted<A>, b: Untrusted<B> }` |
 | other enum | the same variants with untrusted payloads |
-| `Json` | `Json`, which is already untrusted by construction (see below) |
+| `Json`, `Image` | itself, already untrusted by construction |
 | `Untrusted<A>` | `Untrusted<A>` |
+| a type parameter `T` | `Untrusted<T>`, kept abstract until instantiated |
 
 So `Untrusted<Verdict>` where `Verdict = { pass: Bool, reasons: [Str] }` lets the program branch
 on `v.pass` directly, while `v.reasons` stays untrusted text.
 
 **Scalars are trusted.** A number, a boolean or a choice from a closed set cannot carry an
-instruction to a model. A model can still influence which branch the program takes, but every
-branch is code the harness author wrote, with the authority that code already had (chapter 07).
+instruction to a model. A model can still influence which branch the program takes; see "what the
+guarantee covers" below.
 
-**`Json` counts as untrusted.** `json.decode<T>` on any `Json` returns `Untrusted<T>`; a `Json`
-built by the program from trusted values with `json.encode` and decoded again is still untrusted.
-This is conservative and costs nothing in practice, since trusted values do not need a round trip.
+**`Json` counts as untrusted.** `json.decode::<T>` on any `Json` returns `Untrusted<T>`.
 
-**Propagation.** Operations on untrusted text give untrusted text: concatenation, interpolation
-(`"Found: {page}"` is `Untrusted<Str>`), `text.*`, `re.*` captures, `json.stringify` of a value
-with untrusted parts, template rendering. Operations that return scalars return trusted scalars
-(`text.len`, `re.is_match`, `text.contains`). Comparison of untrusted text gives a trusted `Bool`.
+**Propagation.** Operations on untrusted text give untrusted text: concatenation, interpolation,
+`text.*`, `re.*` captures, `json.stringify`, template rendering. Operations that return scalars
+return trusted scalars (`text.len`, `re.is_match`, `text.contains`).
 
-**Sinks.** Untrusted text may flow anywhere except **instruction positions**:
+**Generic code is checked abstractly.** Inside a generic function, a value of type parameter `T`
+counts as possibly untrusted: `text.show`, interpolation, `json.stringify` and `template.render`
+over a `T` (or anything containing one) give `Untrusted<Str>`. A generic function can therefore
+never launder untrusted text into a `Str`, whatever it is instantiated with.
 
-- the `system` and `instruct` sections of a prompt (chapter 05);
-- the `system` field of a harness or call configuration;
-- the `summary` of `session.request_approval` and the text of `context.notice` (the user and the
-  model read these as coming from the harness itself);
-- harness and package names given to `meta.harness` and `agents.spawn(harness: …)`;
-- the `reason` of `trust` itself.
+**Sinks.** Untrusted text, including `Brief`, may not reach **instruction positions**:
 
-Everywhere else it is accepted: tool arguments (authority comes from permissions, not from the
-text), `task` and `data` prompt sections (where it is framed), replies to the user, logs, memory
-writes (which the user approves by default), `state` fields, and harness arguments whose
-parameter type is untrusted.
+- the `system`, `instruct`, `note` and `example` sections of a prompt, and therefore any
+  `TrustedPrompt` (chapter 05);
+- the `system` field of a harness or call configuration (type `TrustedPrompt`);
+- `model.complete`'s text;
+- the `summary` of `session.request_approval` and the text of `context.notice`;
+- harness and package names given to `meta.harness`, `agents.spawn(harness: …)` and imports;
+- the `because` of `trust`, `as_task` and `declassify`.
 
-**Conversion.** `trust(x: Untrusted<T>, because: Str) -> T` is the only conversion. It is an
-effect: it emits a `ratio_trust` event into the journal with the harness, the call site, the
-reason, and a digest and the first 200 characters of the value. `harnesses.check` lists every
-`trust` site of a package so a reviewer sees them all. There is no implicit conversion, no
-"sanitise" function that returns trusted text, and no way to trust without leaving a record.
+`task` sections accept `Brief` (and its subtypes `Str` and `UserText`) only. Everywhere else
+untrusted text is accepted: tool arguments (authority comes from permissions, not from the text),
+`data` sections (where it is framed), replies to the user, logs, memory writes (which the user
+approves by default), `state` fields, and harness arguments whose parameter type is untrusted.
+
+**Conversion.**
+
+- `trust(x: Untrusted<T>, because: Str) -> T` converts to trusted. `as_task(x: Untrusted<Str>,
+  because: Str) -> Brief` converts to task text only (for example, a step of a plan the harness's
+  own planner wrote).
+- Both are allowed only at **monomorphic** types: `T` may not be or contain a type parameter, so
+  a generic helper cannot become a general-purpose launderer.
+- Both are effects that emit a `ratio_trust` event: package, version, call site, kind (`trust` or
+  `as_task`), reason, and the value's `hash.stable` digest. The journal records the digest, never
+  an excerpt of the text.
+- `harnesses.check` lists every trust site of a package **transitively**, through its imports and
+  every package it can load with `meta.harness`.
+- `ratio.trust` (chapter 08) is `allow` (sites run), `ask` (selecting a package whose transitive
+  trust-site list is not empty asks the user to approve that list, pinned to the package hash) or
+  `deny` (such packages cannot be selected). The default is `ask`. Authored packages may contain
+  no trust sites at all (chapter 07).
+
+**What the guarantee covers.** The taint rules track **explicit flows**: a value that is computed
+from untrusted text is untrusted. They do not track **implicit flows** through control flow:
+`if model_says_yes { tools.write_file(p, "fixed") }` writes trusted text chosen by an untrusted
+branch. That is inherent in letting programs branch on model output, which is their purpose. The
+checker's **guarded-effect lint** warns when a condition derived from an untrusted value (a
+model-derived scalar) is the only guard on an effect that writes, runs a command, delegates or
+reaches the network, so a reviewer sees each such decision; the lint is silenced per site with
+`@allow(model_guard)`.
 
 Rejected: dynamic taint tracking at run time only. It finds the mistake after a turn has spent
 tokens, and cannot be listed for review before a package is enabled. Rejected: no taint, framing
 only. Framing is still applied (chapter 05), but a type error at load time is cheaper than a
 successful injection.
+
+## Secrecy: `Secret<T>`
+
+Taint protects integrity: what may *instruct* a model. It does nothing for confidentiality: an
+injected instruction can still make a model put what it read into a web query. `Secret<T>` is a
+second, independent label for values that must not leave the machine or be stored outside it.
+
+**Sources.** `tools.read_file` and `tools.grep` results for files that match the safety floor's
+secret patterns (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `.npmrc`, `.netrc`, …) or the
+user's `ratio.secret_paths`; memory entries marked `private`; `session.ask` answers to questions
+asked with `secret: true`; output of commands matching `ratio.secret_commands`.
+
+**Structure.** Like `Untrusted`, `Secret<T>` is deep and propagates through every operation on
+text. Unlike `Untrusted`, it also propagates to scalars computed from secret values
+(`text.len(secret)` is `Secret<Int>`), because one bit can be the bit that matters. Branching on a
+`Secret<Bool>` is allowed; that implicit flow is outside the guarantee, as for taint. The labels
+combine: a secret file's contents are `Secret<Untrusted<Str>>`.
+
+**Sinks.** A secret value may not reach:
+
+- arguments of network tools (`web_search`, `web_fetch`, the browser tools, MCP tools of remote
+  servers, `media_*` with hosted backends);
+- a model call whose model is hosted (location `cloud`), in any section; local models are allowed;
+- memory writes, `session.emit`, `eval` metrics, scores and labels, and harness return values to
+  frames whose `sees` lacks `secrets` (chapter 04);
+- logs and traces, where it is replaced by `[secret: <digest>]`.
+
+**Conversion.** `declassify(x: Secret<T>, because: Str) -> T` removes the label. It is an effect,
+monomorphic only, journalled like `trust` with a digest, listed transitively, and it **always
+asks** the user (no rule can allow it); in an unattended session it is refused.
+
+**Tapes.** Effects whose responses contain secrets are recorded in the session journal (which
+stays on the machine) but redacted from tape files written by headless runs; replaying such a run
+needs `--ratio-tape-mode lenient` for those effects.
+
+The checker enforces the sinks statically; the engine enforces the network and hosted-model sinks
+again at dispatch from a per-call secrecy flag, so an interpreter bug cannot leak through those.
 
 ## Evaluation
 
@@ -167,11 +251,11 @@ operands of a binary operator left before right. `and`, `or` and `??` short-circ
 **Bindings.** `let` binds immutably, with a pattern that must be irrefutable (or the checker asks
 for `if let` or `match`). `var` binds a mutable local; assignment is a statement. A closure
 captures variables **by value at the moment it is created**, and cannot assign to a captured
-`var` (a checker error). This is what makes concurrent branches race-free.
+`var` (a checker error).
 
 **Functions.** `fn` declarations are pure functions over values unless they call effectful
 built-ins or harnesses; there is no effect annotation. Recursion is allowed and bounded by the
-step and depth limits (chapter 07).
+call-depth, step and frame-depth limits (chapter 07).
 
 **Options.** `x?.f` is `none` if `x` is `none`; `x ?? d` supplies a default; `if let v = x { … }`
 unwraps. Reading an absent optional record field gives `none`.
@@ -208,12 +292,12 @@ type Error = {
 
 | `ErrorKind` | Raised when | Catchable |
 | --- | --- | --- |
-| `Denied { by }` | A call was refused: `by` is `rule`, `mode`, `floor`, `user`, `hook`, `profile`, `attenuation` or `unattended` | Yes |
+| `Denied { by }` | A call was refused: `by` is `rule`, `mode`, `floor`, `user`, `hook`, `profile`, `attenuation`, `unattended`, `secrecy` or `sees` | Yes |
 | `ToolFailed` | A tool ran and reported failure (`data`: tool, exit code, output excerpt) | Yes |
 | `ModelFailed` | An endpoint error, an empty reply, a refusal, or a reply that could not be parsed as tool calls | Yes |
 | `RateLimited` | A usage limit the session's resume policy chose not to wait out | Yes |
 | `SchemaMismatch` | Structured output or `json.decode` did not match the schema after repairs (`data`: violations) | Yes |
-| `Budget { which }` | `tokens`, `cost`, `steps`, `wall`, `model_calls`, `tool_calls`, `depth`, `heap`, `width` ran out | Only outside the scope whose budget ran out |
+| `Budget { which }` | `tokens`, `cost`, `steps`, `wall`, `model_calls`, `tool_calls`, `depth`, `call_depth`, `heap`, `width` ran out | Only outside the scope whose budget ran out |
 | `Timeout` | A `with timeout` or a `timeout:` argument elapsed | Yes |
 | `Cancelled` | The session was stopped for good, a `race` sibling won, or a `par` sibling failed | No (observed by `defer`) |
 | `Assertion` | `assert` failed | Yes |
@@ -221,14 +305,14 @@ type Error = {
 | `Invalid` | A bad argument, an out-of-range index, an integer overflow, a malformed regex | Yes |
 | `Unsupported` | The backend cannot do what was asked (logprobs on an endpoint without them) | Yes |
 | `Replay` | A replay run diverged from its tape | No |
-| `Question { question, options }` | A callee needs an answer it cannot get (chapter 04, chapter 08) | Yes |
+| `Question { question, options }` | A callee needs an answer it cannot get (chapter 04) | Yes |
 | `User { tag }` | `raise fail("tag", message)` | Yes |
 
 ```ratio
 let report = try {
-  tools.run_command("cargo test -q")
+  tools.run_command("cargo test -q", check: true)
 } catch {
-  e if e.kind is ToolFailed => e.data |> json.decode<CommandResult>,
+  e if e.kind is ToolFailed => json.decode::<CommandResult>(e.data),
   e if e.kind is Denied => raise fail("no-tests", "running tests was refused"),
 }
 ```
@@ -240,13 +324,12 @@ failure.
 
 **Budgets cannot be swallowed where they run out.** A `Budget` error raised because the budget of
 a scope ran out (a harness call's, or a `with { budget: … }` block's) cannot be caught inside that
-scope, only by the code that opened it. Catching it inside would let the code keep spending what
-it does not have.
+scope, only by the code that opened it.
 
 **Cancellation cannot be swallowed.** `Cancelled` passes through `catch`. `defer { … }` blocks run
 on every exit from their scope (normal, error, cancellation) in reverse order; a `defer` block may
-make effects that release resources (`command_stop`, `browser_close`), and those effects are
-exempt from cancellation but bounded by a 10-second grace period.
+make effects that release resources (`command_stop`), and those effects are exempt from
+cancellation but bounded by a 10-second grace period.
 
 ## Concurrency
 
@@ -260,23 +343,33 @@ independent tool calls. Ratio offers it only in forms whose lifetimes nest in th
 | `par { a; b; c }` | `(A, B, C)` | Runs the expressions concurrently; returns their values in written order. If one raises, the others are cancelled and the error propagates |
 | `par_map(xs, f, limit: n)` | `[B]` | Applies `f` to each element with at most `n` running at once (default 4); results by index; fail-fast like `par` |
 | `par_map_settled(xs, f, limit: n)` | `[Result<B>]` | As `par_map` but never fails fast; every element gets a result |
-| `race { a; b }` | common supertype | Returns the first to finish successfully; cancels the rest; if all fail, raises the last failure |
+| `race { a; b }` | common supertype | Returns the first to finish successfully; cancels the rest; if all fail, raises the failure of the **first branch in written order** |
 | `with timeout d { … } else { … }` | block's type | Cancels the block after `d`; runs `else` instead, or raises `Timeout` without one |
 | `agents.spawn(…)` | `Task<T>` | An engine subagent; the only thing that can outlive its creating scope (chapter 06, `agents`) |
 
-**Implementation model.** All branches of a frame tree run on the agent's own task as futures; the
-interpreter has no threads. Pure evaluation is cooperative; effects are where branches interleave.
-Because closures capture by value and values are immutable, no branch can observe another's
-progress except through the host (and through engine state such as the conversation, which is
-owned by exactly one frame).
+**Branch restrictions.** Inside a branch of `par`, `race`, `par_map` or `par_map_settled` (and
+any function or harness such a branch calls), the checker forbids, and the interpreter refuses
+with `Invalid`:
 
-**Determinism.** Results are combined in program order. Two outcomes depend on timing: which
-`race` branch finished first, and which `par` branch failed first. Both are recorded on the tape
-as scheduling choices, so replay picks the same winner and the same failure.
+- assigning to any `var` declared outside the branch (closures already capture by value; this
+  rule also covers `par { … }` blocks, which are not closures);
+- `state.set`, `state.update` and `state.reset`;
+- appending to, or running a model on, a conversation that was not created inside the branch.
+
+**Implementation model.** All branches of a frame tree run on the agent's own task as futures; the
+interpreter has no threads. Pure evaluation is cooperative; effects are where branches interleave,
+and the host runs them concurrently (chapter 10: `Host` takes `&self`).
+
+**Determinism.** Results are combined in program order. The outcomes that depend on timing are
+**scheduling choices**, and each is recorded on the tape: which `race` branch won and the effect
+index at which each loser was cancelled; which `par` branch failed first; whether a `timeout`
+fired, and after which effect of its block; timer readings (`time.now`, `time.since`,
+`eval.timer`); and cache hits (`cached`, `memo`, `once`), which depend on what ran before. In
+replay, losers and timed-out blocks replay their recorded effects and are cancelled at the
+recorded point, so the same effects are consumed in the same order.
 
 **Limits.** At most `limits.width` branches run at once per frame tree (default 16); excess
-branches wait. Every branch draws on the same budgets as its frame; a `par` of three critics
-spends three critics' tokens.
+branches wait. Every branch draws on the same budgets as its frame.
 
 **Cancellation** reaches a branch at its next effect boundary or at its next 1,000 steps,
 whichever is first. A model request in flight is aborted; a tool call in flight is allowed to
@@ -292,49 +385,53 @@ and budgets become guesswork, and a forgotten task keeps spending after the turn
   are visible to importers, everything else is private.
 - `import "./lib/critics.ratio" as critics` imports a file by path, relative to the importing
   file. The path must stay inside the package's **source root** (the folder its entry file was
-  found in); `..` that leaves it, absolute paths, and symbolic links are refused. This is the
-  rule Imperium applies to agent files (`docs/06-extensibility.md#named-agents-implemented`).
-- `import debate` or `import debate.judges` imports a registered package by name (chapter 08 lists
-  the sources and their precedence). `import debate@^1.2` pins a semver range; without one the
-  highest version found is used and recorded.
+  found in); `..` that leaves it, absolute paths, and symbolic links are refused.
+- `import std:debate`, `import user:critics.strict`, `import plugin:acme/review` import a
+  registered package by **source-qualified name**; `@"^1.2"` pins a semver range. A bare name
+  (`import debate`) resolves to the highest-trust source that has the name, in the order `std`,
+  `user`, `plugin`, `project`, `authored` (chapter 08). A lower-trust package never shadows a
+  higher-trust one; reaching it needs its qualified name.
 - The standard library modules (`model`, `think`, `tools`, `agents`, `memory`, `context`,
-  `session`, `data` and its submodules, `control`, `eval`, `meta`) are in scope in every file
-  without an import. The `data` submodules (`text`, `list`, `map`, `json`, …) are also in scope by
-  their short names, and their functions are callable as methods (`xs.map(f)` is
-  `list.map(xs, f)`). Method syntax `x.f(a)` resolves to the module of `x`'s type first, then to a
-  function `f` in scope whose first parameter accepts `x`.
+  `session`, `state`, `data` and its submodules, `control`, `eval`, `meta`) are in scope in every
+  file without an import. The `data` submodules (`text`, `list`, `map`, `json`, …) are also in
+  scope by their short names. Method syntax `x.f(a)` resolves to the module of `x`'s type first,
+  then to a function `f` in scope whose first parameter accepts `x`.
 - Import cycles are errors. Name resolution is lexical: a local binding shadows an import, which
   shadows the prelude; the checker warns on shadowing a standard module.
-- **Trust follows source.** A package from a plugin or a project may import only files in its own
-  source root, the standard library, and packages from the same source or from built-in packages.
-  A user's own package may import anything registered. So a project cannot pull in a user's
-  private harness, and a plugin cannot reach into a project.
+- **Trust follows source.** A package may import only the standard library, built-in (`std`)
+  packages, files in its own source root, and registered packages of a source at least as
+  trusted as its own: a user package may import user, plugin and project packages by qualified
+  name; a plugin package only `std` and its own plugin's; a project package only `std` and its own
+  project's; an authored package only `std` and authored packages of the same area.
 
 ## Persistent state
 
 A package may declare one `state`:
 
 ```ratio
-state: { rejections: Map<Str, Int>, plan: Plan? } = { rejections: {}, plan: none }
+state: { rejections: Map<Str, Int>, plan: Untrusted<Plan>? } = { rejections: {}, plan: none }
 ```
 
 - The type must be schema-able and contain no handles. The initialiser is a constant expression.
-- `state.get()` returns the current value; `state.set(v)` and `state.update(|s| …)` replace it.
-  Changes are visible at once in the turn and are written when the turn ends (or the subagent
-  task's turn ends): one `ratio_state` event with the new JSON, if it changed.
-- State belongs to **one agent**: the session root's state for a `@turn` entry; each subagent's own
-  state for a `@task` entry. Harness calls within a turn see their package's state of that agent;
-  a package imported by another sees its own state, separately.
+- `state.get()` returns the current value; `state.set(v)`, `state.update(|s| …)` and
+  `state.reset()` replace it. Changes are visible at once in the turn and are written when the
+  turn ends: one `ratio_state` event with the JSON and the type digest, if the value changed.
+- State belongs to **one agent**: the session root's for a `@turn` entry; each subagent's own for
+  a `@task` entry. A frame reads it only if its `sees` includes `state` (chapter 04).
 - At most 64 KiB of JSON. A larger value raises `Invalid` at `state.set`.
-- On resume after a restart, the newest `ratio_state` event is read back. A branch
-  (`session.branch`) or a rewind of the conversation keeps the state as of its cut point, because
-  the events up to that point are what the branch copies.
-- Changing a package's `state` type between versions: the stored JSON is decoded into the new
-  type; when that fails the state is reset to the initialiser and a notice says so.
+- On resume after a restart, the newest `ratio_state` event is read back. A branch or a rewind of
+  the conversation keeps the state as of its cut point.
+- **Type changes.** When the stored type digest equals the declared type's, the value is used.
+  Otherwise the JSON is decoded as `Untrusted<T>` of the declared type: if `T` contains no trusted
+  text (every text position is already untrusted), that value is used; otherwise the state is
+  reset to the initialiser with a notice. Stored untrusted text never comes back as trusted.
+
+The same digest rule keys caches: `cached` and `once` entries are keyed by `(package, key, type
+digest)`, so a value cached as `Untrusted<Str>` is never returned where a `Str` is expected.
 
 ## Tests
 
-`test "name" { … }` blocks are compiled only for `ratio test` and `harnesses.check` with
-`test: true`. They run against a scripted host (chapter 10) in which `model.*`, tools and agents
-answer from fixtures declared with `eval.fixture` and `eval.script_model`. Tests never run in a
-session.
+`test "name" { … }` blocks are compiled only for `imperium harness test` and `harnesses.check`
+with `test: true`. They run against a scripted host (chapter 10) in which `model.*`, tools and
+agents answer from fixtures declared with `eval.fixture` and `eval.script_model`. Tests never run
+in a session.

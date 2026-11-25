@@ -10,36 +10,130 @@
 3. **Ratio has no authority of its own.** Every effect is an engine call, decided by the engine's
    own permission machinery. The interpreter's checks are a first line; the engine's are the
    boundary.
-4. **Every run is bounded.** Steps, memory, depth, width, tokens, cost, wall clock and call counts
-   all have limits, so a wrong or hostile program ends.
-5. **Everything is recorded.** Effects, trust conversions, approvals and harness calls are in the
-   journal, so a run can be audited and replayed.
+4. **Every run is bounded.** Steps, memory, call depth, nesting, frame depth, width, tokens, cost,
+   wall clock and call counts all have limits, so a wrong or hostile program ends.
+5. **Everything is recorded.** Effects, trust conversions, approvals, harness calls and authored
+   harnesses are in the journal, so a run can be audited and replayed.
 
 ## Who writes Ratio
 
-Ratio programs are written by people: the Imperium project (built-in packages), the user, plugin
-authors, and project maintainers. They are loaded only from the sources chapter 08 lists, under
-the same trust rules as agent files: a project's packages only when the project is trusted
-(`mcp.trusted_projects`), symbolic links refused, size-limited.
+Ratio programs come from five sources, in decreasing order of trust:
 
-**A model never writes Ratio that runs.** There is no path from generated text to Ratio code.
+| Source | Written by | Trust it gets |
+| --- | --- | --- |
+| `std` | The Imperium project, shipped and reviewed with the crate | Full: may be selected and offered |
+| `user` | The user, in `<config>/harnesses/` | Full |
+| `plugin` | A plugin author; loaded only when the plugin is approved (below) | Selectable by the user once approved; offered to models only if listed in `harness.offered` (enabling the plugin offers it, chapter 08) |
+| `project` | A repository; loaded only for projects in `ratio.trusted_projects` | Selectable by the user; never offered to models by default |
+| `authored` | A model, through `write_harness` (below) | Runs contained, or at its caller's authority after approval of the exact version |
 
-### Decision R12: no `eval`
+A lower-trust source never shadows a higher-trust one (chapter 03, source-qualified names).
+Project trust is `ratio.trusted_projects`, a list of its own: trusting a repository's MCP servers
+(`mcp.trusted_projects`) does not trust its harnesses, and the reverse.
 
-Ratio has no `eval`, no `compile`, no `load_source`, no way to construct a harness from a string,
-and `meta.harness` loads only registered packages by name. This holds in every version of this
-specification; a later version that wants dynamic code must say so as a new decision.
+**Plugins with harnesses are code-running plugins.** A plugin that contains a `harnesses/` folder
+is withheld when installed, like a plugin with hooks or MCP servers, until the user approves it
+in the desktop app through the existing plugin-approval challenge
+(`docs/06-extensibility.md#plugin-marketplaces`); the approval is pinned to the plugin's content
+hash, so an update is withheld again until approved. The same Windows conditions apply (roadmap
+items 51 and 59).
+
+**Agent files cannot reach across sources.** An agent file from a plugin or a project may name in
+its `harness:` field only a package from its own source (its plugin's or its project's) or one in
+`harness.offered`; any other name skips the field with a notice and the agent runs under the
+inherited harness. A user's own agent files may name any registered package.
+
+**Selection pins.** The package selected for a session, environment or agent, and every package it
+imports, is pinned by IR hash at selection (chapter 08). A change to the files takes effect only
+after the user selects the package again; until then the pinned version runs (kept in the
+daemon's package cache) and the clients show that a newer version exists.
+
+**Harness source folders are protected.** Writing into `<config>/harnesses`, a plugin's
+`harnesses/`, a project's `.imperium/harnesses/`, or the authored areas would let an agent change
+a harness that runs it later. These paths join the safety floor: file-tool writes and edits to
+them ask every time and are never pre-approved, and commands that write there are caught where the
+floor can see them. Imperium's floor today matches command lines and a fixed set of protected
+files; matching file-tool paths against these folders is an Imperium change, staged in chapter 10.
+
+### Decision R12: no `eval`, and a separate path for model-written harnesses
+
+A running Ratio program never evaluates generated text: there is no `eval`, no `compile`, no
+`load_source`, and `meta.harness` loads only registered packages by name. Models may nevertheless
+**write harnesses**, including for their own use, through a separate path that turns text into a
+package the same way a person's file becomes one: stored, checked, pinned by hash, journalled,
+and run under bounds the model cannot lift.
 
 | Option | Why not |
 | --- | --- |
-| A permission-gated `eval(text)` built-in | A model that can get text evaluated as a harness can write a harness that calls tools in a loop with the frame's full authority and no model in between; approval of the text is the only defence, and people approve code they have not read. The gate would also make every prompt injection a code injection attempt |
-| `eval` of a restricted subset (pure expressions only) | Useful only for arithmetic and filtering, which code mode (roadmap item 65) already serves with a confined interpreter built for hostile input |
-| Model-proposed harnesses, installed after review | Possible later as an extension install (written to a harness folder, approved by the user in the desktop app like a plugin). It is not `eval`: the model proposes a file, a person installs it. Listed as an open question |
+| A permission-gated `eval(text)` built-in | Code would be created and run in one step, inside the running frame, with that frame's authority; the only defence would be approving text mid-turn. No pinning, no versioning, no diff, nothing for the user to review later |
+| `eval` of a restricted subset (pure expressions only) | Useful only for arithmetic and filtering, which code mode (roadmap item 65) already serves |
+| Models never write harnesses | Loses the method the user asked for: a model that notices it needs, say, a vote over critics can write that method once and reuse it |
+| **Authored harnesses** (chosen) | Authoring and running are separate acts; running is contained unless the user approves the exact version |
 
-Model-written programs have a home in Imperium already: `run_script` (item 65) runs them in a
-confined Monty worker, every inner tool call going through dispatch. A Ratio harness can offer
-`run_script` to its model as a tool (`tools.run_script`), and that is the only way generated code
-runs.
+## Authored harnesses
+
+**Writing.** A model writes a harness with the model-facing tool `write_harness(name, source,
+description)` (a Ratio program with `meta.author`). The engine:
+
+1. stores the source in the **authored area** of the session (`<data>/sessions/<id>.harnesses/`),
+   never in the user, plugin or project folders; the area is written only by the daemon and is a
+   protected path for file tools and commands;
+2. parses and checks it as a package of source `authored`: types, taint, the guarded-effect lint,
+   and the authored rules below; a package with errors is stored with its diagnostics and is not
+   loadable;
+3. gives it a version number (1, 2, …) and pins that version by IR hash; any change is a new
+   version, and versions are never edited in place;
+4. journals `harness_authored` (`name`, `version`, `hash`, the agent that wrote it, the source,
+   the diagnostics, and the diff from the previous version) and shows it in the clients' authored
+   harness list.
+
+`write_harness` runs without asking: storing a checked package changes nothing else. It is a
+pseudo-tool, so a frame without it in its tools cannot author, and a user rule can deny it. At
+most 64 KiB per package, 32 versions per name and 16 names per session.
+
+**Authored rules.** An authored package may contain no `trust`, `as_task` or `declassify` sites at
+all (a checker error), may import only the standard library and authored packages of the same
+area, may not declare `@turn` (it can never become a session's root harness), and may declare
+`@task`. Rejected: allowing trust sites with per-site approval. A person cannot judge from a site
+what text will flow through it, and a model under injection would write exactly the site it
+needs.
+
+**Running.** An authored harness runs as a frame: from Ratio with `meta.harness::<H>("authored:x")`,
+or from a model with the model-facing tool `run_harness(name, arguments)`, whose arguments are
+decoded through the harness's parameter schema (all untrusted). It runs in one of two tiers:
+
+| Tier | Authority | Approval |
+| --- | --- | --- |
+| **Contained** (default) | The caller's frame attenuated further: tools only from the read set (`read_file`, `list_dir`, `glob`, `grep`, `memory_search`, `memory_read`, `search_sessions`); mode `plan`; no network, browser, MCP, command, write, delegation, memory-write, user-interaction or pseudo-tools; `sees` empty unless the caller grants items it has, and never `secrets`; budget at most `ratio.authored.contained_budget` (default 50k tokens, 20 model calls, 2 minutes) and at most the caller's | None |
+| **Caller** | At most the caller's frame: its tools, mode, rules, paths, location, `sees` and budget, attenuated as any harness call | The user approves **this version**: a permission request for `run_harness` that shows the full source, the diff from the last approved version, and `harnesses.check`'s summary (tools used, network, writes, delegation). "Allow once" or "allow this version for the session"; it never becomes an "always" rule. Counted against the per-turn harness approval cap |
+
+Why the contained tier needs no approval: it can change nothing (no writes, commands or memory
+writes), reach nothing outside the machine except through model calls of models the caller may
+already use, ask the user nothing, see no secrets and nothing ambient, and spend at most a small,
+fixed budget. What it returns is untrusted data to its caller. Its worst case, a harness that
+reads files the caller could already read and burns its small budget, is no worse than the
+calling model doing the same.
+
+**Persistence.** Authored packages live with their session. Keeping one for the environment
+(`<workspaces.root>/<env>/harnesses.authored/`), so later sessions can run it, is the user's act in
+the desktop app, through a native dialog with the plugin-approval challenge, showing source and
+hash. A persisted authored package is still source `authored`: contained by default, and at
+caller tier only for a version the user approved (persistently, in that dialog, or per session).
+
+**Offered, never automatic.** Authored packages are listed to the model that may run them (in
+`run_harness`'s description and `meta.harnesses()`), and may be named in `spawn_agent`'s
+`harness` (the subagent then runs the `@task` entry at contained tier, or caller tier for an
+approved version), but they are never selected automatically: making an authored package a
+session's or environment's harness is impossible (no `@turn`), and making it an agent file's
+harness is the user's edit.
+
+**Self-use.** A model that runs a harness it wrote runs it as a child of its own frame. Attenuation
+bounds the child by the parent, so writing a harness and running it can never raise the model's
+own authority: at best (caller tier, approved) the harness does what the model could already do,
+without a model in between.
+
+**Unattended sessions** may author and run contained; caller tier needs a version the user
+approved persistently beforehand; otherwise `run_harness` falls back to contained and says so.
 
 ## Permissions
 
@@ -47,51 +141,59 @@ runs.
   (chapter 04, R10). The root frame's authority is the session's: its permission mode, its rules
   (global and environment), path grants, the agent's permission profile, the safety floor.
 - **The engine checks every effect.** Each effect carries its frame's tool set, mode, extra
-  rules, paths and location. The engine's dispatch refuses anything outside them before its own
-  checks, so an interpreter bug can only refuse more, never allow more.
+  rules, paths, location and secrecy flag. The engine's dispatch refuses anything outside them
+  before its own checks, so an interpreter bug can only refuse more, never allow more.
 - **Approvals go through Imperium's broker.** A tool call that asks raises Imperium's own
-  `permission_requested`, shown in the clients, answered only by the person (or by the auto mode
-  classifier where the session allows it, `docs/05-tools-and-isolation.md#auto-mode-implemented`).
-  No Ratio built-in can answer a permission request, a question batch or a sampling request, and
-  no Ratio built-in can change the session's permission mode, rules, grants or profile.
-- **Harness-level approvals** (`session.request_approval`) are permission requests for the
-  pseudo-tool `ratio_approval`, so the user's rules apply to them and they appear in the same
-  approval queue. A denial is remembered for the turn: the same summary is refused again without
-  asking, so a looping harness cannot flood the person with prompts. At most 3 harness approval
-  prompts per turn; further ones are refused.
+  `permission_requested`, answered only by the person (or by the auto mode classifier where the
+  session allows it, `docs/05-tools-and-isolation.md#auto-mode-implemented`). No Ratio built-in can
+  answer a permission request, a question batch or a sampling request, and none can change the
+  session's permission mode, rules, grants or profile.
+- **Harness-level approvals** (`session.request_approval`, `run_harness` at caller tier,
+  `declassify`) are permission requests under pseudo-tool names, so they appear in the same
+  queue. A denial is remembered for the turn: the same request is refused again without asking.
+  At most 3 harness approval prompts per turn; further ones are refused.
+- **Delegation and session control are tool-gated.** `agents.*` built-ins are decided as
+  `spawn_agent`, `ask_agent` and the other delegation tools; checkpoints, branches, rewinds and new
+  sessions as `start_session` or pseudo-tools (chapter 06). A frame without the tool cannot use
+  the built-in, and the user's rules apply.
 - **Denials are not retried silently.** `retry` never retries `Denied`. `tools.dispatch` returns a
   denial to the model as the native loop does.
-- **Unattended sessions** never wait for a person except where Imperium's safety floor says so
-  (floor-covered calls wait in the approval queue with a notification). Everything else that would
-  ask is refused (`Denied { by: unattended }`), and questions get their recommendations.
+- **Unattended sessions** never wait for a person except where Imperium's safety floor says so.
+  Everything else that would ask is refused (`Denied { by: unattended }`), questions get their
+  recommendations, and `declassify` is refused.
 - **Memory writes** are possible only in the root agent's turn, under the scope's write policy.
-- **Self-modification is blocked.** Writing into a harness source folder (`<config>/harnesses`,
-  plugins' `harnesses/` folders, a project's `.imperium/harnesses/`) would let an agent change
-  the harness that runs it next turn. These folders join the safety floor's protected paths
-  (asked every time, never pre-approved; chapter 10 names this as an engine change).
+- **`ratio.trust`** (`allow`, `ask`, `deny`; default `ask`) decides whether packages with trust
+  sites may be selected (chapter 03).
 
 ## Resource limits
 
 Defaults apply per turn of an agent (the `@turn` or `@task` call and everything inside it). The
 configuration (`[ratio.limits]`, chapter 08) may lower them or raise them up to the maximum; a
-frame may only lower them.
+frame may only lower them. The defaults are draft values, to be set from measurements of the
+examples on the eval suites (chapter 10, stage 20).
 
 | Limit | Default | Maximum | When exceeded |
 | --- | --- | --- | --- |
 | Interpreter steps | 5,000,000 | 100,000,000 | `Budget { which: steps }` |
 | Heap (live values) | 64 MiB | 512 MiB | `Budget { which: heap }` |
+| Call depth (nested function and closure calls) | 512 | 4,096 | `Budget { which: call_depth }` |
+| Frame depth (nested harness calls) | 8 | 32 | `Budget { which: depth }` |
+| Parser nesting (brackets, blocks, expressions, interpolations) | 128 | 256 | A check-time diagnostic |
+| Interpolation nesting inside strings | 4 | 8 | A check-time diagnostic |
+| JSON nesting (`json.parse`, decoding) | 128 | 256 | `Invalid` |
 | Single string | 16 MiB | 64 MiB | `Invalid` |
 | Single list or map | 1,000,000 elements | 10,000,000 | `Invalid` |
-| Frame depth | 8 | 32 | `Budget { which: depth }` |
+| Package source | 256 KiB per file, 2 MiB per package (authored: 64 KiB) | — | Not loadable |
 | Concurrent branches | 16 | 64 | Excess branches wait |
 | Model calls | the session's `agents.max_steps` × 4 | — | `Budget { which: model_calls }` |
 | Tool calls | 500 | 5,000 | `Budget { which: tool_calls }` |
 | Tokens, cost | the session's budgets (`BudgetGate`) | the session's | `Budget { which: tokens \| cost }` |
 | Wall clock | none in attended sessions; the run's `--timeout-s` in headless runs | — | `Budget { which: wall }` |
-| Harness approval prompts | 3 | 10 | `Denied { by: unattended }`-style refusal with a notice |
+| Harness approval prompts | 3 per turn | 10 | Refused with a notice |
 | `state` | 64 KiB | 64 KiB | `Invalid` |
 | Session cache | 1 MiB | 16 MiB | Oldest entries evicted |
 | Log and event data | 16 KiB per event | — | Cut with a marker |
+| Live-view site events | 20 per second per frame (chapter 08) | 60 | Coalesced |
 | Tape per turn | 64 MiB | 1 GiB | Recording stops with a notice; the turn continues live |
 
 Step accounting is deterministic (it depends only on the program and its data), so a run that
@@ -101,77 +203,79 @@ exceeds its steps exceeds them identically in replay.
 
 **What Ratio adds over today's framing.**
 
-- *Type-level separation of instruction and data.* Untrusted text cannot reach a `system` or
-  `instruct` section, a harness's `system`, an approval summary or a harness name, by type. Data
-  sections are framed with the engine's own helpers and defused tags.
-- *Authority is not in prompts.* A harness decides the tools and permissions of each frame in
-  code. A critic frame with `tools: []` cannot be talked into running a command, whatever its
-  input says, because the command tool is not in its frame and the engine refuses it.
-- *Isolation between frames.* A callee sees only its arguments. An injected page read by one
-  frame reaches another only if the program passes it, and then as an untrusted, framed argument.
-- *Auditable trust.* Every `trust` is journalled with a reason and listed by `harnesses.check`.
+- *Type-level separation of instruction and data.* Untrusted text cannot reach a `system`,
+  `instruct`, `note` or `example` section, a harness's `system`, an approval summary or a harness
+  name; it reaches `task` sections only as a `Brief` (chapter 03). Data sections are framed with
+  the engine's own helpers.
+- *Authority is not in prompts.* A critic frame with `tools: []` cannot be talked into running a
+  command, whatever its input says, because the command tool is not in its frame and the engine
+  refuses it.
+- *Isolation between frames.* A callee sees only its arguments and what its `sees` grants.
+- *Auditable trust.* Every `trust`, `as_task` and `declassify` is journalled with a digest and a
+  reason and listed transitively by `harnesses.check`; `ratio.trust` controls whether packages
+  with such sites may run at all.
+- *Turn structure.* Automation prompts carry embedded logs, comments and issue bodies in
+  `Turn.payloads`, not in the trusted `Turn.message`.
 
 **What it cannot stop.**
 
-- A model may still follow instructions in data it was shown. Framing and isolation lower the odds
-  and the blast radius; they do not change the model.
-- A model chooses among the branches a harness offers it (scalars are trusted). Its influence is
-  bounded by those branches and their authority.
-- **Exfiltration through tool arguments.** Taint guards integrity, not confidentiality: an agent
-  steered by injected text can still put what it read into a `web_search` query or a `web_fetch`
-  URL (`docs/05-tools-and-isolation.md#built-in-tools`). Ratio's mitigation is structural: a
-  harness can read sensitive material in a frame without web tools and pass only a derived result
-  to a frame that has them. Confidentiality labels (a `Secret<T>` that may not reach network
-  tools) are an open question (chapter 11).
+- A model may still follow instructions in data it was shown.
+- Implicit flows: a model chooses among the branches a harness offers it. The guarded-effect lint
+  shows where a model-derived scalar alone guards an effect.
+- Exfiltration through tool arguments of values that are not `Secret`: taint guards integrity, and
+  `Secret<T>` guards only what is labelled. Unlabelled sensitive text read by an agent with web
+  tools can still leave in a search query (`docs/05-tools-and-isolation.md#built-in-tools`);
+  structuring frames (read without network, act with network on derived results) remains the
+  harness author's tool.
 
 ## Threat model
 
 **Assets.** The user's files and repositories; credentials and secrets on the machine; the
 user's memory entries; the user's money (hosted model spend); the integrity of the user's
-decisions (approvals); the availability of the session and the machine; the confidentiality of
-what agents read.
+decisions (approvals); the integrity of the harnesses that run; the availability of the session
+and the machine; the confidentiality of what agents read.
 
 **Actors.**
 
 | Actor | Capability |
 | --- | --- |
-| A1 Author of web pages, documents, issues, repository files the agent reads | Controls text that reaches models as data |
-| A2 A compromised or malicious MCP server or tool provider | Controls tool results and tool descriptions |
-| A3 A malicious plugin or project harness author | Controls Ratio source the user enabled or a trusted project ships |
-| A4 The model itself, misaligned or confused | Controls generated text and tool-call choices |
+| A1 Author of web pages, documents, issues, CI logs, repository files the agent reads | Controls text that reaches models as data or as turn payloads |
+| A2 A compromised or malicious MCP server or tool provider | Controls tool results, tool names and descriptions |
+| A3 A malicious plugin or project harness author | Controls Ratio source the user approved or a trusted project ships |
+| A4 The model itself, misaligned or confused, or steered by A1 | Controls generated text, tool-call choices, and authored harness source |
 | A5 A local process of another user, or a page in the app's window | Can reach the daemon's loopback port |
 
-**Entry points.** Tool results, file reads, web content and MCP results (A1, A2); model output
-(A4, steered by A1); harness sources (A3); the daemon's protocol (A5); replay tapes and task files
-given to headless runs (the person running the eval).
+**Entry points.** Tool results, file reads, web content, MCP results, turn payloads (A1, A2);
+model output and authored source (A4, steered by A1); harness sources (A3); the daemon's protocol
+(A5); replay tapes and task files given to headless runs.
 
-**Trust boundaries.** Generated text versus harness code; frame versus frame; the interpreter
-versus the engine's dispatch; the daemon versus the person's approvals; trusted versus untrusted
-harness sources.
+**Trust boundaries.** Generated text versus harness code; authored source versus registered
+source; frame versus frame; the interpreter versus the engine's dispatch; the daemon versus the
+person's approvals; trusted versus untrusted harness sources.
 
 | # | Threat | Mitigation | Residual risk |
 | --- | --- | --- | --- |
-| T1 | Injected text reaches an instruction position (A1, A2) | `Untrusted<T>` sinks checked at load time; framing of `task` and `data` sections; `trust` audited | A program that `trust`s carelessly; reviewers see every site |
-| T2 | Generated text is executed as code (A4) | No `eval` (R12); code only through item 65's confined worker | — |
+| T1 | Injected text reaches an instruction position (A1, A2) | `Untrusted<T>` and `Brief` sinks checked at load time, including generic code; framing of `task` and `data` sections; trust sites audited and gated by `ratio.trust` | A package whose author trusts carelessly; reviewers see every site |
+| T2 | Generated text is executed as code inside a running frame (A4) | No `eval` (R12); model-written code only through authored harnesses (checked, pinned, contained) or code mode's confined worker | — |
 | T3 | A harness widens its own authority (A3, A4) | Attenuation in the interpreter and independently in the engine; no built-in changes modes, rules, grants or profiles, or answers approvals | Interpreter and engine bugs; the engine check is the boundary |
-| T4 | A malicious harness package does harm with the session's authority (A3) | Project harnesses only for trusted projects; plugin harnesses selectable only after the user enables them (`harness.offered`); harnesses run with exactly the authority a model with the same tools has, under the same rules and floor; `harnesses.check` shows tools used and trust sites | A harness the user enabled can do what its tools allow without a model in the loop; enabling a harness is a trust decision, like enabling a plugin |
-| T5 | An agent rewrites the harness it runs under (A4 steered by A1) | Harness folders are safety-floor paths: every write asks; harness selection is the user's configuration, not a tool | A user approving such a write |
-| T6 | The model selects a dangerous harness for a subagent (A4) | `spawn_agent`'s `harness` accepts only packages in `harness.offered` (default: built-ins); unknown names fail | — |
-| T7 | Denial of wallet: loops that spend tokens (A4, A3) | Step, call, token, cost and wall budgets per frame and per session; `Budget` cannot be swallowed inside its scope | Spend up to the configured budgets |
-| T8 | Approval fatigue: a harness floods the person with prompts (A3, A4) | Harness approvals capped per turn; denials remembered; tool approvals go through Imperium's broker, which shows the exact call | The person approving without reading |
-| T9 | Resource exhaustion of the daemon (A3) | Heap, string and collection limits; linear-time regex; steps; JSON nesting limits; no threads | A heavy but legal harness slows its own session |
-| T10 | Exfiltration of read data through network tool arguments (A1 via A4) | Frames without web tools for sensitive reads; Imperium's own web rules (fetch asks outside allowed domains) | Search queries leave the machine without asking (Imperium's existing residual risk) |
-| T11 | Cross-frame leakage of a user's private context into a frame that talks to the web (A1) | Isolation by default; `fork` is explicit and visible in the IR | Programs that fork carelessly |
-| T12 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | A tape can make a run produce wrong results, which is a scoring problem, not an authority problem |
-| T13 | Sensitive data persisted in tapes, caches and state | All live in the session journal and data folder with the journal's protections; tapes written by headless runs go only where the person running them says | Tapes contain file contents and tool output by design |
-| T14 | A process reaching the daemon loads or changes harnesses (A5) | `harnesses.list` and `harnesses.check` are read-only; selecting a harness uses existing session and environment methods under existing client authorisation; no method installs a harness | As for every daemon method |
-| T15 | Replay divergence hides a behaviour change | Strict replay fails on any request digest mismatch; the IR hash is recorded with every run | Lenient replay, if chosen, mixes live and recorded calls (listed in the output) |
+| T4 | A malicious plugin or project package does harm with the session's authority (A3) | Plugins with harnesses withheld until approved and pinned by hash; projects only with `ratio.trusted_projects`; no shadowing of higher-trust names; selection pinned by hash; `harnesses.check` summaries | A package the user approved and selected can do what its tools allow without a model in the loop |
+| T5 | An agent rewrites a harness that runs it later (A4 steered by A1) | Harness folders and authored areas are safety-floor paths; selection pins by hash and needs the user to re-select after a change | A user approving such a write and re-selecting |
+| T6 | The model selects a dangerous harness for a subagent (A4) | `spawn_agent`'s `harness` accepts only packages in `harness.offered` and authored packages (which run contained unless approved); agent files from plugins and projects cannot name other sources | — |
+| T7 | **Injection leads the model to author a malicious harness** (A1 via A4): one that reads secrets and smuggles them out, loops to burn money, edits files, or tries to persist | Contained tier: read tools only, no network or writes, no secrets, no ambient reads, small fixed budget; no trust sites; caller tier only for a version the user approved with source and diff in view; persistence only through the native dialog; authored areas are protected paths; every version and run journalled and visible | The user approving a malicious version at caller tier; a contained harness wasting its small budget; contained reads returned to a caller that has network tools (the caller could read those files itself) |
+| T8 | Denial of wallet (A4, A3) | Step, call, token, cost and wall budgets per frame and session; `Budget` cannot be swallowed inside its scope; contained-tier budget cap | Spend up to the configured budgets |
+| T9 | Approval fatigue (A3, A4) | Harness approvals capped per turn; denials remembered; versions approved once per session at most per prompt | The person approving without reading |
+| T10 | Resource exhaustion of the daemon (A3, A4) | Heap, call-depth, nesting, string and collection limits; linear-time regex; steps; no threads; package size limits | A heavy but legal harness slows its own session |
+| T11 | Exfiltration of read data through network tool arguments (A1 via A4) | `Secret<T>` sinks, enforced by the checker and by the engine at dispatch; frames without network tools for sensitive reads | Unlabelled data; search queries leave the machine without asking (Imperium's existing residual risk) |
+| T12 | Cross-frame leakage of private context into a frame that talks to the web | Isolation by default; `sees` empty for fresh frames; `fork` is explicit | Programs that fork or grant `sees` carelessly |
+| T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | Wrong results, a scoring problem, not an authority problem |
+| T14 | Sensitive data persisted in tapes, caches and state | Journal-protected; secrets redacted from headless tape files; caches keyed by type digest so untrusted values never return as trusted | Tapes contain non-secret file contents and tool output by design |
+| T15 | A process reaching the daemon loads or changes harnesses (A5) | `harnesses.list`, `harnesses.check` and `harnesses.source` are read-only; selection uses existing authorised session methods; persisting an authored package and approving a plugin need the desktop app's native dialog | As for every daemon method |
+| T16 | Replay divergence hides a behaviour change | Strict replay fails on any request digest mismatch; the IR hash is recorded with every run | Lenient replay mixes live and recorded calls (listed in the output) |
 
 **Out of scope for Ratio** (owned by Imperium): sandboxing of commands (isolation tiers), the
 correctness of the safety floor's command parsing, MCP server isolation, the desktop app's
 approval dialogs.
 
-**Review gate.** Before the harness switch ships with Ratio enabled, an independent security
-review covers the attenuation path end to end (interpreter and engine), taint sinks, the
-approval path, limits, and the harness source loader, as code mode's plan requires for its worker
-(chapter 10, stage 11).
+**Review gate.** Before Ratio is enabled by default, an independent security review covers the
+attenuation path end to end (interpreter and engine), taint and secrecy sinks, the approval path,
+authored harnesses, limits, and the source loader and pinning (chapter 10, stage 20).
