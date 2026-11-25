@@ -1,8 +1,16 @@
 # The Ratio specification
 
-Version: draft 0.4 (2026-11-26). Status: design; nothing is implemented.
+Version: draft 0.5 (2026-11-26). Status: design; nothing is implemented.
 
-**Changes in draft 0.4.** Design review round 3: `run_harness` forces every argument untrusted
+**Changes in draft 0.5.** Design review round 4: declassifying a conversation and subscribing
+with `secrets: true` are desktop-only, through a single-use challenge and native dialog (no CLI
+path); tool-call arguments on labelled conversations and engine state written from labelled
+values (plans, aids' state, titles including auto-titles, authored source) carry the label, which
+is journalled, carried into copies and kept context, and redacted; stubs keep labels, and the
+invariant that replies after a secret are labelled is stated and tested; shadowing with `let` is
+defined.
+
+**Changes in draft 0.4** (kept for reference). Design review round 3: `run_harness` forces every argument untrusted
 for every source and refuses harnesses with trusted text in their parameters (`std:self-consistency`
 now takes its question untrusted); with secrecy enabled, commands whose line references a secret
 path ask every time and are refused when unattended (best-effort, floor-style matching); labelled

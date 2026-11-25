@@ -348,7 +348,7 @@ All additive, in one protocol minor version:
 | `ratio_log`, `ratio_trust`, `ratio_metric`, `ratio_span`, `ratio_event` | Logs, trust conversions (digest only), metrics, spans and custom events |
 | `ratio_state`, `ratio_cache`, `ratio_effect` | Persistence: package state with its type digest, session-scoped cache entries, the effect tape. Journalled; `ratio_effect` is not streamed to clients unless they ask for it |
 | Tools `write_harness`, `run_harness` | Model-facing tools for authored and offered harnesses, specified in chapter 06 (`meta`, model-facing harness tools) and chapter 07, defined in `imperium-protocol` like the other built-in tools and exported to `schemas/tools/` |
-| `session.control` `declassify_conversation` | The user's recovery path for a labelled conversation (chapter 03); accepted only from the desktop app's native dialog and the local `imperium` command; refused in unattended sessions |
+| `session.control` `declassify_conversation`, `session.subscribe` `secrets: true` | The user's recovery path for a labelled conversation, and unredacted events for the user's own view (chapters 03 and 07). Both need a single-use challenge bound to the installed desktop app and its native dialog (`ratio.declassify_challenge`, `ratio.secrets_challenge`, as `plugins.approval_challenge`); no CLI or other client can do either; refused in unattended sessions |
 
 No method installs, edits or deletes a user, plugin or project harness; those are files the user
 manages. The CLI gains `imperium harness list`, `imperium harness check <name|path>`,

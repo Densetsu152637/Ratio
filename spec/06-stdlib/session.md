@@ -19,7 +19,7 @@ never shows it prompts that wait on a reply, and Ratio does the same.
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
 | `session.plan` | `() -> Untrusted<Plan>?` | The agent's latest plan (the newest `update_plan`, or the block carried through compaction) | `Denied` | `sees:plan` |
-| `session.update_plan` | `(plan: Untrusted<Plan>) -> ()` | Sets the agent's plan as `update_plan` does: `plan_updated` event, live checklist in the clients, carried through compaction as `<current-plan>` | `SchemaMismatch` | `tool:update_plan` |
+| `session.update_plan` | `(plan: Untrusted<Plan>) -> ()` | Sets the agent's plan as `update_plan` does: `plan_updated` event, live checklist in the clients, carried through compaction as `<current-plan>`. A plan built from labelled values is labelled, journalled so, and redacted in clients (chapter 03) | `SchemaMismatch` | `tool:update_plan` |
 | `session.state` | `() -> Untrusted<AidState>` | The harness aids' session state (`{ entities, goals, constraints }`, `docs/03-agent-engine.md#harness-aids-for-small-models`) | `Denied` | `sees:plan` |
 | `session.update_state` | `(change: AidStateChange) -> Untrusted<AidState>` | Changes it as `update_state` does (bounded, angle brackets stripped) | `Invalid` | `tool:update_state` |
 

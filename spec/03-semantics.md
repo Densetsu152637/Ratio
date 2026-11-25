@@ -249,6 +249,29 @@ be written by a local model or the compaction is refused. A model call or an out
 made **on** a labelled conversation is a sink, decided by the rules below as if its whole content
 were secret.
 
+**Invariant: replies after a secret are labelled.** Every model reply produced on a conversation
+after its first labelled message is itself labelled, at the moment it is appended. Removing or
+shrinking messages therefore never unlabels what depends on a secret: `context.clear_stale` and
+mid-turn clearing replace a labelled tool result with a stub that **keeps the label**, a
+compaction summary of labelled messages is labelled, and `context.rollback` past the first
+labelled message leaves an unlabelled conversation only because every labelled reply after it is
+removed too. The conformance suite checks the invariant: after any sequence of appends, clears,
+compactions and rollbacks, no unlabelled message follows a labelled message that it was produced
+after.
+
+**Tool calls and engine state.** Every tool-call argument a model produces on a labelled
+conversation is a labelled value, so the sinks below see it as secret. Engine state written from
+labelled values carries the label too: the plan set by `update_plan` (`session.update_plan`), the
+harness aids' state set by `update_state`, the session title (an auto-title generated from a
+labelled conversation, or a title set from labelled text), and authored source written through
+`write_harness` or `meta.author`. These labels are journalled with the state, carried into forks,
+branches, `fork_at` copies and kept-context blocks (so a kept `<current-plan>` block survives
+compaction and stays labelled), and redacted at the daemon boundary like any labelled value, which
+includes titles sent to clients and paired phones. Re-injecting labelled engine state into an
+unlabelled conversation (a carried plan block, a state block, recalled text) labels that
+conversation. A labelled authored package can run only at contained tier, which never holds
+secrets, so it cannot run at all until the user declassifies it in the desktop app.
+
 Copies keep labels: `context.fork` of a labelled conversation is labelled; `context.fork_at(mark)`
 copies only the messages before the mark, so it is labelled only if one of those is;
 `context.excerpt`, `context.last`, `context.snapshot` and every `Transcript` carry the labels of
@@ -264,10 +287,10 @@ banner offers the recovery paths, which harness code can also take:
 1. **Continue on a local model**: switch the session's model (or the frame's `opts.model`) to a
    model with location `local`; model calls on the labelled conversation are then allowed, and
    outbound tools stay refused.
-2. **Declassify**: the user declassifies the conversation (`session.control`
-   `declassify_conversation`, offered only by the desktop app's native dialog and the `imperium`
-   command on the local socket; impossible in an unattended session); the labels are removed,
-   journalled with the user's decision.
+2. **Declassify**: the user declassifies the conversation in the **desktop app only**
+   (`session.control` `declassify_conversation`, which requires a single-use challenge bound to the installed desktop app's identity and answered through its native dialog, the pattern of `plugins.approval_challenge` and `pull_requests.auto_merge_challenge` (`docs/05-tools-and-isolation.md#auto-merge-the-desktop-app-alone-implemented`); there is no
+   CLI path, because a process an agent detached could pass the CLI's user check; impossible in an
+   unattended session); the labels are removed, journalled with the user's decision.
 3. **Fork without the secret**: branch the session (or `context.fork_at` in a harness) at a point
    before the first labelled message; the copy is unlabelled and continues with any model.
 
@@ -332,6 +355,11 @@ exactly as the native loop, and the parity suite runs with defaults (chapter 08)
 
 Evaluation is strict and left to right: arguments before the call, fields in written order,
 operands of a binary operator left before right. `and`, `or` and `??` short-circuit.
+
+**Shadowing.** A `let` may shadow an earlier binding in the same or an enclosing scope, including
+a parameter (`let n = math.clamp(n, 1, 9)`); this is allowed and draws only a warning (lint
+`shadowed_binding`), which the checker does not escalate. Shadowing a standard-library module also
+draws a warning.
 
 **Bindings.** `let` binds immutably, with a pattern that must be irrefutable (or the checker asks
 for `if let` or `match`). `var` binds a mutable local; assignment is a statement. A closure

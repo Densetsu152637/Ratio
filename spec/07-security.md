@@ -333,6 +333,7 @@ person's approvals; trusted versus untrusted harness sources.
 | T12 | Cross-frame leakage of private context into a frame that talks to the web | Isolation by default; `sees` empty for fresh frames; `fork` is explicit | Programs that fork or grant `sees` carelessly |
 | T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | Wrong results, a scoring problem, not an authority problem |
 | T14 | Sensitive data persisted in tapes, caches and state, or sent to clients | Journal-protected; labelled values redacted from headless tape files and from every event leaving the daemon (below); caches keyed by type digest so untrusted values never return as trusted | Tapes and events contain unlabelled file contents and tool output by design |
+| T14b | An agent runs the `imperium` CLI (or its own client) to declassify a conversation or subscribe with `secrets: true`, unredacting its own secrets (A4) | Both operations need the desktop app's single-use challenge and native dialog; no CLI or other client path exists; refused in unattended sessions | A user approving the dialog for a request they did not make |
 | T15 | A process reaching the daemon loads or changes harnesses (A5) | `harnesses.list`, `harnesses.check` and `harnesses.source` are read-only; selection uses existing authorised session methods; persisting an authored package and approving a plugin need the desktop app's native dialog | As for every daemon method |
 | T16 | Replay divergence hides a behaviour change | Strict replay fails on any request digest mismatch; the IR hash is recorded with every run | Lenient replay mixes live and recorded calls (listed in the output) |
 
@@ -340,14 +341,18 @@ person's approvals; trusted versus untrusted harness sources.
 
 Every event, method result and stream the daemon sends to a client replaces secret-labelled
 values with `[secret: <digest>]` (chapter 03), **unless** the client is a local process on the
-daemon's own socket that explicitly asked for unredacted values (`session.subscribe` with
-`secrets: true`, which only the desktop app and the `imperium` command may request, and which the
-user enables per session). In an **unattended** session (schedules, auto-fix, project agents) no
+daemon's own socket that explicitly asked for unredacted values. That client can only be the
+**installed desktop app**: `session.subscribe` with `secrets: true` requires a single-use challenge bound to the installed desktop app's identity and answered through its native dialog, the pattern of `plugins.approval_challenge` and `pull_requests.auto_merge_challenge` (`docs/05-tools-and-isolation.md#auto-merge-the-desktop-app-alone-implemented`), and
+the user enables it per session in that dialog. There is no CLI path: Imperium counts the CLI as
+the user only for processes that do not descend from the daemon, and an agent's detached process
+could pass that check, so a command an agent runs could otherwise unredact its own secrets. In an **unattended** session (schedules, auto-fix, project agents) no
 client may subscribe with `secrets: true` and the per-session enablement does not exist: its
 events are always redacted. The digest is an HMAC under a key generated per session, kept in the
 session's data folder, never sent to a client, and deleted with the session. This covers `harness_site` and the live view, `ratio_effect`,
 `ratio_state`, `ratio_log`, `harness_authored` (a model can put a secret into source it writes),
-`harnesses.source`, `harnesses.replay` and every replayed event. **Paired phones never receive
+`harnesses.source`, `harnesses.replay`, every replayed event, and labelled engine state such as
+plans, aids' state and **session titles** (including auto-titles and the session lists phones
+show). **Paired phones never receive
 unredacted values**, whatever they ask. Redaction is applied at the daemon's protocol boundary,
 from the labels, so no client-side code is trusted with it.
 
