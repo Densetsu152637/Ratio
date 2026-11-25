@@ -7,7 +7,7 @@ agent loop) or a Ratio package. Packages come from five sources (chapter 07 give
 
 | Source | Qualified name | Folder | Loaded when |
 | --- | --- | --- | --- |
-| Built-in | `std:<name>` | Shipped inside `imperium-ratio` | Always |
+| Built-in | `std:<name>` | Shipped inside the `ratio` library (this repository) | Always |
 | User | `user:<name>` | `<config>/harnesses/` | Always |
 | Plugins | `plugin:<plugin>/<name>` | A plugin's `harnesses/` | The plugin is enabled **and** approved (a plugin with harnesses is code-running, chapter 07) |
 | Project | `project:<name>` | `.imperium/harnesses/` of a project folder | The project is in `ratio.trusted_projects`; otherwise one notice per folder |
@@ -356,7 +356,23 @@ manages. The CLI gains `imperium harness list`, `imperium harness check <name|pa
 `imperium chat` gains `/harness <name>`. The desktop's harness picker, the Agents panel rows, the
 authored list and the live harness view are client work (chapter 10).
 
-## What changes in the engine
+## Which repository owns what
 
-The engine's side of Ratio is an implementation of the interpreter's `Host` trait plus the harness
+Ratio is a language in its own repository; Imperium is a host that depends on a released version
+of it (chapter 10, the repository split). For this chapter's subjects:
+
+| Subject | Ratio repository | Imperium repository |
+| --- | --- | --- |
+| Harness sources | The package format, `meta`, imports and their limits, qualified-name syntax and the shadowing rule, the source registry trait | The five sources' folders, which are loaded and with what trust, plugin and project gates |
+| Built-in packages | Their source (`std:default`, `std:consul-escalation`, `std:plan-execute-verify`, `std:self-consistency`, `std:tdd-fix`), shipped in the library | Offering and selecting them |
+| Settings | The limits' defaults and maxima (chapter 07) | `[harness]` and `[ratio]`, and that projects cannot set them |
+| Selection, pinning, switching, subagents | IR hashes, closure hashes and `IR_VERSION`, which pins record | The precedence rules, `harness_changed`, turn-boundary switching, `spawn_agent`'s fields and agent files |
+| The default loop and parity | `std:default` | The parity suite and the default switch (R14) |
+| Hooks | Nothing: programs cannot register or run hooks | Every hook and its payloads |
+| Agents panel and live harness view | Site ids, source maps and the effect keys that name frames | Events, throttling, redaction, the panels |
+| Code mode (Q9) | Frame-path elements for frames opened from a program | `run_script`, its budgets, and the option the user chooses |
+| Headless evaluations | The tape format and replay | `imperium run`'s flags and output |
+| Protocol | Nothing | Every method, event and tool |
+
+The engine's side of Ratio is an implementation of the library's `Host` trait plus the harness
 switch. Chapter 10 lists every touch point and which of them belong to files another session owns.

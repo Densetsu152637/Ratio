@@ -21,7 +21,7 @@ Ratio programs come from five sources, in decreasing order of trust:
 
 | Source | Written by | Trust it gets |
 | --- | --- | --- |
-| `std` | The Imperium project, shipped and reviewed with the crate | Full: may be selected and offered |
+| `std` | The Ratio project, shipped and reviewed with the `ratio` library | Full: may be selected and offered |
 | `user` | The user, in `<config>/harnesses/` | Full |
 | `plugin` | A plugin author; loaded only when the plugin is approved (below) | Selectable by the user once approved; offered to models only if listed in `harness.offered` (enabling the plugin offers it, chapter 08) |
 | `project` | A repository; loaded only for projects in `ratio.trusted_projects` | Selectable by the user; never offered to models by default |

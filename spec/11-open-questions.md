@@ -17,7 +17,7 @@ where the specification carries it out. One question remains open.
 | Q8 | Do plugins' harnesses become available to models? | Enabling an approved plugin **offers** its harnesses (they join `harness.offered`), but nothing uses them automatically; selecting one is a separate act. The same holds for authored harnesses. Agent files from plugins and projects may name only their own source's packages or offered ones | Chapter 07 (sources), chapter 08 (settings, subagents) |
 | Q10 | Names | **Keep** `.ratio` and `imperium harness` | Chapters 08 and 10 |
 | Q11 | Does the Consul escalation threshold stay a constant? | **Yes**: `TAKEOVER_AFTER = 2` in the built-in package; a copy is the user's own workflow | Chapter 08 (item 64), chapter 09 (example 7) |
-| Q12 | Where does the specification live? | **In this repository.** Imperium references a pinned revision (submodule or lock file) and vendors the generated `builtins.txt`, checked for drift in CI | Chapter 10 (where the specification lives) |
+| Q12 | Where does the specification live? | **In this repository**, which since draft 0.6 also holds the implementation: Ratio is a language with its own build chain, and Imperium depends on a release tag of it (the user's later decision). `builtins.txt` is generated and drift-checked here | Chapter 10 (R15, where the specification lives, the repository split) |
 
 ## Open
 
