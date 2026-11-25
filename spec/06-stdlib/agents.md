@@ -19,6 +19,8 @@ raises `Denied { by: profile }`.
 user's rules govern delegation exactly as they govern a model's own calls: a frame without
 `spawn_agent` in its tools cannot spawn, and a `deny` rule on `ask_agent` refuses `agents.ask`.
 
+**Secrecy.** Briefs, steering and queued texts, and questions to knowledge agents may not carry secret labels (chapter 03): `Denied { by: secrecy }`.
+
 **Budgets.** A subagent's budget is carved from the spawning frame's by default: its spending
 debits the frame and every ancestor, and `budget:` can only lower the cap. This needs per-task
 budgets in the engine (chapter 10).

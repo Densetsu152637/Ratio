@@ -121,7 +121,7 @@ by the frame's `sees` capability, a record of booleans:
 | `agents` | `agents.list()`, `agents.status()` reports, `agents.knowledge()` cards |
 | `system_default` | `context.system_default()` |
 | `state` | `state.get()` (writes need `state` and an entry's own frame or its `fork` frames) |
-| `secrets` | receiving `Secret<T>` values as arguments or results (chapter 03) |
+| `secrets` | holding secret-labelled values: receiving them as arguments or results, and running effects whose results would carry the label (chapter 03) |
 
 Defaults: an entry's own frame sees everything; a `fork` frame inherits its caller's `sees`
 (it already holds the caller's conversation); a `fresh` or `none` frame sees nothing unless its

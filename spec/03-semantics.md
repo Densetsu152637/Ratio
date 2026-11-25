@@ -86,7 +86,7 @@ structured generation constrains the model to (chapter 05).
 | unit-only `enum` | `string`, `enum` of the variant names in `snake_case` |
 | other `enum` | `oneOf` of objects with a `kind` constant and the payload's fields |
 | `Json` | `{}` |
-| `Untrusted<T>`, `Secret<T>` | the schema of `T` |
+| `Untrusted<T>`, `Secret<T>` | the schema of `T` (labels are not part of the generated schema) |
 
 Field descriptions come from the trailing string or `///` comment. Attributes written before a
 field refine the schema: `@len(min, max)`, `@range(min, max)`, `@pattern(r"…")`,
@@ -189,7 +189,8 @@ approves by default), `state` fields, and harness arguments whose parameter type
   every package it can load with `meta.harness`.
 - `ratio.trust` (chapter 08) is `allow` (sites run), `ask` (selecting a package whose transitive
   trust-site list is not empty asks the user to approve that list, pinned to the package hash) or
-  `deny` (such packages cannot be selected). The default is `ask`. Authored packages may contain
+  `deny` (such packages cannot be selected). The default is `ask`. `std` packages are reviewed
+  with the crate and are exempt from `ask`. Authored packages may contain
   no trust sites at all (chapter 07).
 
 **What the guarantee covers.** The taint rules track **explicit flows**: a value that is computed
@@ -209,39 +210,71 @@ successful injection.
 ## Secrecy: `Secret<T>`
 
 Taint protects integrity: what may *instruct* a model. It does nothing for confidentiality: an
-injected instruction can still make a model put what it read into a web query. `Secret<T>` is a
+injected instruction can still make a model put what it read into a web query. Secrecy is a
 second, independent label for values that must not leave the machine or be stored outside it.
 
-**Sources.** `tools.read_file` and `tools.grep` results for files that match the safety floor's
-secret patterns (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `.npmrc`, `.netrc`, …) or the
-user's `ratio.secret_paths`; memory entries marked `private`; `session.ask` answers to questions
-asked with `secret: true`; output of commands matching `ratio.secret_commands`.
+**A run-time label.** Whether a value is secret usually depends on data the checker cannot see
+(which path a `read_file` received, which memory a search returned). Secrecy is therefore a
+**label carried on values at run time**: every text and scalar leaf of a value has a secrecy bit,
+set by sources and propagated by every operation. The interpreter passes values to the host as
+`Labelled<T>`, and the host and the engine's dispatch enforce the sinks below from the labels, so
+the enforcement does not depend on the checker. The static type `Secret<T>` is used only where the
+label is known at check time (a `session.ask` question declared `secret: true`, the argument of
+`declassify`); there, and only there, the checker also refuses a sink at load time. Everywhere
+else a sink violation is a run-time `Denied { by: secrecy }`.
 
-**Structure.** Like `Untrusted`, `Secret<T>` is deep and propagates through every operation on
-text. Unlike `Untrusted`, it also propagates to scalars computed from secret values
-(`text.len(secret)` is `Secret<Int>`), because one bit can be the bit that matters. Branching on a
-`Secret<Bool>` is allowed; that implicit flow is outside the guarantee, as for taint. The labels
-combine: a secret file's contents are `Secret<Untrusted<Str>>`.
+**Opt-in sources.** Nothing is secret by default: `ratio.secrets.enabled` is `false` and
+`ratio.secret_paths` is empty. When enabled, labels come from `tools.read_file`, `tools.grep` and
+`tools.list_dir` results for paths matching `ratio.secret_paths` (a suggested preset is the
+safety floor's secret patterns: `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `.npmrc`,
+`.netrc`, …); memory entries marked `private`; answers to `session.ask` questions asked with
+`secret: true`; output of commands matching `ratio.secret_commands`; and any value derived from a
+labelled one.
 
-**Sinks.** A secret value may not reach:
+**Propagation.** Operations propagate the label to every result computed from a labelled operand,
+including scalars (`text.len(s)` of a secret `s` is secret), because one bit can be the bit that
+matters. `Json` carries labels on its leaves: `json.encode` and `json.stringify` of a labelled
+value give labelled JSON, and `json.decode` keeps them. `hash.*` of a labelled value is labelled
+too; only the redaction digest below is exempt. Branching on a secret `Bool` is allowed; that
+implicit flow is outside the guarantee, as for taint. The labels combine: a secret file's contents
+are secret and untrusted.
 
-- arguments of network tools (`web_search`, `web_fetch`, the browser tools, MCP tools of remote
-  servers, `media_*` with hosted backends);
-- a model call whose model is hosted (location `cloud`), in any section; local models are allowed;
-- memory writes, `session.emit`, `eval` metrics, scores and labels, and harness return values to
-  frames whose `sees` lacks `secrets` (chapter 04);
-- logs and traces, where it is replaced by `[secret: <digest>]`.
+**Conversations are labelled.** Appending a labelled value to a conversation (by
+`context.append_*`, a tool result from `tools.dispatch`, or a model reply that read one) labels
+the **conversation** for the rest of its life; the label is journalled (`conversation_labelled`)
+and survives resume, branching and compaction (a compaction of a labelled conversation must be
+written by a local model, or it is refused). A model call or an outbound tool call made **on** a
+labelled conversation is a sink, decided by the rules below as if its whole content were secret.
 
-**Conversion.** `declassify(x: Secret<T>, because: Str) -> T` removes the label. It is an effect,
-monomorphic only, journalled like `trust` with a digest, listed transitively, and it **always
-asks** the user (no rule can allow it); in an unattended session it is refused.
+**Sinks.** A labelled value, or a call on a labelled conversation, may not reach:
 
-**Tapes.** Effects whose responses contain secrets are recorded in the session journal (which
-stays on the machine) but redacted from tape files written by headless runs; replaying such a run
-needs `--ratio-tape-mode lenient` for those effects.
+| Sink | Why |
+| --- | --- |
+| Network tools: `web_search`, `web_fetch`, the browser tools, MCP tools of remote servers, `media_*` with hosted backends | They send their arguments off the machine |
+| A model call whose model is hosted (location `cloud`), in any section | The provider receives it; local models are allowed |
+| `tools.run_command` and `tools.run_background` (the command line and its standard input) | A command can upload anything (`curl`, `git push`, `scp`) |
+| `tools.write_file` and `tools.edit_file`, unless the target path itself matches `ratio.secret_paths` | Closes write-then-upload: secret content may only be written into files that are themselves secret, and reading those back labels them again |
+| `tools.call_tool` and `tools.mcp_call` | They can reach any tool by name, including outbound ones |
+| `agents.spawn`, `agents.steer`, `agents.queue` briefs and `agents.ask` questions | The receiving agent may have network tools and runs outside this frame's checks |
+| Memory writes, `session.emit`, `eval` metrics, scores and labels | They persist or publish |
+| A harness argument or result crossing into a frame whose `sees` lacks `secrets` (chapter 04); such a frame also cannot run an effect whose result would be labelled | Frames see secrets only when granted |
+| Logs, traces and every event that leaves the daemon | Replaced by `[secret: <digest>]` (below) |
 
-The checker enforces the sinks statically; the engine enforces the network and hosted-model sinks
-again at dispatch from a per-call secrecy flag, so an interpreter bug cannot leak through those.
+**Conversion.** `declassify(x, because: Str)` removes the label. It is an effect, monomorphic
+only, journalled like `trust` with a digest, listed transitively, and it **always asks** the user
+(no rule can allow it); in an unattended session it is refused.
+
+**Redaction digests.** Where a secret would be shown or emitted, it is replaced by
+`[secret: <digest>]`, where the digest is an HMAC keyed per session, so equal secrets can be
+recognised within a session without the digest revealing a low-entropy secret.
+
+**Tapes.** Effects whose responses carry labels are recorded in the session journal (which stays
+on the machine) with their labels, but redacted from tape files written by headless runs;
+replaying such a run needs `--ratio-tape-mode lenient` for those effects.
+
+**Parity.** With the default configuration no source is configured, so no value or conversation
+is ever labelled and the sink rules never fire; `std:default` under defaults therefore behaves
+exactly as the native loop, and the parity suite runs with defaults (chapter 08).
 
 ## Evaluation
 

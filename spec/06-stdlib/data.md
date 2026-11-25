@@ -107,7 +107,7 @@ interpreter. Patterns are at most 4 KiB and are compiled once per call site.
 | `json.parse` | `(s: S) -> Json` | Parses JSON text (at most 16 MiB, nesting at most 128) | `Invalid` (with line and column) |
 | `json.stringify` | `<T>(v: T, pretty: Bool = false) -> S` | Encodes any schema-able value (keys in declared or key order); untrusted if `v` holds untrusted text | `Invalid` (handles, functions) |
 | `json.decode` | `<T>(j: Json) -> Untrusted<T>` | Validates against `T`'s schema and converts | `SchemaMismatch` (every violation) |
-| `json.encode` | `<T>(v: T) -> Json` | A schema-able value as `Json` | `Invalid` |
+| `json.encode` | `<T>(v: T) -> Json` | A schema-able value as `Json`; secrecy labels stay on the leaves (chapter 03) | `Invalid` |
 | `json.schema` | `<T>() -> Json` | `T`'s derived JSON Schema (chapter 03) | — |
 | `json.validate` | `(j: Json, schema: Json) -> [Violation]` | Validates against any JSON Schema (draft 2020-12, no remote references); `{ pointer, message }` per violation | `Invalid` (bad schema) |
 | `json.get` | `(j: Json, pointer: Str) -> Json?` | RFC 6901 pointer lookup | `Invalid` (bad pointer) |

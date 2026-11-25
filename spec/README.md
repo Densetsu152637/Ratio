@@ -1,6 +1,15 @@
 # The Ratio specification
 
-Version: draft 0.2 (2026-11-26). Status: design; nothing is implemented.
+Version: draft 0.3 (2026-11-26). Status: design; nothing is implemented.
+
+**Changes in draft 0.3.** Design review round 2 (N1 to N10 and nits): secrecy is a run-time
+label on values, enforced at the host and at dispatch, opt-in and off by default, with more sinks,
+labels on `Json` and on conversations; authored harnesses are pinned and approved by the hash of
+their whole import closure, force taint on arguments and results, take approvals scoped to the
+authority shown, use area-qualified names, and run contained on the caller's model with
+provider-side tools off; every event leaving the daemon is redacted; example 8's path handling is
+fixed; the security-relevant clients come before the security review, and engine stages are
+split (28 stages); grammar nits (block heads, `/` in source names, constants).
 
 Ratio is a language for writing **agent harnesses** for Imperium. A harness decides how an agent
 works: what its model is told, which tools it may use, how results are checked, when it stops.
@@ -8,7 +17,7 @@ Imperium today has one harness, its Rust agent loop. Roadmap item 58 makes harne
 per session, environment, agent file and subagent; Ratio is the language those harnesses are
 written in.
 
-**Changes in draft 0.2.** The design-gate review's findings (security S1 to S13, grammar and
+**Changes in draft 0.2** (kept for reference). The design-gate review's findings (security S1 to S13, grammar and
 types G1 to G7, integration I1 to I3, missing built-ins, nits) and the user's answers to the
 twelve open questions are folded in: the effect rule for untrusted strings, `Brief`,
 `TrustedPrompt`, abstract generics, monomorphic and gated `trust`, `Secret<T>`, frame `sees`,
@@ -30,7 +39,7 @@ engine seams and resized stages.
 | [07 Safety and security](07-security.md) | Sources and trust, no `eval`, authored harnesses, permissions, limits, prompt injection, threat model |
 | [08 Integration with Imperium](08-imperium.md) | Sources, selection and pinning (item 58), the default harness and parity, Consul (item 64), hooks, the Agents panel and live harness view, code mode, headless evals, protocol |
 | [09 Examples](09-examples.md) | Nine complete programs |
-| [10 Implementation plan](10-implementation.md) | The `imperium-ratio` crate in 25 stages, engine seams, the pinned specification, CI-only testing, conformance suite |
+| [10 Implementation plan](10-implementation.md) | The `imperium-ratio` crate in 28 stages, engine seams, the pinned specification, CI-only testing, conformance suite |
 | [11 Decisions and open questions](11-open-questions.md) | The user's decisions on Q1 to Q12; Q9 still open |
 
 ## Conventions
@@ -60,11 +69,11 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | R9 | **Harness calls are function calls** with their own frame (model, tools, permissions, budget, `sees`, conversation); a callee sees nothing of its caller or the session unless passed, forked or granted | 04 |
 | R10 | **Attenuation only**: every frame's tools, permissions, model locations, `sees`, budgets and subagents are bounded by its caller's | 04, 07 |
 | R11 | **Prompts are typed values** built from sections; only a `TrustedPrompt` may be a system prompt; the section decides how text is framed | 05 |
-| R12 | **No `eval`** in a running program; models write harnesses only through the **authored-harness** path (stored, checked, pinned, contained by default, caller authority only for a user-approved version, never above the caller) | 07 |
+| R12 | **No `eval`** in a running program; models write harnesses only through the **authored-harness** path (stored, checked, pinned by closure hash, taint forced at the boundary, contained by default, caller authority only for a user-approved closure at the authority shown, never above the caller) | 07 |
 | R13 | **Every side effect is an engine call**, decided by Imperium's dispatch (rules, floor, modes, hooks, approvals, events); delegation and session control are tool-gated; Ratio holds no authority of its own | 07, 08 |
 | R14 | **`std:default` replaces the native loop** after the parity suite passes and one release cycle (the user's decision); until then the Rust loop is the default | 08 |
 | R15 | Built as **one crate**, `imperium-ratio`, independent of the engine behind a concurrent `Host` trait; the specification stays in this repository and Imperium pins a revision | 10 |
-| R16 | **`Secret<T>`** labels confidential values; secrets never reach network tools, hosted models or stored outputs, enforced by the checker and at dispatch | 03 |
+| R16 | **Secrecy is a run-time label** (`Secret<T>` statically only where known), opt-in and off by default; labelled values and the conversations they enter never reach network tools, hosted models, commands, non-secret writes, delegation or stored outputs, enforced at the host and at dispatch, and redacted from every event leaving the daemon | 03, 07 |
 
 ## Size of the standard library
 

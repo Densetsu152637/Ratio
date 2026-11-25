@@ -144,8 +144,9 @@ attribute       = "@" , IDENT , [ "(" , [ arguments ] , ")" ] ;
 import_decl     = "import" , import_path , [ "as" , IDENT ]
                 , [ "{" , IDENT , { "," , IDENT } , "}" ] ;
 import_path     = STRING | source_name ;
-source_name     = [ IDENT , ":" ] , IDENT , { "." , IDENT } , [ "@" , STRING ] ;
-                  (* e.g. std:debate, user:critics.strict, plugin:acme/review @"^1" *)
+source_name     = [ IDENT , ":" ] , name_path , { "/" , name_path } , [ "@" , STRING ] ;
+name_path       = IDENT , { "." , IDENT } ;
+                  (* std:debate, user:critics.strict, plugin:acme/review @"^1", authored:session/vote *)
 
 type_decl       = "type" , IDENT , [ type_params ] , "=" , type ;
 enum_decl       = "enum" , IDENT , [ type_params ] , "{" , variant , { "," , variant } , [ "," ] , "}" ;
@@ -275,13 +276,15 @@ section         = "system" , expr
 ### Disambiguation rules
 
 1. **Blocks and records.** After a keyword that takes a block (`if`, `else`, `for`, `while`,
-   `loop`, `repeat`, `try`, `catch`, `defer`, `do`, `fn`, `harness`, `test`), `{` starts a block;
-   after `with`, the first `{` is the configuration record and the next one the block. Elsewhere
+   `loop`, `repeat`, `try`, `catch`, `defer`, `do`, `fn`, `harness`, `test`) and after the head
+   expression of `if c`, `while c`, `for p in xs`, `repeat n` and `with timeout d`, `{` starts a
+   block; after `with` followed by a record, the first `{` is the configuration record and the
+   next one the block. Elsewhere
    in expression position, including a closure body, `{` starts a **record literal** when the next
    token is `}` or `..`, or an identifier followed by `:` or `,`; otherwise it starts a block.
    So `|c| { steps: c.steps }` returns a record, `|c| { x }` is a block returning `x`, and a
    one-field shorthand record is written `{ x, }`. A record or variant literal in an `if`,
-   `while`, `for` or `match` head must be parenthesised.
+   `while`, `for`, `match`, `repeat` or `with timeout` head must be parenthesised.
 2. **Type arguments** use the turbofish: `json.decode::<Plan>(j)`, `model.generate_as::<Note>(p)`.
    Bare `<` is always the comparison operator in expressions.
 3. **Variant literals.** `Name { … }` in expression position (outside heads, rule 1) constructs
@@ -307,6 +310,14 @@ section         = "system" , expr
     the expected type is `ToolSet` or `ToolName`, a bare identifier that is not a local binding
     names a tool (`tools: [read_file, grep]`). Everywhere else the qualified form is needed
     (`Effort.high`).
+
+### Constants
+
+A `const` initialiser is evaluated once, when the package is loaded. It may use literals, other
+constants, operators, and calls of **pure** functions and pure built-ins (`model.route`,
+`text.*`, `list.*`, …); the checker refuses calls that make effects (model calls, tools, the
+clock, randomness). `const CRITIC: ModelRef = model.route(tier: frontier)` is therefore valid: it
+builds a reference and resolves nothing until a call uses it.
 
 ## A complete small program
 

@@ -72,68 +72,113 @@ and run under bounds the model cannot lift.
 
 ## Authored harnesses
 
+**Names.** Authored packages are qualified by area: `authored:session/<name>` lives with the
+session, `authored:env/<name>` with the environment once persisted. A bare `authored:<name>`
+means the session area first, then the environment area.
+
 **Writing.** A model writes a harness with the model-facing tool `write_harness(name, source,
 description)` (a Ratio program with `meta.author`). The engine:
 
-1. stores the source in the **authored area** of the session (`<data>/sessions/<id>.harnesses/`),
-   never in the user, plugin or project folders; the area is written only by the daemon and is a
-   protected path for file tools and commands;
+1. stores the source in the session's authored area (`<data>/sessions/<id>.harnesses/`), never in
+   the user, plugin or project folders; the area is written only by the daemon and is a protected
+   path for file tools and commands;
 2. parses and checks it as a package of source `authored`: types, taint, the guarded-effect lint,
    and the authored rules below; a package with errors is stored with its diagnostics and is not
    loadable;
-3. gives it a version number (1, 2, …) and pins that version by IR hash; any change is a new
-   version, and versions are never edited in place;
-4. journals `harness_authored` (`name`, `version`, `hash`, the agent that wrote it, the source,
-   the diagnostics, and the diff from the previous version) and shows it in the clients' authored
+3. gives it a version number (1, 2, …) and pins it by a **closure hash**: the IR hash of the
+   package together with the IR hashes of its whole transitive import closure (other authored
+   packages of the area and the `std` packages it imports, with their versions). A change anywhere
+   in the closure is a new version; versions are never edited in place;
+4. journals `harness_authored` (`name`, `version`, `closure_hash`, the agent that wrote it, the
+   source of every package in the closure, the diagnostics, and the diffs from the previous
+   version), with `untrusted: true` on every source field, and shows it in the clients' authored
    harness list.
 
 `write_harness` runs without asking: storing a checked package changes nothing else. It is a
 pseudo-tool, so a frame without it in its tools cannot author, and a user rule can deny it. At
 most 64 KiB per package, 32 versions per name and 16 names per session.
 
-**Authored rules.** An authored package may contain no `trust`, `as_task` or `declassify` sites at
-all (a checker error), may import only the standard library and authored packages of the same
-area, may not declare `@turn` (it can never become a session's root harness), and may declare
-`@task`. Rejected: allowing trust sites with per-site approval. A person cannot judge from a site
-what text will flow through it, and a model under injection would write exactly the site it
-needs.
+**Authored rules.** An authored package:
 
-**Running.** An authored harness runs as a frame: from Ratio with `meta.harness::<H>("authored:x")`,
-or from a model with the model-facing tool `run_harness(name, arguments)`, whose arguments are
-decoded through the harness's parameter schema (all untrusted). It runs in one of two tiers:
+- may contain no `trust`, `as_task` or `declassify` sites at all (a checker error);
+- may import only the standard library and authored packages of the same area;
+- may not declare `@turn` (it can never become a session's root harness), and may declare `@task`;
+- may expose to `run_harness` only harnesses whose **parameters are all untrusted types**
+  (`Untrusted<T>`, `Json`, scalars, or records of those): a harness with a `Str`, `UserText`,
+  `Brief` or `TrustedPrompt` parameter is refused for `run_harness` at check time, because a model
+  would be supplying trusted text.
+
+Rejected: allowing trust sites with per-site approval. A person cannot judge from a site what text
+will flow through it, and a model under injection would write exactly the site it needs.
+
+**The authored boundary forces taint.** Whatever an authored harness declares:
+
+- every argument a model passes through `run_harness` is decoded through the parameter schema as
+  deep-`Untrusted`;
+- every result of an authored harness reaches its caller as deep-`Untrusted<R>`, at both tiers
+  and by every route: `run_harness`, `meta.harness`, `spawn_agent`'s report. `meta.harness::<H>`
+  for an authored name is checked against `H` with its result type mapped to `Untrusted<R>`, so
+  the caller's code is typed for untrusted results from the start.
+
+**Running.** An authored harness runs as a frame, from Ratio with
+`meta.harness::<H>("authored:session/vote")` or from a model with the model-facing tool
+`run_harness(name, arguments)`. It runs in one of two tiers:
 
 | Tier | Authority | Approval |
 | --- | --- | --- |
-| **Contained** (default) | The caller's frame attenuated further: tools only from the read set (`read_file`, `list_dir`, `glob`, `grep`, `memory_search`, `memory_read`, `search_sessions`); mode `plan`; no network, browser, MCP, command, write, delegation, memory-write, user-interaction or pseudo-tools; `sees` empty unless the caller grants items it has, and never `secrets`; budget at most `ratio.authored.contained_budget` (default 50k tokens, 20 model calls, 2 minutes) and at most the caller's | None |
-| **Caller** | At most the caller's frame: its tools, mode, rules, paths, location, `sees` and budget, attenuated as any harness call | The user approves **this version**: a permission request for `run_harness` that shows the full source, the diff from the last approved version, and `harnesses.check`'s summary (tools used, network, writes, delegation). "Allow once" or "allow this version for the session"; it never becomes an "always" rule. Counted against the per-turn harness approval cap |
+| **Contained** (default) | The caller's frame attenuated further: tools only from the read set (`read_file`, `list_dir`, `glob`, `grep`, `memory_search`, `memory_read`, `search_sessions`); mode `plan`; no network, browser, MCP, command, write, delegation, memory-write, user-interaction or pseudo-tools; `sees` empty unless the caller grants items it has, and never `secrets`; the model **pinned to the caller's current model**, with provider-side tools (hosted web search, code execution, file search and similar) turned off; budget at most `ratio.authored.contained_budget` (default 50k tokens, 20 model calls, 2 minutes) and at most the caller's | None |
+| **Caller** | At most the caller's frame: its tools, mode, rules, paths, location, `sees` and budget, attenuated as any harness call | The user approves **this closure hash at this authority** (below) |
+
+A route that cannot turn provider-side tools off (an endpoint that always searches, a model whose
+card says it may call hosted tools on its own) is refused at contained tier with
+`Denied { by: attenuation }`.
 
 Why the contained tier needs no approval: it can change nothing (no writes, commands or memory
-writes), reach nothing outside the machine except through model calls of models the caller may
-already use, ask the user nothing, see no secrets and nothing ambient, and spend at most a small,
-fixed budget. What it returns is untrusted data to its caller. Its worst case, a harness that
-reads files the caller could already read and burns its small budget, is no worse than the
-calling model doing the same.
+writes), reach nothing outside the machine except through the model the caller is already using,
+with that model's provider-side tools off, ask the user nothing, see no secrets and nothing
+ambient, and spend at most a small, fixed budget. What it returns is untrusted data. Its worst
+case, a harness that reads files the caller could already read and burns its small budget, is no
+worse than the calling model doing the same.
 
-**Persistence.** Authored packages live with their session. Keeping one for the environment
-(`<workspaces.root>/<env>/harnesses.authored/`), so later sessions can run it, is the user's act in
-the desktop app, through a native dialog with the plugin-approval challenge, showing source and
-hash. A persisted authored package is still source `authored`: contained by default, and at
-caller tier only for a version the user approved (persistently, in that dialog, or per session).
+**Caller-tier approval.** The permission request for `run_harness` shows:
+
+- the **whole import closure**: the source of every authored package in it, rendered as untrusted
+  model-written text (visually marked, never as markdown or with active links), and the diff of
+  each package from the version last approved;
+- `harnesses.check`'s summary of what the closure can do. Any use of `model.loop`,
+  `tools.dispatch`, `tools.dispatch_all` or `tools.call_tool` counts as "**any tool of the
+  frame**", since those run tools a model chooses; otherwise the summary lists the tools named;
+- the **authority** it would run with: the caller frame's tools, mode, paths, location, `sees` and
+  budget.
+
+The approval is keyed by the closure hash and **scoped to the authority shown**: "allow once" or
+"allow this version at this authority for the session"; it never becomes an "always" rule. A
+later run from a caller frame with wider authority (more tools, a more permissive mode, more paths,
+a wider `sees`, a larger budget) asks again; a narrower one does not. Approvals count against the
+per-turn harness approval cap.
+
+**Persistence.** Keeping an authored package for the environment (`authored:env/<name>`, stored
+in `<workspaces.root>/<env>/harnesses.authored/`), so later sessions can run it, is the user's act
+in the desktop app, through a native dialog with the plugin-approval challenge, showing the whole
+closure and its hash. A persisted package is still source `authored`: contained by default, and
+at caller tier only for a closure hash and authority the user approved (in that dialog,
+persistently, or per session).
 
 **Offered, never automatic.** Authored packages are listed to the model that may run them (in
 `run_harness`'s description and `meta.harnesses()`), and may be named in `spawn_agent`'s
-`harness` (the subagent then runs the `@task` entry at contained tier, or caller tier for an
-approved version), but they are never selected automatically: making an authored package a
-session's or environment's harness is impossible (no `@turn`), and making it an agent file's
-harness is the user's edit.
+`harness` (the subagent then runs the `@task` entry at contained tier, or at caller tier for an
+approved closure and authority), but they are never selected automatically: making an authored
+package a session's or environment's harness is impossible (no `@turn`), and making it an agent
+file's harness is the user's edit.
 
 **Self-use.** A model that runs a harness it wrote runs it as a child of its own frame. Attenuation
-bounds the child by the parent, so writing a harness and running it can never raise the model's
-own authority: at best (caller tier, approved) the harness does what the model could already do,
-without a model in between.
+bounds the child by the parent, and the results come back untrusted, so writing a harness and
+running it can never raise the model's own authority: at best (caller tier, approved) the harness
+does what the model could already do, without a model in between.
 
-**Unattended sessions** may author and run contained; caller tier needs a version the user
-approved persistently beforehand; otherwise `run_harness` falls back to contained and says so.
+**Unattended sessions** may author and run contained; caller tier needs a closure hash and
+authority the user approved persistently beforehand; otherwise `run_harness` falls back to
+contained and says so.
 
 ## Permissions
 
@@ -170,7 +215,7 @@ approved persistently beforehand; otherwise `run_harness` falls back to containe
 Defaults apply per turn of an agent (the `@turn` or `@task` call and everything inside it). The
 configuration (`[ratio.limits]`, chapter 08) may lower them or raise them up to the maximum; a
 frame may only lower them. The defaults are draft values, to be set from measurements of the
-examples on the eval suites (chapter 10, stage 20).
+examples on the eval suites (chapter 10, stage 24).
 
 | Limit | Default | Maximum | When exceeded |
 | --- | --- | --- | --- |
@@ -261,16 +306,28 @@ person's approvals; trusted versus untrusted harness sources.
 | T4 | A malicious plugin or project package does harm with the session's authority (A3) | Plugins with harnesses withheld until approved and pinned by hash; projects only with `ratio.trusted_projects`; no shadowing of higher-trust names; selection pinned by hash; `harnesses.check` summaries | A package the user approved and selected can do what its tools allow without a model in the loop |
 | T5 | An agent rewrites a harness that runs it later (A4 steered by A1) | Harness folders and authored areas are safety-floor paths; selection pins by hash and needs the user to re-select after a change | A user approving such a write and re-selecting |
 | T6 | The model selects a dangerous harness for a subagent (A4) | `spawn_agent`'s `harness` accepts only packages in `harness.offered` and authored packages (which run contained unless approved); agent files from plugins and projects cannot name other sources | — |
-| T7 | **Injection leads the model to author a malicious harness** (A1 via A4): one that reads secrets and smuggles them out, loops to burn money, edits files, or tries to persist | Contained tier: read tools only, no network or writes, no secrets, no ambient reads, small fixed budget; no trust sites; caller tier only for a version the user approved with source and diff in view; persistence only through the native dialog; authored areas are protected paths; every version and run journalled and visible | The user approving a malicious version at caller tier; a contained harness wasting its small budget; contained reads returned to a caller that has network tools (the caller could read those files itself) |
+| T7 | **Injection leads the model to author a malicious harness** (A1 via A4): one that reads secrets and smuggles them out, loops to burn money, edits files, or tries to persist | Contained tier: read tools only, the caller's model pinned with provider-side tools off, no network or writes, no secrets, no ambient reads, small fixed budget; no trust sites; arguments and results forced untrusted; caller tier only for a closure hash and authority the user approved with the whole closure, its diffs and its summary in view; wider authority asks again; persistence only through the native dialog; authored areas are protected paths; every version and run journalled and visible | The user approving a malicious version at caller tier; a contained harness wasting its small budget; contained reads returned to a caller that has network tools (the caller could read those files itself) |
 | T8 | Denial of wallet (A4, A3) | Step, call, token, cost and wall budgets per frame and session; `Budget` cannot be swallowed inside its scope; contained-tier budget cap | Spend up to the configured budgets |
 | T9 | Approval fatigue (A3, A4) | Harness approvals capped per turn; denials remembered; versions approved once per session at most per prompt | The person approving without reading |
 | T10 | Resource exhaustion of the daemon (A3, A4) | Heap, call-depth, nesting, string and collection limits; linear-time regex; steps; no threads; package size limits | A heavy but legal harness slows its own session |
-| T11 | Exfiltration of read data through network tool arguments (A1 via A4) | `Secret<T>` sinks, enforced by the checker and by the engine at dispatch; frames without network tools for sensitive reads | Unlabelled data; search queries leave the machine without asking (Imperium's existing residual risk) |
+| T11 | Exfiltration of read data through network tool arguments (A1 via A4) | **Only where secrecy is configured**: values from configured secret sources, and conversations they were appended to, are refused at the sinks of chapter 03 (network tools, hosted models, commands, non-secret writes, `call_tool`, delegation, persistence) by the host and by the engine at dispatch; the checker adds load-time refusals only where the label is known statically. Elsewhere: frames without network tools for sensitive reads | Everything not labelled (by default nothing is); implicit flows; a local model that saw a secret and later writes about it in an unlabelled conversation of another frame; search queries of unlabelled text leave the machine without asking (Imperium's existing residual risk) |
 | T12 | Cross-frame leakage of private context into a frame that talks to the web | Isolation by default; `sees` empty for fresh frames; `fork` is explicit | Programs that fork or grant `sees` carelessly |
 | T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | Wrong results, a scoring problem, not an authority problem |
-| T14 | Sensitive data persisted in tapes, caches and state | Journal-protected; secrets redacted from headless tape files; caches keyed by type digest so untrusted values never return as trusted | Tapes contain non-secret file contents and tool output by design |
+| T14 | Sensitive data persisted in tapes, caches and state, or sent to clients | Journal-protected; labelled values redacted from headless tape files and from every event leaving the daemon (below); caches keyed by type digest so untrusted values never return as trusted | Tapes and events contain unlabelled file contents and tool output by design |
 | T15 | A process reaching the daemon loads or changes harnesses (A5) | `harnesses.list`, `harnesses.check` and `harnesses.source` are read-only; selection uses existing authorised session methods; persisting an authored package and approving a plugin need the desktop app's native dialog | As for every daemon method |
 | T16 | Replay divergence hides a behaviour change | Strict replay fails on any request digest mismatch; the IR hash is recorded with every run | Lenient replay mixes live and recorded calls (listed in the output) |
+
+## Redaction of events leaving the daemon
+
+Every event, method result and stream the daemon sends to a client replaces secret-labelled
+values with `[secret: <digest>]` (chapter 03), **unless** the client is a local process on the
+daemon's own socket that explicitly asked for unredacted values (`session.subscribe` with
+`secrets: true`, which only the desktop app and the `imperium` command may request, and which the
+user enables per session). This covers `harness_site` and the live view, `ratio_effect`,
+`ratio_state`, `ratio_log`, `harness_authored` (a model can put a secret into source it writes),
+`harnesses.source`, `harnesses.replay` and every replayed event. **Paired phones never receive
+unredacted values**, whatever they ask. Redaction is applied at the daemon's protocol boundary,
+from the labels, so no client-side code is trusted with it.
 
 **Out of scope for Ratio** (owned by Imperium): sandboxing of commands (isolation tiers), the
 correctness of the safety floor's command parsing, MCP server isolation, the desktop app's
@@ -278,4 +335,5 @@ approval dialogs.
 
 **Review gate.** Before Ratio is enabled by default, an independent security review covers the
 attenuation path end to end (interpreter and engine), taint and secrecy sinks, the approval path,
-authored harnesses, limits, and the source loader and pinning (chapter 10, stage 20).
+authored harnesses, the approval dialogs and the live view, redaction, limits, and the source
+loader and pinning (chapter 10, stage 24, which runs after those stages).

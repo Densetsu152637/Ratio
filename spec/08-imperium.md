@@ -11,7 +11,7 @@ agent loop) or a Ratio package. Packages come from five sources (chapter 07 give
 | User | `user:<name>` | `<config>/harnesses/` | Always |
 | Plugins | `plugin:<plugin>/<name>` | A plugin's `harnesses/` | The plugin is enabled **and** approved (a plugin with harnesses is code-running, chapter 07) |
 | Project | `project:<name>` | `.imperium/harnesses/` of a project folder | The project is in `ratio.trusted_projects`; otherwise one notice per folder |
-| Authored | `authored:<name>` | The session's authored area (or the environment's, once persisted) | Written by `write_harness` (chapter 07) |
+| Authored | `authored:session/<name>`, `authored:env/<name>` | The session's authored area, or the environment's once the user persists a package | Written by `write_harness` (chapter 07) |
 
 A bare name resolves to the highest-trust source that has it, in the table's order, so a lower
 source never shadows a higher one. A package is a `.ratio` entry file with a `meta` declaration
@@ -34,8 +34,9 @@ offered = ["std:*"]               # packages a model may name in spawn_agent's h
 enabled = false                   # false: only "native" can be selected (until the security review)
 trust = "ask"                     # allow | ask | deny: packages with trust sites (chapter 03)
 trusted_projects = []             # project folders whose .imperium/harnesses are loaded
-secret_paths = []                 # extra path globs whose contents are Secret (chapter 03)
-secret_commands = []              # command prefixes whose output is Secret
+secrets = { enabled = false }     # secrecy labels are opt-in (chapter 03)
+secret_paths = []                 # path globs whose contents are secret; empty by default
+secret_commands = []              # command prefixes whose output is secret; empty by default
 log_level = "info"                # debug | info | warn | error
 limits = { steps = 5000000, heap_mb = 64, call_depth = 512, depth = 8, width = 16, tool_calls = 500 }
 authored = { enabled = true, contained_budget = { tokens = 50000, model_calls = 20, wall_s = 120 } }
@@ -161,7 +162,9 @@ waits, stops and resumes happen inside `model.chat` as they do in the native loo
 **Decision R14: `std:default` replaces the native loop, after parity.** The user has decided that
 `std:default` becomes the default harness once the parity suite passes and one release cycle of
 opt-in use has gone by without regressions (chapter 11, Q1). Until then `harness.select` stays
-`native`. **Parity** means: on every recorded headless task of the eval suites, run against the
+`native`. **Parity** means: with the **default configuration** (in particular no secret sources,
+so no value or conversation is ever labelled, chapter 03), on every recorded headless task of the
+eval suites, run against the
 same scripted endpoint with the same configuration, `native` and `std:default` produce
 byte-identical model request bodies, the same tool calls with the same arguments in the same
 order, the same final replies, and the same journal events, **excluding**: `harness_call_*`,
@@ -218,6 +221,9 @@ version, who wrote it, approval status, and its source).
 running, highlights the expression executing now, and shows the harness call stack, so a person
 can watch a method work as one watches a program step through its lines.
 
+- **Redaction.** Everything the view receives is redacted at the daemon's boundary (chapter 07):
+  secret-labelled values appear as `[secret: <digest>]` unless the local client asked for them,
+  and authored source is marked untrusted and rendered as plain text.
 - **Source.** `harnesses.source` (`name`, `hash`) returns the pinned source files of a package
   version, with a map from site ids to source spans, so the panel shows exactly the version that
   runs even after the files on disk change. It is read-only and available for every source,
@@ -328,14 +334,14 @@ All additive, in one protocol minor version:
 | --- | --- |
 | `harnesses.list` | Every registered package: `{ name (qualified), version, source, path, description, entries, public: [Signature], hash, diagnostics, trust_sites, offered, approved }`. Read-only |
 | `harnesses.check` | Parses and checks a package by name or path (inside the session's folders or a harness source); returns diagnostics with positions, the tools it may use, a summary (writes, commands, network, delegation), its transitive trust sites and, with `test: true`, the results of its `test` blocks against the scripted host. Read-only; never runs effects |
-| `harnesses.source` | The pinned source files and site map of a package version, for the live harness view. Read-only |
-| `harnesses.replay` | Re-runs a recorded turn from the journal's tape with no live effects, emitting its events (for the live view; `replay_speed`) |
+| `harnesses.source` | The pinned source files and site map of a package version (for authored packages, the whole closure, each file marked `untrusted: true`), for the live harness view. Read-only; redacted (chapter 07) |
+| `harnesses.replay` | Re-runs a recorded turn from the journal's tape with no live effects, emitting its events (for the live view; `replay_speed`); every replayed event is redacted like a live one |
 | `session.create` `harness`, `session.control` `set_harness` | Selecting and pinning (above) |
 | `SessionSummary.harness`, `AgentSummary.harness` | `{ name, version, hash }` of what each agent runs |
 | `harness_changed` | A selection, journalled with the pinned hashes |
 | `harness_call_started`, `harness_call_finished` | Frames opening and closing (`agent_id`, `frame`, `harness`, call site, `depth`, `tier` for authored; usage and outcome on finish) |
 | `harness_site` | The live position of each frame (streamed only, opt-in for statement sites) |
-| `harness_authored`, `harness_approved` | Authored versions and the user's approvals of them |
+| `harness_authored`, `harness_approved` | Authored versions (closure hash, every source in the closure with `untrusted: true`, diffs) and the user's approvals (closure hash and the authority approved) |
 | `ratio_log`, `ratio_trust`, `ratio_metric`, `ratio_span`, `ratio_event` | Logs, trust conversions (digest only), metrics, spans and custom events |
 | `ratio_state`, `ratio_cache`, `ratio_effect` | Persistence: package state with its type digest, session-scoped cache entries, the effect tape. Journalled; `ratio_effect` is not streamed to clients unless they ask for it |
 | Tools `write_harness`, `run_harness` | Model-facing tools for authored and offered harnesses (chapter 07), defined in `imperium-protocol` like the other built-in tools and exported to `schemas/tools/` |

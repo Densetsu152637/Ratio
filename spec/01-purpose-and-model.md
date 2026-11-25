@@ -96,7 +96,7 @@ run in process. That is acceptable because a harness has no ambient authority: e
 do is an engine call checked against its frame, it cannot `trust`, and the interpreter bounds its
 steps, heap, nesting and depth. The interpreter's own memory safety (safe Rust, no `unsafe` in the
 crate) is the remaining surface. Revisit R2 if harnesses from a public registry become a
-requirement, or if the stage 20 review finds the in-process surface too large: then a separate
+requirement, or if the stage 24 review finds the in-process surface too large: then a separate
 process, or a WebAssembly build of the interpreter, becomes worth its cost.
 
 ### Decision R3: determinism and replay

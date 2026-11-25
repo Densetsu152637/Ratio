@@ -1,8 +1,9 @@
 # 09 Examples
 
 Nine complete packages. Each is a whole `.ratio` file, re-checked by hand against chapters 02 to
-06 of this draft (argument order, turbofish type arguments, record and block disambiguation,
-semicolon insertion, contextual variants, taint and `Brief` sinks, `sees`, tool gating). They are
+06 of draft 0.3 (argument order, turbofish type arguments, record and block disambiguation and
+parenthesised heads, semicolon insertion, constants, contextual variants, taint and `Brief`
+sinks, `sees`, secrecy, tool gating). They are
 also the first entries of the conformance suite (chapter 10), where the checker and the scripted
 host will confirm them mechanically.
 
@@ -372,9 +373,9 @@ pub harness research(question: UserText, use_web: Bool = true) -> Answer
     }
   }
 
-  let from_memory = mem_hits |> list.take(4) |> list.map(|h| {
-    let e = memory.read(h.name, scope: h.scope)
-    { origin: "memory:{h.name}", title: e.description, text: e.body }
+  let from_memory = mem_hits |> list.take(4) |> list.filter_map(|h| match result(|| memory.read(h.name, scope: h.scope)) {
+    Ok { value } => { origin: "memory:{h.name}", title: value.description, text: value.body },
+    Err { error } => none,
   })
   let from_sessions = past_hits |> list.map(|h| { origin: "session:{h.session_id}", title: h.title, text: h.snippet })
   let pages = par_map_settled(web_hits |> list.take(5), |h| {
@@ -431,8 +432,12 @@ pub harness turn(turn: Turn) -> Reply
 ```
 
 `research` is a `none`-context frame with an empty `sees`: it reads nothing ambient, only what its
-tools return. If any memory it reads is marked private, the result is `Secret`, and the checker
-then refuses `tools.web_search` on queries derived from it.
+tools return. With secrecy enabled (it is off by default), a memory marked private is a secret
+source; since `sees.secrets` is not granted, that `memory.read` raises `Denied { by: secrecy }`
+at run time, `result` turns it into `Err`, and the entry is skipped. A harness that did hold the
+secret (with `sees: { secrets: true }`) would find any web search on text derived from it refused
+at run time by the host and at dispatch; the checker cannot see that label, because which memory
+is private is only known when it is read.
 
 ## 7. Consul escalation (roadmap item 64)
 
@@ -649,17 +654,31 @@ fn test_command() -> Str {
   raise fail("no-tests", "no recognised test setup at the project root")
 }
 
-/// Test files changed or added in the working tree since the last commit, by git.
+/// Test files changed, added, deleted or renamed in the working tree since the last commit, by git.
 fn test_files_touched() -> [Untrusted<Str>] {
-  let r = tools.run_command("git status --porcelain --untracked-files=all")
+  let r = tools.run_command("git status --porcelain=v1 --untracked-files=all")
   r.stdout.lines()
-    |> list.map(|l| l.slice(3).after_last(" -> "))
+    |> list.flat_map(|l| porcelain_paths(l.slice(3)))
     |> list.filter(|p| re.is_match(TEST_PATH, p))
+}
+
+/// The paths of one porcelain entry: both sides of a rename, else the one path; quotes removed.
+fn porcelain_paths(entry: Untrusted<Str>) -> [Untrusted<Str>] {
+  let parts = if let (from, to) = entry.split_once(" -> ") { [from, to] } else { [entry] }
+  parts.map(|p| unquote(p.trim()))
+}
+
+fn unquote(p: Untrusted<Str>) -> Untrusted<Str> {
+  let opened = p.strip_prefix("\"") ?? p
+  opened.strip_suffix("\"") ?? opened
 }
 ```
 
-`text.after_last(" -> ")` returns the whole path when there is no rename arrow, and the new name
-of a renamed file otherwise. The subagent runs `session.checkpoint`, a pseudo-tool its entry frame
+`text.split_once(" -> ")` separates a rename's two paths, and the entry is kept whole when there
+is no arrow; both sides of a rename are checked, so renaming a test file away from the test
+pattern is caught too, and deleted test files (status ` D`) are listed like changed ones. Git
+quotes paths with unusual characters; `unquote` removes the quotes (escapes inside such a path
+are left as they are, which only makes the pattern miss exotic names, never match wrongly). The subagent runs `session.checkpoint`, a pseudo-tool its entry frame
 has; a frame without `session_checkpoint` in its tools would get `Denied`.
 
 ## 9. Map-reduce over a large input

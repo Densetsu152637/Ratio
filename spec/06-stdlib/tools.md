@@ -14,6 +14,8 @@ A call the engine refuses raises `Denied { by }`; a tool that runs and reports f
 runs calls a **model** chose and, like the native loop, turns every outcome into a tool result for
 the model instead of raising.
 
+Secret-labelled arguments (chapter 03) are refused at the sinks listed there (`run_command`, network tools, `call_tool`, `mcp_call`, non-secret writes) with `Denied { by: secrecy }`, by the host and again at dispatch.
+
 A tool that is not offered in the session (web search turned off, no browser, no media backend, a
 remote runtime without `glob`) raises `NotFound` naming the tool.
 
