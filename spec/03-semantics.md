@@ -239,12 +239,40 @@ too; only the redaction digest below is exempt. Branching on a secret `Bool` is 
 implicit flow is outside the guarantee, as for taint. The labels combine: a secret file's contents
 are secret and untrusted.
 
-**Conversations are labelled.** Appending a labelled value to a conversation (by
-`context.append_*`, a tool result from `tools.dispatch`, or a model reply that read one) labels
-the **conversation** for the rest of its life; the label is journalled (`conversation_labelled`)
-and survives resume, branching and compaction (a compaction of a labelled conversation must be
-written by a local model, or it is refused). A model call or an outbound tool call made **on** a
-labelled conversation is a sink, decided by the rules below as if its whole content were secret.
+**Conversations are labelled.** Labels attach to **messages**: a message appended with a
+labelled value (by `context.append_*`, a tool result from `tools.dispatch`) is labelled, and so is
+every model reply produced on a conversation that already holds a labelled message (the model has
+read the secret). A conversation is **labelled** while it holds at least one labelled message.
+Labels are journalled (`conversation_labelled`, naming the first labelled message and its source)
+and survive resume and branching; a compaction summary of labelled messages is labelled, and must
+be written by a local model or the compaction is refused. A model call or an outbound tool call
+made **on** a labelled conversation is a sink, decided by the rules below as if its whole content
+were secret.
+
+Copies keep labels: `context.fork` of a labelled conversation is labelled; `context.fork_at(mark)`
+copies only the messages before the mark, so it is labelled only if one of those is;
+`context.excerpt`, `context.last`, `context.snapshot` and every `Transcript` carry the labels of
+the messages they copy; a `session.branch` at a turn after the first labelled message is labelled,
+one before it is not.
+
+**When a conversation becomes labelled.** The engine shows the user a notice (and the desktop a
+banner on the session): "This conversation now holds secret material from <source>; hosted models
+and outbound tools are refused on it." Every later refused call raises `Denied { by: secrecy }`
+in the program, and in the native loop or `tools.dispatch` becomes a refusal the model reads. The
+banner offers the recovery paths, which harness code can also take:
+
+1. **Continue on a local model**: switch the session's model (or the frame's `opts.model`) to a
+   model with location `local`; model calls on the labelled conversation are then allowed, and
+   outbound tools stay refused.
+2. **Declassify**: the user declassifies the conversation (`session.control`
+   `declassify_conversation`, offered only by the desktop app's native dialog and the `imperium`
+   command on the local socket; impossible in an unattended session); the labels are removed,
+   journalled with the user's decision.
+3. **Fork without the secret**: branch the session (or `context.fork_at` in a harness) at a point
+   before the first labelled message; the copy is unlabelled and continues with any model.
+
+A harness can detect the state with `context.labelled(conv)` and choose a path itself, for
+example by catching `Denied { by: secrecy }` and retrying on `model.route(location: local)`.
 
 **Sinks.** A labelled value, or a call on a labelled conversation, may not reach:
 
@@ -253,12 +281,36 @@ labelled conversation is a sink, decided by the rules below as if its whole cont
 | Network tools: `web_search`, `web_fetch`, the browser tools, MCP tools of remote servers, `media_*` with hosted backends | They send their arguments off the machine |
 | A model call whose model is hosted (location `cloud`), in any section | The provider receives it; local models are allowed |
 | `tools.run_command` and `tools.run_background` (the command line and its standard input) | A command can upload anything (`curl`, `git push`, `scp`) |
-| `tools.write_file` and `tools.edit_file`, unless the target path itself matches `ratio.secret_paths` | Closes write-then-upload: secret content may only be written into files that are themselves secret, and reading those back labels them again |
+| `tools.write_file` and `tools.edit_file`, unless the target path itself matches `ratio.secret_paths` | Keeps secret content in files that are themselves secret paths, where the command rule below can see them. It does not by itself stop an upload: a command can send a file without Ratio reading it (`curl -d @.env`), which is what the command rule is for |
 | `tools.call_tool` and `tools.mcp_call` | They can reach any tool by name, including outbound ones |
 | `agents.spawn`, `agents.steer`, `agents.queue` briefs and `agents.ask` questions | The receiving agent may have network tools and runs outside this frame's checks |
 | Memory writes, `session.emit`, `eval` metrics, scores and labels | They persist or publish |
 | A harness argument or result crossing into a frame whose `sees` lacks `secrets` (chapter 04); such a frame also cannot run an effect whose result would be labelled | Frames see secrets only when granted |
 | Logs, traces and every event that leaves the daemon | Replaced by `[secret: <digest>]` (below) |
+
+**Commands that name secret paths.** With secrecy enabled, a `run_command` or `run_background`
+call is also a sink when the command line **references** a path matching `ratio.secret_paths`,
+whatever the labels of its arguments: the command could read the secret itself and send it on. It
+**asks the user every time** (no rule, session allowance or permission mode lifts it, as for the
+safety floor) and is **refused in an unattended session**. Matching follows the safety floor's
+command parsing (`docs/05-tools-and-isolation.md#permission-modes-implemented`):
+
+- the line is split into commands at `;`, `&&`, `||`, `|`, `&` and newlines, and shells running a
+  command string (`sh -c`, `cmd /c`, `powershell -Command`), wrappers (`env`, `nice`, `xargs`,
+  `find -exec`, …) and command substitutions are unwrapped, as the floor does;
+- every word is unquoted (quotes, backslashes and `^` removed as the floor does) and checked as a
+  candidate path: a bare word; the value of `--opt=value` and of a short option glued to its value;
+  a word after `@` (`curl -d @file`, response files); and the target of every redirection (`<`,
+  `>`, `>>`, `2>`, `<>`, `&>`);
+- a candidate is resolved against the working folder and the environment's folders and matched
+  against `ratio.secret_paths` (case-insensitively on Windows); a glob word (`*.env`, `secrets/*`)
+  matches when it could match a secret path;
+- a word the parser cannot read (starting with `$` or a backtick, a brace expansion, an encoded
+  PowerShell command) counts as a match, so it asks.
+
+This is **best effort**, a stated residual like the floor's: a script or program that opens a
+secret path it was not given on the command line (from a config file, a hard-coded path, a
+variable set earlier in the shell, an alias) is not seen.
 
 **Conversion.** `declassify(x, because: Str)` removes the label. It is an effect, monomorphic
 only, journalled like `trust` with a digest, listed transitively, and it **always asks** the user
@@ -290,8 +342,16 @@ captures variables **by value at the moment it is created**, and cannot assign t
 built-ins or harnesses; there is no effect annotation. Recursion is allowed and bounded by the
 call-depth, step and frame-depth limits (chapter 07).
 
-**Options.** `x?.f` is `none` if `x` is `none`; `x ?? d` supplies a default; `if let v = x { … }`
-unwraps. Reading an absent optional record field gives `none`.
+**Options.** `x?.f` is `none` if `x` is `none`; `x ?? d` supplies a default. Reading an absent
+optional record field gives `none`.
+
+**`if let` and `while let`.** `if let p = e { … } else { … }` tests a pattern. When `e` has an
+option type `T?`, the pattern is matched against the unwrapped `T`, and the condition fails on
+`none`: `if let (from, to) = entry.split_once(" -> ") { … }` binds both parts when
+`split_once` returns a tuple and takes the `else` branch on `none`. When `e` is not an option, `p`
+is matched against `e` directly and may be refutable (`if let Denied { by } = e.kind { … }`). A
+pattern of option type itself (`if let none = x`) is matched against `e` without unwrapping.
+Bindings are in scope in the first block only.
 
 ## Control flow
 

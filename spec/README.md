@@ -1,8 +1,16 @@
 # The Ratio specification
 
-Version: draft 0.3 (2026-11-26). Status: design; nothing is implemented.
+Version: draft 0.4 (2026-11-26). Status: design; nothing is implemented.
 
-**Changes in draft 0.3.** Design review round 2 (N1 to N10 and nits): secrecy is a run-time
+**Changes in draft 0.4.** Design review round 3: `run_harness` forces every argument untrusted
+for every source and refuses harnesses with trusted text in their parameters (`std:self-consistency`
+now takes its question untrusted); with secrecy enabled, commands whose line references a secret
+path ask every time and are refused when unattended (best-effort, floor-style matching); labelled
+conversations get a user notice and three recovery paths, and labels follow forks, excerpts and
+snapshots; daemon-side redaction is staged explicitly (stage 18) and impossible to lift in
+unattended sessions; `if let` over options is defined.
+
+**Changes in draft 0.3** (kept for reference). Design review round 2 (N1 to N10 and nits): secrecy is a run-time
 label on values, enforced at the host and at dispatch, opt-in and off by default, with more sinks,
 labels on `Json` and on conversations; authored harnesses are pinned and approved by the hash of
 their whole import closure, force taint on arguments and results, take approvals scoped to the
@@ -69,7 +77,7 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | R9 | **Harness calls are function calls** with their own frame (model, tools, permissions, budget, `sees`, conversation); a callee sees nothing of its caller or the session unless passed, forked or granted | 04 |
 | R10 | **Attenuation only**: every frame's tools, permissions, model locations, `sees`, budgets and subagents are bounded by its caller's | 04, 07 |
 | R11 | **Prompts are typed values** built from sections; only a `TrustedPrompt` may be a system prompt; the section decides how text is framed | 05 |
-| R12 | **No `eval`** in a running program; models write harnesses only through the **authored-harness** path (stored, checked, pinned by closure hash, taint forced at the boundary, contained by default, caller authority only for a user-approved closure at the authority shown, never above the caller) | 07 |
+| R12 | **No `eval`** in a running program; every harness a model runs through `run_harness` gets untrusted arguments and must have untrusted parameters; models write harnesses only through the **authored-harness** path (stored, checked, pinned by closure hash, taint forced at the boundary, contained by default, caller authority only for a user-approved closure at the authority shown, never above the caller) | 07 |
 | R13 | **Every side effect is an engine call**, decided by Imperium's dispatch (rules, floor, modes, hooks, approvals, events); delegation and session control are tool-gated; Ratio holds no authority of its own | 07, 08 |
 | R14 | **`std:default` replaces the native loop** after the parity suite passes and one release cycle (the user's decision); until then the Rust loop is the default | 08 |
 | R15 | Built as **one crate**, `imperium-ratio`, independent of the engine behind a concurrent `Host` trait; the specification stays in this repository and Imperium pins a revision | 10 |
@@ -84,8 +92,8 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | [`tools`](06-stdlib/tools.md) | 50 | [`data`](06-stdlib/data.md) (15 submodules) | 213 |
 | [`agents`](06-stdlib/agents.md) | 20 | [`control`](06-stdlib/control.md) | 29 |
 | [`memory`](06-stdlib/memory.md) | 12 | [`eval`](06-stdlib/eval.md) | 14 |
-| [`context`](06-stdlib/context.md) | 34 | [`meta`](06-stdlib/meta.md) | 20 |
-| | | **Total** | **477** |
+| [`context`](06-stdlib/context.md) | 35 | [`meta`](06-stdlib/meta.md) | 20 |
+| | | **Total** | **478** |
 
 The counts are maintained by hand; chapter 10's conformance suite checks, from a `builtins.txt`
 generated from these tables, that every built-in has a test, that no implemented built-in is

@@ -50,7 +50,10 @@ or widen the harness that runs it.
 Enabling an approved plugin adds its harnesses to the offered set (`plugin:<plugin>/*`), so models
 can see and name them, but nothing uses them automatically: selecting one as a session,
 environment or agent harness is a separate act of the user. Authored packages of the session are
-always offered to the model that may run them, under the authored tiers of chapter 07.
+always offered to the model that may run them, under the authored tiers of chapter 07. Whatever
+the source, `run_harness` decodes every argument as deep-`Untrusted`, and a harness with trusted
+text types in its parameters is left out of the offered list and refused by name (chapter 07,
+harnesses reached by models).
 
 ## Selecting a harness (roadmap item 58)
 
@@ -344,7 +347,8 @@ All additive, in one protocol minor version:
 | `harness_authored`, `harness_approved` | Authored versions (closure hash, every source in the closure with `untrusted: true`, diffs) and the user's approvals (closure hash and the authority approved) |
 | `ratio_log`, `ratio_trust`, `ratio_metric`, `ratio_span`, `ratio_event` | Logs, trust conversions (digest only), metrics, spans and custom events |
 | `ratio_state`, `ratio_cache`, `ratio_effect` | Persistence: package state with its type digest, session-scoped cache entries, the effect tape. Journalled; `ratio_effect` is not streamed to clients unless they ask for it |
-| Tools `write_harness`, `run_harness` | Model-facing tools for authored and offered harnesses (chapter 07), defined in `imperium-protocol` like the other built-in tools and exported to `schemas/tools/` |
+| Tools `write_harness`, `run_harness` | Model-facing tools for authored and offered harnesses, specified in chapter 06 (`meta`, model-facing harness tools) and chapter 07, defined in `imperium-protocol` like the other built-in tools and exported to `schemas/tools/` |
+| `session.control` `declassify_conversation` | The user's recovery path for a labelled conversation (chapter 03); accepted only from the desktop app's native dialog and the local `imperium` command; refused in unattended sessions |
 
 No method installs, edits or deletes a user, plugin or project harness; those are files the user
 manages. The CLI gains `imperium harness list`, `imperium harness check <name|path>`,

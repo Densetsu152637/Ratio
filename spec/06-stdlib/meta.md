@@ -34,3 +34,14 @@
 | `meta.engine` | `() -> EngineInfo` | `{ imperium_version, protocol_version, ratio_version, os }` | — | `engine` |
 | `meta.ratio_version` | `() -> Str` | The language and standard library version (semver) | — | `pure` |
 | `meta.features` | `() -> [Str]` | Optional engine features available in this session: `web_search`, `browser`, `media`, `knowledge_agents`, `tool_loading`, `code_mode`, `harness_agents`, `structured_output`, `logprobs`, … | — | `engine` |
+
+## Model-facing harness tools
+
+These are Imperium tools a **model** calls (defined in `imperium-protocol` and exported to
+`schemas/tools/`), not Ratio built-ins, so they are not counted in the module's built-ins. They are
+specified here because they are the model's side of `meta.harness` and `meta.author`.
+
+| Tool | Parameters | Semantics | Refused when |
+| --- | --- | --- | --- |
+| `write_harness` | `name`, `source`, `description` | As `meta.author`: stores a new version of `authored:session/<name>`, checks it, pins it by closure hash, journals it (chapter 07). Runs without asking; a pseudo-tool for rules | The frame lacks the tool; size or count limits; a rule denies it |
+| `run_harness` | `name` (qualified or bare), `arguments` (a JSON object) | Runs a `pub`, non-entry harness of a package in `harness.offered` or the session's authored areas as a child frame of the calling agent. **Every argument is decoded through the parameter schema as deep-`Untrusted`, whatever the harness's source.** A harness whose parameter types contain `Str`, `UserText`, `Brief` or `TrustedPrompt` anywhere is **not offerable**: it is refused at check time (reported "not runnable by models") and at offer time (absent from the tool's list of harnesses; a call by name is refused). Authored harnesses run at the tiers of chapter 07. The result is returned as the tool result (JSON of the declared result type), which the model reads as data | Not offered; trusted parameter types; arguments do not match the schema; contained tier impossible on the route; approval declined |

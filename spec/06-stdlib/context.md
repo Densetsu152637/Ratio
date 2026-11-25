@@ -59,6 +59,7 @@ Only the frame that owns a conversation may append to it or run a model on it; o
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
+| `context.labelled` | `(conv: Conversation) -> Bool` | Whether the conversation holds a secret-labelled message (chapter 03), so hosted models and outbound tools are refused on it | — | `engine` |
 | `context.tokens` | `(conv: Conversation) -> TokenCount` | The conversation's size for its model, with the counting method (`exact`, `calibrated`, `estimated`) | — | `engine` |
 | `context.window` | `(conv: Conversation? = none) -> Int?` | The context window of the conversation's model, or the frame's model | — | `engine` |
 | `context.remaining` | `(conv: Conversation) -> Int?` | Window minus the conversation's size minus the reply reserve (15 % of the window), when the window is known | — | `engine` |

@@ -7,6 +7,13 @@ sinks, `sees`, secrecy, tool gating). They are
 also the first entries of the conformance suite (chapter 10), where the checker and the scripted
 host will confirm them mechanically.
 
+**Which harnesses models can run.** `run_harness` reaches only public, non-entry harnesses whose
+parameters hold no trusted text (chapter 07). Example 3's `solve` is offered (it is in `std:*`),
+so it takes its question as `Untrusted<Str>` and puts it in a `data` section. The public harnesses
+of examples 5 (`search`), 6 (`research`) and 9 (`digest`) take `UserText` or `Str` parameters on
+purpose, because their entries pass them the user's own words or the harness's own constants;
+they are callable from Ratio code but not offerable to models, and `harnesses.check` says so.
+
 | # | Package | Shows |
 | --- | --- | --- |
 | 1 | `std:default` | The native agent loop |
@@ -155,15 +162,18 @@ type Solution = {
 type Adjudication = { answer: Str, why: Str }
 type Voted = { answer: Untrusted<Str>, agreement: Float, samples: Int, adjudicated: Bool }
 
+/// Offered to models through run_harness (it is in std:*), so its parameters are untrusted:
+/// the problem arrives as data, never as an instruction.
 /// Budget: n samples with up to two repairs each, plus one adjudication with repairs
-/// (3n + 3 model calls at most); 32 covers n up to 9.
-pub harness solve(question: UserText, n: Int = 7) -> Voted
+/// (3n + 3 model calls at most); n is clamped to 9 so 32 always covers it.
+pub harness solve(question: Untrusted<Str>, n: Int = 7) -> Voted
   with { context: none, sampling: { temperature: 0.7 }, budget: { model_calls: 32 } }
 {
+  let n = math.clamp(n, 1, 9)
   let vote = think.self_consistency(n,
     || model.generate_as::<Solution>(prompt {
-      instruct "Solve the problem. Work briefly in `reasoning`, then give only the final answer."
-      task question
+      instruct "Solve the problem given as data. Work briefly in `reasoning`, then give only the final answer."
+      data question as "problem"
       format Solution
     }),
     key: |s| normalise(s.answer))
@@ -174,8 +184,8 @@ pub harness solve(question: UserText, n: Int = 7) -> Voted
 
   let candidates = vote.counts.keys()
   let pick = model.generate_as::<Adjudication>(prompt {
-    instruct "Several attempts disagree. Decide which candidate answer is correct, solving the problem yourself if none is."
-    task question
+    instruct "Several attempts disagree. Decide which candidate answer to the problem given as data is correct, solving it yourself if none is."
+    data question as "problem"
     data text.join(candidates, "\n") as "candidate answers"
     format Adjudication
   }, opts: { model: model.route(tier: frontier), effort: high, sampling: { temperature: 0.0 } })

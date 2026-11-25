@@ -12,14 +12,14 @@ module has its own page.
 | `tools` | [tools.md](tools.md) | One built-in per Imperium tool, plus dispatch of model-chosen calls | 50 |
 | `agents` | [agents.md](agents.md) | Subagents, knowledge agents, named agents | 20 |
 | `memory` | [memory.md](memory.md) | Memory entries by scope, and session search | 12 |
-| `context` | [context.md](context.md) | Conversations, transcripts, pins, compaction, notices, token budgets, safe points, large inputs | 34 |
+| `context` | [context.md](context.md) | Conversations, transcripts, pins, compaction, notices, token budgets, safe points, large inputs | 35 |
 | `session` | [session.md](session.md) | The user, approvals, notifications, plans, checkpoints, branches | 22 |
 | `state` | [session.md](session.md#state-package-state) | The package's declared state | 4 |
 | `data` | [data.md](data.md) | Text, regex, JSON, lists, maps, math, random, time, hashing, diff, templates, vectors, paths, URLs, codecs (15 submodules) | 213 |
 | `control` | [control.md](control.md) | Retry, timeouts, races, fan-out, rate limits, caches, assertions, errors, budgets, logging, tracing | 29 |
 | `eval` | [eval.md](eval.md) | Tests, metrics, fixtures, the record and replay seam | 14 |
 | `meta` | [meta.md](meta.md) | Introspection of tools, models, harnesses, frames and permissions; loading harnesses by name | 20 |
-| **Total** | | | **477** |
+| **Total** | | | **478** |
 
 ## How entries are written
 

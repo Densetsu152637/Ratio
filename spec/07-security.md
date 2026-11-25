@@ -70,6 +70,27 @@ and run under bounds the model cannot lift.
 | Models never write harnesses | Loses the method the user asked for: a model that notices it needs, say, a vote over critics can write that method once and reuse it |
 | **Authored harnesses** (chosen) | Authoring and running are separate acts; running is contained unless the user approves the exact version |
 
+## Harnesses reached by models
+
+Models reach harnesses through two tools: `spawn_agent`'s `harness` (a package's `@task` entry,
+whose input is a `Task` with an untrusted `Brief`) and `run_harness` (a public harness called like
+a function, defined in chapter 06, `meta`). The rules for `run_harness` hold for **every** source,
+`std`, user, plugin, project and authored alike:
+
+- It reaches only `pub` harnesses that are not entries, of packages in `harness.offered` or the
+  session's authored areas.
+- **Every argument is deep-`Untrusted`.** The model's JSON is decoded through the parameter's
+  schema and given untrusted text, whatever the harness declares.
+- **A harness with trusted text in its parameters is not offerable.** If any parameter's type
+  contains `Str`, `UserText`, `Brief` or `TrustedPrompt` anywhere (inside records, lists, options
+  and enums included), the harness is refused for `run_harness`: at check time
+  (`harnesses.check` reports it "not runnable by models", and `std` packages are built so that
+  their offered harnesses pass) and at offer time (the daemon leaves it out of the offered list
+  and refuses a call by name). A harness that needs trusted text from a model's argument must
+  take it untrusted and convert it inside with an audited `as_task` or `trust`.
+- Results go back to the model as a tool result, which it reads as data. For authored harnesses
+  the results are also forced untrusted for Ratio callers (below).
+
 ## Authored harnesses
 
 **Names.** Authored packages are qualified by area: `authored:session/<name>` lives with the
@@ -103,18 +124,15 @@ most 64 KiB per package, 32 versions per name and 16 names per session.
 - may contain no `trust`, `as_task` or `declassify` sites at all (a checker error);
 - may import only the standard library and authored packages of the same area;
 - may not declare `@turn` (it can never become a session's root harness), and may declare `@task`;
-- may expose to `run_harness` only harnesses whose **parameters are all untrusted types**
-  (`Untrusted<T>`, `Json`, scalars, or records of those): a harness with a `Str`, `UserText`,
-  `Brief` or `TrustedPrompt` parameter is refused for `run_harness` at check time, because a model
-  would be supplying trusted text.
+- follows the `run_harness` rules above for every harness it exposes (and has no `trust` or
+  `as_task` to convert with).
 
 Rejected: allowing trust sites with per-site approval. A person cannot judge from a site what text
 will flow through it, and a model under injection would write exactly the site it needs.
 
 **The authored boundary forces taint.** Whatever an authored harness declares:
 
-- every argument a model passes through `run_harness` is decoded through the parameter schema as
-  deep-`Untrusted`;
+- every argument a model passes through `run_harness` is deep-`Untrusted`, as for every harness;
 - every result of an authored harness reaches its caller as deep-`Untrusted<R>`, at both tiers
   and by every route: `run_harness`, `meta.harness`, `spawn_agent`'s report. `meta.harness::<H>`
   for an authored name is checked against `H` with its result type mapped to `Untrusted<R>`, so
@@ -306,11 +324,12 @@ person's approvals; trusted versus untrusted harness sources.
 | T4 | A malicious plugin or project package does harm with the session's authority (A3) | Plugins with harnesses withheld until approved and pinned by hash; projects only with `ratio.trusted_projects`; no shadowing of higher-trust names; selection pinned by hash; `harnesses.check` summaries | A package the user approved and selected can do what its tools allow without a model in the loop |
 | T5 | An agent rewrites a harness that runs it later (A4 steered by A1) | Harness folders and authored areas are safety-floor paths; selection pins by hash and needs the user to re-select after a change | A user approving such a write and re-selecting |
 | T6 | The model selects a dangerous harness for a subagent (A4) | `spawn_agent`'s `harness` accepts only packages in `harness.offered` and authored packages (which run contained unless approved); agent files from plugins and projects cannot name other sources | — |
+| T6b | A model passes injected text into a harness's trusted parameter through `run_harness` (A4 steered by A1) | Every `run_harness` argument is deep-`Untrusted` for every source; harnesses with trusted text in their parameters are not offerable, refused at check time and at offer time | — |
 | T7 | **Injection leads the model to author a malicious harness** (A1 via A4): one that reads secrets and smuggles them out, loops to burn money, edits files, or tries to persist | Contained tier: read tools only, the caller's model pinned with provider-side tools off, no network or writes, no secrets, no ambient reads, small fixed budget; no trust sites; arguments and results forced untrusted; caller tier only for a closure hash and authority the user approved with the whole closure, its diffs and its summary in view; wider authority asks again; persistence only through the native dialog; authored areas are protected paths; every version and run journalled and visible | The user approving a malicious version at caller tier; a contained harness wasting its small budget; contained reads returned to a caller that has network tools (the caller could read those files itself) |
 | T8 | Denial of wallet (A4, A3) | Step, call, token, cost and wall budgets per frame and session; `Budget` cannot be swallowed inside its scope; contained-tier budget cap | Spend up to the configured budgets |
 | T9 | Approval fatigue (A3, A4) | Harness approvals capped per turn; denials remembered; versions approved once per session at most per prompt | The person approving without reading |
 | T10 | Resource exhaustion of the daemon (A3, A4) | Heap, call-depth, nesting, string and collection limits; linear-time regex; steps; no threads; package size limits | A heavy but legal harness slows its own session |
-| T11 | Exfiltration of read data through network tool arguments (A1 via A4) | **Only where secrecy is configured**: values from configured secret sources, and conversations they were appended to, are refused at the sinks of chapter 03 (network tools, hosted models, commands, non-secret writes, `call_tool`, delegation, persistence) by the host and by the engine at dispatch; the checker adds load-time refusals only where the label is known statically. Elsewhere: frames without network tools for sensitive reads | Everything not labelled (by default nothing is); implicit flows; a local model that saw a secret and later writes about it in an unlabelled conversation of another frame; search queries of unlabelled text leave the machine without asking (Imperium's existing residual risk) |
+| T11 | Exfiltration of secret data (A1 via A4) | **Only where secrecy is configured**: labelled values, and calls on labelled conversations, are refused at the sinks of chapter 03 (network tools, hosted models, commands, non-secret writes, `call_tool`, delegation, persistence) by the host and by the engine at dispatch; commands whose line references a secret path ask every time and are refused when unattended; the checker adds load-time refusals only where the label is known statically. Elsewhere: frames without network tools for sensitive reads | Everything not labelled (by default nothing is); implicit flows; **a command that reads and uploads a secret file without naming it recognisably on its command line** (a script, a config-driven tool, an alias, a variable set earlier), which the best-effort command matching cannot see; a local model that saw a secret and later writes about it in an unlabelled conversation of another frame; search queries of unlabelled text leave the machine without asking (Imperium's existing residual risk) |
 | T12 | Cross-frame leakage of private context into a frame that talks to the web | Isolation by default; `sees` empty for fresh frames; `fork` is explicit | Programs that fork or grant `sees` carelessly |
 | T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | Wrong results, a scoring problem, not an authority problem |
 | T14 | Sensitive data persisted in tapes, caches and state, or sent to clients | Journal-protected; labelled values redacted from headless tape files and from every event leaving the daemon (below); caches keyed by type digest so untrusted values never return as trusted | Tapes and events contain unlabelled file contents and tool output by design |
@@ -323,7 +342,10 @@ Every event, method result and stream the daemon sends to a client replaces secr
 values with `[secret: <digest>]` (chapter 03), **unless** the client is a local process on the
 daemon's own socket that explicitly asked for unredacted values (`session.subscribe` with
 `secrets: true`, which only the desktop app and the `imperium` command may request, and which the
-user enables per session). This covers `harness_site` and the live view, `ratio_effect`,
+user enables per session). In an **unattended** session (schedules, auto-fix, project agents) no
+client may subscribe with `secrets: true` and the per-session enablement does not exist: its
+events are always redacted. The digest is an HMAC under a key generated per session, kept in the
+session's data folder, never sent to a client, and deleted with the session. This covers `harness_site` and the live view, `ratio_effect`,
 `ratio_state`, `ratio_log`, `harness_authored` (a model can put a secret into source it writes),
 `harnesses.source`, `harnesses.replay` and every replayed event. **Paired phones never receive
 unredacted values**, whatever they ask. Redaction is applied at the daemon's protocol boundary,
