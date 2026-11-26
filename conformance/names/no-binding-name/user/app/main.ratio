@@ -1,0 +1,6 @@
+// expect: resolve-error N0018 at 4:8
+// expect: resolve-error N0018 at 5:8
+
+import "my-lib.ratio"
+import "match.ratio"
+import "my-lib.ratio" as lib

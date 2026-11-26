@@ -1,0 +1,6 @@
+// expect: resolve-error N0002 at 4:8
+// expect: resolve-error N0002 at 5:8
+
+import "../outside.ratio" as a
+import "lib/../../main.ratio" as b
+import "lib/../other.ratio" as c

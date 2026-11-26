@@ -1,0 +1,15 @@
+[package]
+name = "ratio-names"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Ratio's modules and names (stage 3): sources, imports, source-qualified names and the registry trait"
+
+[dependencies]
+ratio-syntax.workspace = true
+
+[lints]
+workspace = true

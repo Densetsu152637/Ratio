@@ -1,0 +1,6 @@
+// expect: resolve-ok
+
+import "./lib/critics.ratio" as critics
+import "lib/util.ratio" { helper }
+
+pub fn run() -> Int { helper() + critics.strict() }

@@ -1,0 +1,4 @@
+// expect: resolve-error N0015 at 4:8
+
+import "lib.ratio" as a
+import "LIB.ratio" as b

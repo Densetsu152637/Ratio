@@ -1,0 +1,6 @@
+// expect: parse-ok
+
+import "util.ratio"
+import "../shared.ratio" { LIMIT }
+
+pub fn strict() -> Int { util.helper() + LIMIT }

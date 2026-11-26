@@ -1,0 +1,4 @@
+// expect: resolve-error N0013 at 4:17
+
+import user:debate as mine
+import debate { other }

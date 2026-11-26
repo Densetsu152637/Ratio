@@ -1,0 +1,4 @@
+// expect: resolve-error N0007 at 4:8
+
+import std:other
+import user:critics

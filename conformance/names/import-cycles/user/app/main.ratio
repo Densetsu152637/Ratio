@@ -1,0 +1,5 @@
+// expect: resolve-error N0009 at 3:8 in user/app/b.ratio
+// expect: resolve-error N0009 at 5:8
+
+import "a.ratio"
+import "main.ratio" as me

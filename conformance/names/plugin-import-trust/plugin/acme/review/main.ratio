@@ -1,0 +1,7 @@
+// expect: resolve-error N0007 at 5:8
+// expect: resolve-error N0007 at 6:8
+
+import plugin:acme/helpers
+import user:critics
+import plugin:other/tool
+import std:debate

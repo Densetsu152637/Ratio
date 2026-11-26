@@ -1,0 +1,3 @@
+// expect: parse-ok
+
+pub fn helper() -> Int { 1 }

@@ -1,0 +1,9 @@
+// expect: resolve-error N0007 at 7:8
+// expect: resolve-error N0007 at 8:8
+// expect: resolve-error N0007 at 9:8
+
+import authored:helper
+import std:debate
+import authored:env/kept
+import user:critics
+import plugin:acme/review
