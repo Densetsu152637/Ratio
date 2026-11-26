@@ -136,6 +136,19 @@ impl Charge {
             bytes: 0,
         }
     }
+
+    /// Charges `bytes` more to `heap`, held (and given back) with this charge: for buffers that
+    /// grow, such as a built-in's result being gathered.
+    pub(crate) fn grow(&mut self, heap: &Heap, bytes: u64) -> Result<(), HeapExhausted> {
+        let mut more = heap.alloc(bytes)?;
+        if self.ledger.is_none() {
+            self.ledger = more.ledger.take();
+        }
+        if self.ledger.is_some() {
+            self.bytes += std::mem::take(&mut more.bytes);
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Charge {

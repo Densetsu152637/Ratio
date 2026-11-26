@@ -67,6 +67,10 @@ prompt ask(q: Str) {
   task q
 }
 
+fn wrapped(n: Int) -> Result<Int> {
+  Ok { value: n }
+}
+
 harness helper(n: Int) -> Int {
   let add = |x: Int| x + n
   add(1)
@@ -75,14 +79,14 @@ harness helper(n: Int) -> Int {
 
 /// The IR hash of `PROGRAM` at `IR_VERSION` 1. It must be the same on every platform; it
 /// changes only when the canonical form does (which bumps `IR_VERSION`) or the program does.
-const SNAPSHOT: &str = "18a5ff2105451ad7aefe4ee9626286ff21d8726f9ec4f0ebbd77307bef52039a";
+const SNAPSHOT: &str = "73e43aeee4222531754631aa73ddb8e322179a53356ec14e04bcc639ca8409b8";
 
 #[test]
 fn the_hash_is_stable_across_platforms() {
     assert_eq!(IR_VERSION, 1);
     let p = lower(PROGRAM);
     assert_eq!(p.packages.len(), 1);
-    let text = canon::canonical_text(&p, 0);
+    let text = canon::canonical_text(&p, 0).expect("within the depth");
     assert!(
         text.starts_with("ratio-ir 1\nstdlib 1\npackage \"user:app\"\nmodule \"main.ratio\"\n")
     );
@@ -230,5 +234,22 @@ fn only_clean_programs_lower() {
     assert_eq!(
         ratio_ir::lower(&loaded, &checked).unwrap_err(),
         ratio_ir::LowerError::NotClean
+    );
+}
+
+#[test]
+fn enum_type_parameters_are_in_the_form_in_declared_order() {
+    let mut p = lower(PROGRAM);
+    let text = canon::canonical_text(&p, 0).unwrap();
+    assert!(text.contains("\"Result\" (params \"T\")"), "{text}");
+    // `E<A, B>` and `E<B, A>` are different enums: their forms, and so hashes, differ.
+    let result = p.enums.iter().position(|e| e.name == "Result").unwrap();
+    p.enums[result].params = vec!["A".to_owned(), "B".to_owned()];
+    let ab = canon::canonical_text(&p, 0).unwrap();
+    p.enums[result].params = vec!["B".to_owned(), "A".to_owned()];
+    let ba = canon::canonical_text(&p, 0).unwrap();
+    assert_ne!(
+        ratio_check::sha256(ab.as_bytes()),
+        ratio_check::sha256(ba.as_bytes())
     );
 }

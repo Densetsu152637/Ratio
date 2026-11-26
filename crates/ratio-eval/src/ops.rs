@@ -23,6 +23,12 @@ pub(crate) fn log_work(n: u64) -> u64 {
     u64::from(64 - n.leading_zeros())
 }
 
+/// The charge of a map lookup or update with key `k` in a map of `n` entries: the `log`
+/// class with each comparison walking the key, `1 + ⌈log2(n + 1) · |k| / 64⌉`, one step per 64 characters compared.
+pub(crate) fn key_charge(n: u64, k: &Value) -> u64 {
+    steps_for(log_work(n).saturating_mul(k.weight().max(1)))
+}
+
 /// The size of an input for the cost classes: characters of text, elements of lists, entries
 /// of maps, nodes of JSON, and 1 for anything else.
 pub(crate) fn size(v: &Value) -> u64 {

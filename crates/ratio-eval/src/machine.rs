@@ -898,6 +898,18 @@ impl Machine {
                 });
                 self.invoke(&f, args.into_iter().map(Some).collect(), &[], loc);
             }
+            Ok(TaskStep::Charge(steps)) => {
+                if let Err(e) = self.charge(steps, loc) {
+                    return self.fail(e);
+                }
+                self.ctl.push(K::Task {
+                    task,
+                    class,
+                    n,
+                    loc,
+                });
+                self.drive_task(Resume::Charged);
+            }
             Ok(TaskStep::Done(v)) => {
                 if class == Class::Linear
                     && let Err(e) = self.charge_output(n, output_size(&v), loc)
@@ -1282,11 +1294,16 @@ impl Machine {
             .and_then(|e| e.slots.get(*slot as usize))
             .map(|s| s.level);
         if declared != Some(self.level) {
-            return self.invalid(
+            let mut e = raise(
+                &self.p,
+                Kind::Invalid,
                 "a `var` declared outside a concurrent branch cannot be assigned inside it",
                 Labels::NONE,
                 loc,
             );
+            // A program defect: fatal, so a sibling `race` branch cannot hide it.
+            e.class = ErrClass::Fatal;
+            return self.fail(e);
         }
         let Some(root) = self.get(*slot) else {
             return self.invalid("a local slot out of range", Labels::NONE, loc);
@@ -1307,6 +1324,11 @@ impl Machine {
                 }
                 PStep::Index(_) => {
                     let k = idx.next().unwrap_or_default();
+                    if let Repr::Map(m) = &cur.repr
+                        && let Err(e) = self.charge(ops::key_charge(m.len(), &k), loc)
+                    {
+                        return self.fail(e);
+                    }
                     let got = self.index_value(&cur, &k, loc);
                     keys.push(k);
                     match got {
@@ -1348,6 +1370,11 @@ impl Machine {
                 PStep::Field(name) => self.with_field(&container, name, acc, loc),
                 PStep::Index(_) => {
                     let k = keys.next().unwrap_or_default();
+                    if let Repr::Map(m) = &container.repr
+                        && let Err(e) = self.charge(ops::key_charge(m.len(), &k), loc)
+                    {
+                        return self.fail(e);
+                    }
                     self.with_index(&container, &k, acc, loc)
                 }
             };
@@ -1440,9 +1467,7 @@ impl Machine {
                         loc,
                     )
                 }),
-            (Repr::Json(_), _) => Ok(crate::json::index(c, k)
-                .unwrap_or_else(Value::none)
-                .with_labels(labels)),
+            (Repr::Json(_), _) => Ok(crate::json::index(c, k).with_labels(labels)),
             _ => Err(raise(
                 &self.p,
                 Kind::Invalid,
@@ -1484,7 +1509,7 @@ impl Machine {
                         found
                     }
                     Repr::Map(m) => {
-                        self.charge(steps_for(ops::log_work(m.len())), loc)?;
+                        self.charge(ops::key_charge(m.len(), a), loc)?;
                         m.get_entry(a).is_some()
                     }
                     Repr::Range(r) => a.as_int().is_some_and(|x| ops::in_range(x, r)),
@@ -1701,10 +1726,14 @@ impl Machine {
             PKind::Index(_, _) => {
                 let mut it = vals.into_iter();
                 let (c, k) = (it.next().unwrap_or_default(), it.next().unwrap_or_default());
-                // Indexing `Json` looks through the node: `linear` in its size.
-                if matches!(c.repr, Repr::Json(_))
-                    && let Err(e) = self.charge(steps_for(ops::size(&c)), loc)
-                {
+                // Indexing `Json` looks through the node: `linear` in its size; a map's key
+                // comparisons walk the key.
+                let extra = match &c.repr {
+                    Repr::Json(_) => steps_for(ops::size(&c)),
+                    Repr::Map(m) => ops::key_charge(m.len(), &k),
+                    _ => 0,
+                };
+                if let Err(e) = self.charge(extra, loc) {
                     return self.fail(e);
                 }
                 self.index_value(&c, &k, loc)
@@ -2316,12 +2345,18 @@ impl Machine {
         };
         match part {
             PPrompt::Format(t) => {
-                if let Some(acc) = self.prompts.last_mut() {
-                    acc.push(Section {
-                        kind: ratio_ir::SectionKind::Data,
-                        format: Some(Arc::clone(t)),
-                        values: Box::default(),
-                    });
+                match Section::new(
+                    &self.heap,
+                    ratio_ir::SectionKind::Data,
+                    Some(Arc::clone(t)),
+                    Box::default(),
+                ) {
+                    Ok(section) => {
+                        if let Some(acc) = self.prompts.last_mut() {
+                            acc.push(section);
+                        }
+                    }
+                    Err(f) => return self.fault_at(f, Labels::NONE, Loc::default()),
                 }
                 self.ctl.push(K::PromptRun { list, idx: idx + 1 });
                 self.mode = Mode::Ret(Value::unit());
@@ -2353,30 +2388,40 @@ impl Machine {
             self.mode = Mode::Eval(*x);
             return;
         }
-        if let Some(acc) = self.prompts.last_mut() {
-            // `include` splices the included prompt's sections.
-            if *kind == ratio_ir::SectionKind::Include
-                && let Some(Repr::Prompt(inner)) = vals.first().map(|v| &v.repr)
-            {
-                let labels = vals.first().map_or(Labels::NONE, |v| v.labels);
-                for s in &inner.sections {
-                    acc.push(Section {
-                        kind: s.kind,
-                        format: s.format.clone(),
-                        values: s
-                            .values
-                            .iter()
-                            .map(|v| v.clone().with_labels(labels))
-                            .collect(),
-                    });
-                }
-            } else {
-                acc.push(Section {
-                    kind: *kind,
-                    format: None,
-                    values: vals.into_boxed_slice(),
-                });
+        let loc = p.node(xs.first().copied().unwrap_or(0)).loc;
+        let mut built: Vec<Section> = Vec::new();
+        // `include` splices the included prompt's sections: copying them is charged, steps in
+        // proportion to what it copies and heap for each section.
+        if *kind == ratio_ir::SectionKind::Include
+            && let Some(Repr::Prompt(inner)) = vals.first().map(|v| &v.repr)
+        {
+            let labels = vals.first().map_or(Labels::NONE, |v| v.labels);
+            let work = inner
+                .sections
+                .iter()
+                .fold(0u64, |w, s| w.saturating_add(1 + s.values.len() as u64));
+            if let Err(e) = self.charge(steps_for(work), loc) {
+                return self.fail(e);
             }
+            for s in &inner.sections {
+                let values = s
+                    .values
+                    .iter()
+                    .map(|v| v.clone().with_labels(labels))
+                    .collect();
+                match Section::new(&self.heap, s.kind, s.format.clone(), values) {
+                    Ok(section) => built.push(section),
+                    Err(f) => return self.fault_at(f, labels, loc),
+                }
+            }
+        } else {
+            match Section::new(&self.heap, *kind, None, vals.into_boxed_slice()) {
+                Ok(section) => built.push(section),
+                Err(f) => return self.fault_at(f, Labels::NONE, loc),
+            }
+        }
+        if let Some(acc) = self.prompts.last_mut() {
+            acc.extend(built);
         }
         self.mode = Mode::Ret(Value::unit());
     }

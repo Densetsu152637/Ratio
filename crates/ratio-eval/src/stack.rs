@@ -6,15 +6,23 @@ use std::sync::Mutex;
 
 const BIG_STACK_BYTES: usize = 64 * 1024 * 1024;
 
-/// Runs `work` on a thread with a large stack, or here if none can be started.
-pub(crate) fn run<T: Send>(work: impl FnOnce() -> T + Send) -> Option<T> {
+/// The nesting followed on the big stack (the IR's depth is bounded by the parser's limit,
+/// with a few levels per tree level).
+const MAX_DEPTH: usize = 4096;
+
+/// The nesting followed on the caller's stack, as for the other passes.
+const FALLBACK_DEPTH: usize = 12;
+
+/// Runs `work` on a thread with a large stack, passing the depth it may recurse to; or here,
+/// with [`FALLBACK_DEPTH`], if none can be started.
+pub(crate) fn run<T: Send>(work: impl FnOnce(usize) -> T + Send) -> Option<T> {
     let slot = Mutex::new(Some(work));
     let take = |slot: &Mutex<Option<_>>| slot.lock().ok().and_then(|mut guard| guard.take());
     let spawned = std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(BIG_STACK_BYTES)
             .name("ratio-prepare".to_owned())
-            .spawn_scoped(scope, || take(&slot).map(|work| work()))
+            .spawn_scoped(scope, || take(&slot).map(|work| work(MAX_DEPTH)))
             .map(|handle| {
                 handle
                     .join()
@@ -23,6 +31,6 @@ pub(crate) fn run<T: Send>(work: impl FnOnce() -> T + Send) -> Option<T> {
     });
     match spawned {
         Ok(done) => done,
-        Err(_) => take(&slot).map(|work| work()),
+        Err(_) => take(&slot).map(|work| work(FALLBACK_DEPTH)),
     }
 }

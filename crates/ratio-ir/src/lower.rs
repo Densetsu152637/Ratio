@@ -108,7 +108,7 @@ pub fn lower(loaded: &Loaded, checked: &Checked) -> Result<Program, LowerError> 
     }
     let done = crate::stack::run(|max_depth| {
         let mut program = lower_on(loaded, checked, max_depth)?;
-        crate::canon::finish(&mut program);
+        crate::canon::finish(&mut program, max_depth).ok_or(LowerError::TooDeep)?;
         Ok(program)
     });
     done.unwrap_or(Err(LowerError::TooDeep))
@@ -291,6 +291,11 @@ impl Lowerer<'_> {
         self.prog.enums.push(EnumDef {
             origin,
             name: def.name.clone(),
+            params: def
+                .params
+                .iter()
+                .map(|p| self.checked.types.param_def(*p).name.clone())
+                .collect(),
             variants: def
                 .variants
                 .iter()

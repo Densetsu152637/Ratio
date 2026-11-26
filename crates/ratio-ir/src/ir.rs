@@ -507,6 +507,8 @@ pub struct EnumDef {
     /// `prelude`, a standard module's name, or `<package> <path>` for a program's enum.
     pub origin: String,
     pub name: String,
+    /// The type parameters, in declared order (only the prelude's `Result<T>` has one today).
+    pub params: Vec<String>,
     pub variants: Vec<VariantDef>,
 }
 

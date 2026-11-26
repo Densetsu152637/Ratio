@@ -196,7 +196,46 @@ fn build(heap: &Heap, mut level: Vec<Arc<Node>>) -> Result<Option<Arc<Node>>, Fa
     Ok(level.pop())
 }
 
+impl Node {
+    /// Moves the node's children onto the drop work-list.
+    pub(crate) fn take_children(&mut self, stack: &mut Vec<crate::drop::Garbage>) {
+        match std::mem::replace(&mut self.kind, Kind::Leaf(Box::default())) {
+            Kind::Leaf(items) => {
+                stack.extend(
+                    items
+                        .into_vec()
+                        .into_iter()
+                        .map(crate::drop::Garbage::Value),
+                );
+            }
+            Kind::Branch(l, r) => {
+                stack.push(crate::drop::Garbage::Node(l));
+                stack.push(crate::drop::Garbage::Node(r));
+            }
+        }
+    }
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        let nested = match &self.kind {
+            Kind::Leaf(items) => items.iter().any(|v| v.meta().is_some()),
+            Kind::Branch(..) => true,
+        };
+        if nested {
+            let mut stack = Vec::new();
+            self.take_children(&mut stack);
+            crate::drop::dispose(stack);
+        }
+    }
+}
+
 impl List {
+    /// The tree, for the drop work-list.
+    pub(crate) fn into_root(self) -> Option<Arc<Node>> {
+        self.root
+    }
+
     #[must_use]
     pub fn empty() -> List {
         List { root: None }

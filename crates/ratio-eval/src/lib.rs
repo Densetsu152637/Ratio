@@ -27,6 +27,7 @@
 
 pub mod builtins;
 mod driver;
+mod drop;
 mod error;
 mod heap;
 mod json;

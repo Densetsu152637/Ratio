@@ -65,7 +65,17 @@ fn key_text(p: &Prepared, k: &Value) -> String {
 /// printing results): records as objects with every field (`none` as `null`), tuples and
 /// lists as arrays, maps as objects, variants as their `snake_case` names or `{"kind": …}`
 /// objects, durations and money as their literal text.
+/// Whether the text being written is already longer than any string may be: the writers
+/// stop there, so rendering a large or widely shared value never builds more than that (the
+/// caller then refuses the result as too long).
+pub(crate) fn full(out: &str) -> bool {
+    out.len() > crate::value::MAX_STR_BYTES
+}
+
 pub(crate) fn write(p: &Prepared, v: &Value, out: &mut String) {
+    if full(out) {
+        return;
+    }
     match &v.repr {
         Repr::Unit | Repr::None => out.push_str("null"),
         Repr::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -80,10 +90,13 @@ pub(crate) fn write(p: &Prepared, v: &Value, out: &mut String) {
             let _ = write!(out, "[{},{}]", r.start, r.end);
         }
         Repr::Tuple(a) => array(p, a.items.iter(), out),
-        Repr::List(l) => array(p, l.to_vec().iter(), out),
+        Repr::List(l) => list_array(p, l, out),
         Repr::Record(r) => {
             out.push('{');
             for (i, (n, x)) in r.layout.names.iter().zip(r.items.iter()).enumerate() {
+                if full(out) {
+                    return;
+                }
                 if i > 0 {
                     out.push(',');
                 }
@@ -95,16 +108,20 @@ pub(crate) fn write(p: &Prepared, v: &Value, out: &mut String) {
         }
         Repr::Map(m) => {
             out.push('{');
+            let mut cursor = m.cursor();
             let mut first = true;
-            m.for_each(&mut |k, x| {
+            while let Some((k, x)) = cursor.next() {
+                if full(out) {
+                    return;
+                }
                 if !first {
                     out.push(',');
                 }
                 first = false;
-                quote(&key_text(p, k), out);
+                quote(&key_text(p, &k), out);
                 out.push(':');
-                write(p, x, out);
-            });
+                write(p, &x, out);
+            }
             out.push('}');
         }
         Repr::Variant(e, i) => {
@@ -147,10 +164,30 @@ pub(crate) fn write(p: &Prepared, v: &Value, out: &mut String) {
 fn array<'a>(p: &Prepared, items: impl Iterator<Item = &'a Value>, out: &mut String) {
     out.push('[');
     for (i, x) in items.enumerate() {
+        if full(out) {
+            return;
+        }
         if i > 0 {
             out.push(',');
         }
         write(p, x, out);
+    }
+    out.push(']');
+}
+
+fn list_array(p: &Prepared, l: &List, out: &mut String) {
+    out.push('[');
+    let mut cursor = l.cursor();
+    let mut first = true;
+    while let Some(x) = cursor.next() {
+        if full(out) {
+            return;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        write(p, &x, out);
     }
     out.push(']');
 }
@@ -164,10 +201,13 @@ fn write_json(p: &Prepared, j: &Json, out: &mut String) {
         }
         Json::Float(f) => number(*f, out),
         Json::Str(s) => quote(s.as_str(), out),
-        Json::Array(l) => array(p, l.to_vec().iter(), out),
+        Json::Array(l) => list_array(p, l, out),
         Json::Object(entries) => {
             out.push('{');
             for (i, (k, x)) in entries.iter().enumerate() {
+                if full(out) {
+                    return;
+                }
                 if i > 0 {
                     out.push(',');
                 }
@@ -374,6 +414,10 @@ impl Parser<'_> {
             .s
             .get(self.i..self.i + 4)
             .ok_or_else(|| self.fail("a short \\u escape"))?;
+        // Exactly four hexadecimal digits (`from_str_radix` would also take a sign).
+        if !h.iter().all(u8::is_ascii_hexdigit) {
+            return Err(self.fail("a bad \\u escape"));
+        }
         let h = std::str::from_utf8(h).map_err(|_| self.fail("a bad \\u escape"))?;
         let v = u32::from_str_radix(h, 16).map_err(|_| self.fail("a bad \\u escape"))?;
         self.i += 4;
@@ -615,7 +659,20 @@ struct Decoder<'a> {
     p: &'a Prepared,
     heap: &'a Heap,
     violations: Vec<String>,
+    /// Where the walk is, as segments: rendered into a JSON pointer only for a violation, so
+    /// decoding costs nothing per element for its paths (a key may be megabytes long).
+    path: Vec<Seg>,
 }
+
+/// One step of a JSON pointer.
+enum Seg {
+    Index(usize),
+    /// An object key, as the JSON holds it.
+    Key(Value),
+}
+
+/// The longest a segment is shown in a violation.
+const SEGMENT_SHOWN: usize = 64;
 
 /// `json.decode::<T>(j)`: the value of type `T` the JSON holds, each part labelled as the node
 /// it came from; or every violation, with its JSON pointer.
@@ -629,8 +686,9 @@ pub(crate) fn decode(
         p,
         heap,
         violations: Vec::new(),
+        path: Vec::new(),
     };
-    let v = d.value(j, ty, &[], "", 0)?;
+    let v = d.value(j, ty, &[], 0)?;
     Ok(match v {
         Some(v) if d.violations.is_empty() => Ok(v),
         _ => Err(d.violations),
@@ -638,12 +696,55 @@ pub(crate) fn decode(
 }
 
 impl Decoder<'_> {
-    fn bad(&mut self, at: &str, what: &str) -> Option<Value> {
+    /// Records a violation at the current path (plus `extra`, a missing or unknown field).
+    fn bad_at(&mut self, extra: Option<&str>, what: &str) -> Option<Value> {
         if self.violations.len() < 100 {
-            self.violations
-                .push(format!("{}: {what}", if at.is_empty() { "/" } else { at }));
+            let mut at = String::new();
+            let shown = |s: &str, at: &mut String| {
+                at.push('/');
+                // Only the head of a long key is shown, and only it is escaped.
+                let head: String = s.chars().take(SEGMENT_SHOWN).collect();
+                at.push_str(&pointer_escape(&head));
+                if s.len() > head.len() {
+                    at.push('…');
+                }
+            };
+            for seg in &self.path {
+                match seg {
+                    Seg::Index(i) => {
+                        let _ = write!(at, "/{i}");
+                    }
+                    Seg::Key(k) => shown(k.as_text().unwrap_or(""), &mut at),
+                }
+            }
+            if let Some(e) = extra {
+                shown(e, &mut at);
+            }
+            if at.is_empty() {
+                at.push('/');
+            }
+            self.violations.push(format!("{at}: {what}"));
         }
         None
+    }
+
+    fn bad(&mut self, what: &str) -> Option<Value> {
+        self.bad_at(None, what)
+    }
+
+    /// Decodes `j` as the child at `seg`.
+    fn child(
+        &mut self,
+        seg: Seg,
+        j: &Value,
+        ty: u32,
+        env: Env<'_>,
+        depth: usize,
+    ) -> Result<Option<Value>, Fault> {
+        self.path.push(seg);
+        let out = self.value(j, ty, env, depth);
+        self.path.pop();
+        out
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per kind of type")]
@@ -652,14 +753,13 @@ impl Decoder<'_> {
         j: &Value,
         ty: u32,
         env: Env<'_>,
-        at: &str,
         depth: usize,
     ) -> Result<Option<Value>, Fault> {
         if depth > MAX_JSON_DEPTH {
-            return Ok(self.bad(at, "nested deeper than 128"));
+            return Ok(self.bad("nested deeper than 128"));
         }
         let Repr::Json(node) = &j.repr else {
-            return Ok(self.bad(at, "not JSON"));
+            return Ok(self.bad("not JSON"));
         };
         let labels = j.labels;
         let t = resolve(self.p, ty, env).cloned().unwrap_or(Type::Error);
@@ -667,10 +767,10 @@ impl Decoder<'_> {
         let out = match (&t, &node.node) {
             (Type::Json, _) => Some(j.clone()),
             (Type::Untrusted(inner) | Type::Secret(inner), _) => {
-                return self.value(j, *inner, env, at, depth);
+                return self.value(j, *inner, env, depth);
             }
             (Type::Option(_), Json::Null) => Some(Value::none().with_labels(labels)),
-            (Type::Option(inner), _) => return self.value(j, *inner, env, at, depth),
+            (Type::Option(inner), _) => return self.value(j, *inner, env, depth),
             (Type::Unit, Json::Null) => Some(Value::unit().with_labels(labels)),
             (Type::Bool, Json::Bool(b)) => Some(Value::bool(*b).with_labels(labels)),
             (Type::Int, Json::Int(i)) => Some(Value::int(*i).with_labels(labels)),
@@ -689,23 +789,22 @@ impl Decoder<'_> {
             }
             (Type::Duration, Json::Str(s)) => match parse_duration(s.as_str()) {
                 Some(d) => Some(Value::duration(d).with_labels(labels)),
-                None => self.bad(at, "not a duration"),
+                None => self.bad("not a duration"),
             },
             (Type::Money, Json::Str(s)) => match parse_money(s.as_str()) {
                 Some(m) => Some(Value::money(m).with_labels(labels)),
-                None => self.bad(at, "not an amount"),
+                None => self.bad("not an amount"),
             },
             (Type::List(elem), Json::Array(l)) => {
                 let mut items = Vec::new();
                 let mut ok = true;
-                for (i, x) in l.to_vec().iter().enumerate() {
-                    match self.value(
-                        &x.clone().with_labels(labels),
-                        *elem,
-                        env,
-                        &format!("{at}/{i}"),
-                        depth + 1,
-                    )? {
+                let mut cursor = l.cursor();
+                let mut i = 0;
+                while let Some(x) = cursor.next() {
+                    let got =
+                        self.child(Seg::Index(i), &x.with_labels(labels), *elem, env, depth + 1)?;
+                    i += 1;
+                    match got {
                         Some(v) => items.push(v),
                         None => ok = false,
                     }
@@ -722,11 +821,11 @@ impl Decoder<'_> {
                     let mut items = Vec::new();
                     let mut ok = true;
                     for (i, (x, t)) in xs.iter().zip(ts.iter()).enumerate() {
-                        match self.value(
+                        match self.child(
+                            Seg::Index(i),
                             &x.clone().with_labels(labels),
                             *t,
                             env,
-                            &format!("{at}/{i}"),
                             depth + 1,
                         )? {
                             Some(v) => items.push(v),
@@ -739,11 +838,11 @@ impl Decoder<'_> {
                         None
                     }
                 } else {
-                    self.bad(at, &format!("expected {} elements", ts.len()))
+                    self.bad(&format!("expected {} elements", ts.len()))
                 }
             }
             (Type::Record(fields), Json::Object(entries)) => {
-                self.record(entries, fields, env, at, depth, labels)?
+                self.record(entries, fields, env, depth, labels)?
             }
             (Type::Map(kt, vt), Json::Object(entries)) => {
                 let mut m = crate::pmap::Map::empty();
@@ -760,14 +859,19 @@ impl Decoder<'_> {
                         Some(Type::Enum(e, _)) => self.unit_variant(*e, ktext),
                         _ => Some(k.clone()),
                     };
-                    let path = format!("{at}/{}", pointer_escape(ktext));
                     let Some(key) = key else {
-                        self.bad(&path, "not a key of the map's key type");
+                        self.bad_at(Some(ktext), "not a key of the map's key type");
                         ok = false;
                         continue;
                     };
                     let key = key.with_labels(k.labels | labels);
-                    match self.value(&x.clone().with_labels(labels), *vt, env, &path, depth + 1)? {
+                    match self.child(
+                        Seg::Key(k.clone()),
+                        &x.clone().with_labels(labels),
+                        *vt,
+                        env,
+                        depth + 1,
+                    )? {
                         Some(v) => m = m.insert(heap, key, v)?,
                         None => ok = false,
                     }
@@ -783,11 +887,15 @@ impl Decoder<'_> {
             {
                 match self.unit_variant(*e, s.as_str()) {
                     Some(v) => Some(v.with_labels(labels)),
-                    None => self.bad(at, "not one of the enum's names"),
+                    None => self.bad("not one of the enum's names"),
                 }
             }
             (Type::Enum(e, args), Json::Object(entries)) => {
                 let kind = entries.iter().find(|(k, _)| k.as_text() == Some("kind"));
+                // The variant is chosen by the `kind` node: its labels (and its key's) reach
+                // the result.
+                let chosen = kind.map_or(Labels::NONE, |(k, v)| k.labels | v.quick());
+                let labels = labels | chosen;
                 let name = kind.and_then(|(_, v)| match &v.repr {
                     Repr::Json(n) => match &n.node {
                         Json::Str(s) => Some(s.as_str().to_owned()),
@@ -801,7 +909,7 @@ impl Decoder<'_> {
                     .and_then(|n| en.and_then(|en| en.variants.iter().position(|v| &*v.json == n)))
                     .and_then(|i| u32::try_from(i).ok());
                 match index {
-                    None => self.bad(at, "no variant of that `kind`"),
+                    None => self.bad("no variant of that `kind`"),
                     Some(i) => match payload_type(self.p, *e, i) {
                         None => Some(Value::new_variant(heap, *e, i, None)?.with_labels(labels)),
                         Some(pt) => {
@@ -813,14 +921,7 @@ impl Decoder<'_> {
                                 .collect();
                             match resolve(self.p, pt, &env2).cloned() {
                                 Some(Type::Record(fields)) => {
-                                    match self.record(
-                                        &rest,
-                                        &fields,
-                                        &env2,
-                                        at,
-                                        depth,
-                                        Labels::NONE,
-                                    )? {
+                                    match self.record(&rest, &fields, &env2, depth, Labels::NONE)? {
                                         Some(payload) => Some(
                                             Value::new_variant(heap, *e, i, Some(payload))?
                                                 .with_labels(labels),
@@ -828,13 +929,13 @@ impl Decoder<'_> {
                                         None => None,
                                     }
                                 }
-                                _ => self.bad(at, "a variant without a record payload"),
+                                _ => self.bad("a variant without a record payload"),
                             }
                         }
                     },
                 }
             }
-            _ => self.bad(at, "the wrong kind of value"),
+            _ => self.bad("the wrong kind of value"),
         };
         Ok(out)
     }
@@ -850,31 +951,27 @@ impl Decoder<'_> {
         entries: &[(Value, Value)],
         fields: &[ratio_ir::FieldType],
         env: Env<'_>,
-        at: &str,
         depth: usize,
         labels: Labels,
     ) -> Result<Option<Value>, Fault> {
         let mut items = Vec::with_capacity(fields.len());
         let mut ok = true;
         for f in fields {
-            let path = format!("{at}/{}", pointer_escape(&f.name));
             match entries
                 .iter()
                 .find(|(k, _)| k.as_text() == Some(f.name.as_str()))
             {
-                Some((_, x)) => {
-                    match self.value(&x.clone().with_labels(labels), f.ty, env, &path, depth + 1)? {
+                Some((key, x)) => {
+                    // The field was found by its key: the key's labels reach its value.
+                    let x = x.clone().with_labels(labels | key.labels);
+                    match self.child(Seg::Key(key.clone()), &x, f.ty, env, depth + 1)? {
                         Some(v) => items.push(v),
                         None => ok = false,
                     }
                 }
                 None if f.optional => items.push(Value::none()),
-                None if matches!(resolve(self.p, f.ty, env), Some(Type::Option(_))) => {
-                    self.bad(&path, "a required field is missing");
-                    ok = false;
-                }
                 None => {
-                    self.bad(&path, "a required field is missing");
+                    self.bad_at(Some(&f.name), "a required field is missing");
                     ok = false;
                 }
             }
@@ -882,10 +979,7 @@ impl Decoder<'_> {
         for (k, _) in entries {
             let name = k.as_text().unwrap_or("");
             if !fields.iter().any(|f| f.name == name) {
-                self.bad(
-                    &format!("{at}/{}", pointer_escape(name)),
-                    "a field the type does not have",
-                );
+                self.bad_at(Some(name), "a field the type does not have");
                 ok = false;
             }
         }
@@ -940,11 +1034,30 @@ fn parse_money(s: &str) -> Option<i64> {
     w.checked_mul(1_000_000)?.checked_add(f)
 }
 
+/// A lookup in a JSON node: the child found (with the container's own labels and, for an
+/// object, its key's), or `none` labelled with everything the miss depended on (every key the
+/// key was compared with).
+fn child(cur: &Value, key: Option<&str>, at: Option<u64>) -> Result<Value, Value> {
+    let miss = || Value::none().with_labels(cur.quick());
+    let Repr::Json(n) = &cur.repr else {
+        return Err(miss());
+    };
+    let found = match (&n.node, key, at) {
+        (Json::Object(entries), Some(k), _) => entries
+            .iter()
+            .find(|(k2, _)| k2.as_text() == Some(k))
+            .map(|(k2, v)| v.clone().with_labels(k2.labels)),
+        (Json::Array(l), _, Some(i)) => l.get(i).cloned(),
+        _ => None,
+    };
+    found.map(|v| v.with_labels(cur.labels)).ok_or_else(miss)
+}
+
 /// `json.get(j, pointer)`: the node at an RFC 6901 pointer, with the labels of every container
-/// on the way.
-pub(crate) fn get(j: &Value, pointer: &str) -> Result<Option<Value>, Fault> {
+/// and key on the way; `none` (labelled) when there is none.
+pub(crate) fn get(j: &Value, pointer: &str) -> Result<Value, Fault> {
     if pointer.is_empty() {
-        return Ok(Some(j.clone()));
+        return Ok(j.clone());
     }
     let Some(rest) = pointer.strip_prefix('/') else {
         return Err(Fault::Invalid("a JSON pointer starts with `/`".to_owned()));
@@ -952,43 +1065,25 @@ pub(crate) fn get(j: &Value, pointer: &str) -> Result<Option<Value>, Fault> {
     let mut cur = j.clone();
     for raw in rest.split('/') {
         let token = raw.replace("~1", "/").replace("~0", "~");
-        let labels = cur.labels;
-        let next = match &cur.repr {
-            Repr::Json(n) => match &n.node {
-                Json::Object(entries) => entries
-                    .iter()
-                    .find(|(k, _)| k.as_text() == Some(token.as_str()))
-                    .map(|(_, v)| v.clone()),
-                Json::Array(l) => token
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|_| token == "0" || !token.starts_with('0'))
-                    .and_then(|i| l.get(i).cloned()),
-                _ => None,
-            },
-            _ => None,
-        };
-        match next {
-            Some(v) => cur = v.with_labels(labels),
-            None => return Ok(None),
+        let at = token
+            .parse::<u64>()
+            .ok()
+            .filter(|_| token == "0" || !token.starts_with(['0', '+']));
+        match child(&cur, Some(token.as_str()), at) {
+            Ok(v) => cur = v,
+            Err(miss) => return Ok(miss),
         }
     }
-    Ok(Some(cur))
+    Ok(cur)
 }
 
-/// `j[i]` on `Json`: an object's field by text, an array's element by index (`none` when
-/// absent).
-pub(crate) fn index(j: &Value, i: &Value) -> Option<Value> {
-    let Repr::Json(n) = &j.repr else {
-        return None;
+/// `j[i]` on `Json`: an object's field by text, an array's element by index (a labelled `none`
+/// when absent).
+pub(crate) fn index(j: &Value, i: &Value) -> Value {
+    let (key, at) = match &i.repr {
+        Repr::Str(k) => (Some(k.as_str()), None),
+        Repr::Int(x) => (None, u64::try_from(*x).ok()),
+        _ => (None, None),
     };
-    let found = match (&n.node, &i.repr) {
-        (Json::Object(entries), Repr::Str(k)) => entries
-            .iter()
-            .find(|(k2, _)| k2.as_text() == Some(k.as_str()))
-            .map(|(_, v)| v.clone()),
-        (Json::Array(l), Repr::Int(x)) => u64::try_from(*x).ok().and_then(|x| l.get(x).cloned()),
-        _ => None,
-    };
-    found.map(|v| v.with_labels(j.labels))
+    child(j, key, at).unwrap_or_else(|miss| miss)
 }

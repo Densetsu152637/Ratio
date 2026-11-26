@@ -227,7 +227,7 @@ pub(crate) struct PVariant {
 
 #[derive(Debug)]
 pub(crate) struct PEnum {
-    /// The type parameters (the names the payload types use), in order of first use.
+    /// The type parameters, in declared order.
     pub params: Vec<String>,
     pub variants: Box<[PVariant]>,
     pub unit_only: bool,
@@ -337,7 +337,7 @@ pub struct Entry(pub(crate) u32);
 ///
 /// When the program lacks the prelude enums (a lowering bug) or is too deep for the stack.
 pub fn prepare(program: &ir::Program) -> Result<Arc<Prepared>, PrepareError> {
-    crate::stack::run(|| prepare_on(program))
+    crate::stack::run(|max_depth| prepare_on(program, max_depth))
         .unwrap_or(Err(PrepareError::TooDeep))
         .map(Arc::new)
 }
@@ -352,53 +352,12 @@ fn layout_from(types: &[ir::Type], ty: u32) -> Arc<Layout> {
     Arc::new(Layout { names })
 }
 
-/// The type parameters an enum's payloads use, in order of first use (a bounded walk).
-fn enum_params(types: &[ir::Type], e: &ir::EnumDef) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stack: Vec<u32> = e.variants.iter().filter_map(|v| v.payload).collect();
-    stack.reverse();
-    let mut budget = 10_000;
-    while let Some(t) = stack.pop() {
-        budget -= 1;
-        if budget == 0 {
-            break;
-        }
-        let Some(ty) = types.get(t as usize) else {
-            continue;
-        };
-        let mut kids: Vec<u32> = match ty {
-            ir::Type::Param(n) => {
-                if !out.contains(n) {
-                    out.push(n.clone());
-                }
-                Vec::new()
-            }
-            ir::Type::Task(x)
-            | ir::Type::Option(x)
-            | ir::Type::List(x)
-            | ir::Type::Untrusted(x)
-            | ir::Type::Secret(x) => vec![*x],
-            ir::Type::Map(k, v) => vec![*k, *v],
-            ir::Type::Tuple(xs) => xs.clone(),
-            ir::Type::Record(fs) => fs.iter().map(|f| f.ty).collect(),
-            ir::Type::Fn(ps, r) | ir::Type::Harness(ps, r) => {
-                ps.iter().copied().chain([*r]).collect()
-            }
-            // Another enum's own parameters are its business.
-            _ => Vec::new(),
-        };
-        kids.reverse();
-        stack.extend(kids);
-    }
-    out
-}
-
-fn prepare_on(program: &ir::Program) -> Result<Prepared, PrepareError> {
+fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, PrepareError> {
     let enums: Vec<PEnum> = program
         .enums
         .iter()
         .map(|e| PEnum {
-            params: enum_params(&program.types, e),
+            params: e.params.clone(),
             unit_only: e.unit_only(),
             variants: e
                 .variants
@@ -468,6 +427,9 @@ fn prepare_on(program: &ir::Program) -> Result<Prepared, PrepareError> {
             by_name: HashMap::new(),
         },
         item_index: HashMap::new(),
+        depth: 0,
+        max_depth,
+        too_deep: false,
     };
     // Number the items first, so references resolve whatever their order.
     for (mi, m) in program.modules.iter().enumerate() {
@@ -510,6 +472,9 @@ fn prepare_on(program: &ir::Program) -> Result<Prepared, PrepareError> {
             p.out.items.push(PItem { kind });
         }
     }
+    if p.too_deep {
+        return Err(PrepareError::TooDeep);
+    }
     Ok(p.out)
 }
 
@@ -517,6 +482,9 @@ struct Preparer<'a> {
     program: &'a ir::Program,
     out: Prepared,
     item_index: HashMap<ir::ItemId, u32>,
+    depth: usize,
+    max_depth: usize,
+    too_deep: bool,
 }
 
 fn lit_value(l: &ir::Lit) -> Value {
@@ -576,7 +544,26 @@ impl Preparer<'_> {
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per kind of node")]
+    /// Enters one level of the tree; `false` (and the preparation refused) beyond the bound.
+    fn enter(&mut self) -> bool {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            self.too_deep = true;
+        }
+        !self.too_deep
+    }
+
     fn expr(&mut self, e: &ir::Expr) -> NodeId {
+        let id = if self.enter() {
+            self.expr_inner(e)
+        } else {
+            self.push(PKind::Unsupported("nested too deeply"), e)
+        };
+        self.depth -= 1;
+        id
+    }
+
+    fn expr_inner(&mut self, e: &ir::Expr) -> NodeId {
         use ir::ExprKind as E;
         let kind = match &e.kind {
             E::Lit(l) => PKind::Const(lit_value(l)),
@@ -842,6 +829,17 @@ impl Preparer<'_> {
     }
 
     fn prompt(&mut self, parts: &[ir::PromptPart]) -> u32 {
+        if !self.enter() {
+            self.depth -= 1;
+            self.out.prompts.push(Box::default());
+            return u32::try_from(self.out.prompts.len() - 1).unwrap_or(u32::MAX);
+        }
+        let id = self.prompt_inner(parts);
+        self.depth -= 1;
+        id
+    }
+
+    fn prompt_inner(&mut self, parts: &[ir::PromptPart]) -> u32 {
         let list: Box<[PPrompt]> = parts
             .iter()
             .map(|p| match p {
@@ -869,6 +867,17 @@ impl Preparer<'_> {
     }
 
     fn pat(&mut self, p: &ir::Pattern) -> PatId {
+        let id = if self.enter() {
+            self.pat_inner(p)
+        } else {
+            self.out.pats.push(PPat::Wild);
+            u32::try_from(self.out.pats.len() - 1).unwrap_or(u32::MAX)
+        };
+        self.depth -= 1;
+        id
+    }
+
+    fn pat_inner(&mut self, p: &ir::Pattern) -> PatId {
         let pat = match p {
             ir::Pattern::Wild => PPat::Wild,
             ir::Pattern::Bind { slot, sub } => PPat::Bind(*slot, sub.as_ref().map(|q| self.pat(q))),

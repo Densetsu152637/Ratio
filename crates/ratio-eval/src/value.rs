@@ -255,6 +255,26 @@ pub(crate) struct Section {
     /// For `format`: the type as written.
     pub format: Option<Arc<str>>,
     pub values: Box<[Value]>,
+    /// Each section is charged to the heap as it is built, before the prompt that holds it.
+    _charge: Charge,
+}
+
+impl Section {
+    /// A section, charged to `heap`.
+    pub(crate) fn new(
+        heap: &Heap,
+        kind: ratio_ir::SectionKind,
+        format: Option<Arc<str>>,
+        values: Box<[Value]>,
+    ) -> Result<Section, Fault> {
+        let charge = heap.alloc(cost::SLOT.saturating_mul(1 + values.len() as u64))?;
+        Ok(Section {
+            kind,
+            format,
+            values,
+            _charge: charge,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -414,7 +434,13 @@ impl Value {
         layout: Arc<Layout>,
         items: Vec<Value>,
     ) -> Result<Value, Fault> {
-        let meta = Meta::of(&items).check()?;
+        let mut meta = Meta::of(&items).check()?;
+        // A rendering writes the field names: they count towards the weight charges use.
+        let names = layout
+            .names
+            .iter()
+            .fold(0u64, |n, x| n.saturating_add(x.len() as u64));
+        meta.weight = meta.weight.saturating_add(names);
         let charge = heap.alloc(cost::AGG + cost::SLOT * items.len() as u64)?;
         Ok(plain(Repr::Record(Arc::new(RecordData {
             layout,
@@ -512,8 +538,8 @@ impl Value {
 
     pub(crate) fn new_prompt(heap: &Heap, sections: Vec<Section>) -> Result<Value, Fault> {
         let meta = Meta::of(sections.iter().flat_map(|s| s.values.iter())).check()?;
-        let slots: u64 = sections.iter().map(|s| 1 + s.values.len() as u64).sum();
-        let charge = heap.alloc(cost::AGG + cost::SLOT * slots)?;
+        // Each section carries its own charge.
+        let charge = heap.alloc(cost::AGG)?;
         Ok(plain(Repr::Prompt(Arc::new(PromptData {
             sections: sections.into_boxed_slice(),
             meta,
@@ -759,16 +785,13 @@ impl Value {
             Repr::Prompt(p) => {
                 let mut sections = Vec::with_capacity(p.sections.len());
                 for s in &p.sections {
-                    sections.push(Section {
-                        kind: s.kind,
-                        format: s.format.clone(),
-                        values: s
-                            .values
-                            .iter()
-                            .map(|v| f(v, heap))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_boxed_slice(),
-                    });
+                    let values = s
+                        .values
+                        .iter()
+                        .map(|v| f(v, heap))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_boxed_slice();
+                    sections.push(Section::new(heap, s.kind, s.format.clone(), values)?);
                 }
                 Value::new_prompt(heap, sections)?
             }
@@ -902,5 +925,65 @@ impl Value {
             Repr::Prompt(_) => "Prompt",
             Repr::Tool(_) => "ToolName",
         }
+    }
+}
+
+// Dropping a payload frees its children through the work-list of [`crate::drop`], so freeing
+// a value never recurses, whatever its shape.
+
+impl Drop for Agg {
+    fn drop(&mut self) {
+        crate::drop::drop_values(&mut self.items);
+    }
+}
+
+impl Drop for RecordData {
+    fn drop(&mut self) {
+        crate::drop::drop_values(&mut self.items);
+    }
+}
+
+impl Drop for VariantData {
+    fn drop(&mut self) {
+        if self.payload.meta().is_some() {
+            crate::drop::dispose(vec![crate::drop::Garbage::Value(std::mem::take(
+                &mut self.payload,
+            ))]);
+        }
+    }
+}
+
+impl Drop for ClosureData {
+    fn drop(&mut self) {
+        if self.captured.iter().any(|(_, v)| v.meta().is_some()) {
+            let captured = std::mem::take(&mut self.captured);
+            crate::drop::dispose(
+                captured
+                    .into_vec()
+                    .into_iter()
+                    .map(|(_, v)| crate::drop::Garbage::Value(v))
+                    .collect(),
+            );
+        }
+    }
+}
+
+impl Drop for JsonData {
+    fn drop(&mut self) {
+        if matches!(self.node, Json::Array(_) | Json::Object(_)) {
+            let mut stack = Vec::new();
+            crate::drop::take_json(&mut self.node, &mut stack);
+            crate::drop::dispose(stack);
+        }
+    }
+}
+
+impl Drop for PromptData {
+    fn drop(&mut self) {
+        let mut stack = Vec::new();
+        for s in &mut self.sections {
+            crate::drop::take_values(&mut s.values, &mut stack);
+        }
+        crate::drop::dispose(stack);
     }
 }

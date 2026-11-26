@@ -48,25 +48,32 @@ pub fn quote(s: &str) -> String {
     out
 }
 
-/// Numbers every package's expressions and computes the packages' hashes.
-pub(crate) fn finish(program: &mut Program) {
+/// Numbers every package's expressions and computes the packages' hashes, following the tree
+/// at most `max_depth` deep (`None` when it is deeper).
+pub(crate) fn finish(program: &mut Program, max_depth: usize) -> Option<()> {
     for p in 0..program.packages.len() {
-        let text = write_package(program, p);
+        let text = write_package(program, p, max_depth)?;
         program.packages[p].hash = ratio_check::sha256(text.as_bytes());
     }
+    Some(())
 }
 
-/// The canonical form of package `package` (an index into [`Program::packages`]).
+/// The canonical form of package `package` (an index into [`Program::packages`]); `None`
+/// when the program is nested deeper than the writer follows on the stack it has (only when no
+/// large stack can be started).
 ///
 /// # Panics
 ///
 /// If `package` is out of range.
 #[must_use]
-pub fn canonical_text(program: &Program, package: usize) -> String {
-    let mut copy = program.clone();
-    // The writer recurses over the tree, whose depth the parser bounds; it runs on a large
-    // stack as lowering does.
-    crate::stack::run(|_| write_package(&mut copy, package)).unwrap_or_default()
+pub fn canonical_text(program: &Program, package: usize) -> Option<String> {
+    // The writer (and the copy it numbers) recurses over the tree, whose depth the parser
+    // bounds; it runs on a large stack as lowering does, with an explicit bound.
+    crate::stack::run(|max_depth| {
+        let mut copy = program.clone();
+        write_package(&mut copy, package, max_depth)
+    })
+    .flatten()
 }
 
 /// The names the writer needs from modules other than the one being written.
@@ -74,7 +81,7 @@ struct Names {
     modules: Vec<(String, String, Vec<Option<String>>)>,
 }
 
-fn write_package(program: &mut Program, package: usize) -> String {
+fn write_package(program: &mut Program, package: usize, max_depth: usize) -> Option<String> {
     let names = Names {
         modules: program
             .modules
@@ -109,6 +116,9 @@ fn write_package(program: &mut Program, package: usize) -> String {
         type_queue: Vec::new(),
         enum_local: HashMap::new(),
         enum_queue: Vec::new(),
+        depth: 0,
+        max_depth,
+        too_deep: false,
     };
     let _ = writeln!(w.out, "ratio-ir {IR_VERSION}");
     let _ = writeln!(w.out, "stdlib {STDLIB_VERSION}");
@@ -159,10 +169,10 @@ fn write_package(program: &mut Program, package: usize) -> String {
         }
     }
     w.defs();
-    let out = w.out;
+    let (out, too_deep) = (w.out, w.too_deep);
     program.enums = enums;
     program.types = types;
-    out
+    (!too_deep).then_some(out)
 }
 
 struct Writer<'a> {
@@ -175,9 +185,42 @@ struct Writer<'a> {
     type_queue: Vec<u32>,
     enum_local: HashMap<u32, u32>,
     enum_queue: Vec<u32>,
+    depth: usize,
+    max_depth: usize,
+    too_deep: bool,
 }
 
 impl Writer<'_> {
+    /// Enters one level of the tree; `false` (and the form refused) beyond the bound.
+    fn enter(&mut self) -> bool {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            self.too_deep = true;
+        }
+        !self.too_deep
+    }
+
+    fn expr(&mut self, e: &mut Expr) {
+        if self.enter() {
+            self.expr_inner(e);
+        }
+        self.depth -= 1;
+    }
+
+    fn pattern(&mut self, p: &Pattern) {
+        if self.enter() {
+            self.pattern_inner(p);
+        }
+        self.depth -= 1;
+    }
+
+    fn prompt(&mut self, parts: &mut [PromptPart]) {
+        if self.enter() {
+            self.prompt_inner(parts);
+        }
+        self.depth -= 1;
+    }
+
     fn ty(&mut self, global: u32) {
         let next = u32::try_from(self.type_local.len()).unwrap_or(u32::MAX);
         let local = *self.type_local.entry(global).or_insert_with(|| {
@@ -216,6 +259,12 @@ impl Writer<'_> {
                     quote(&def.origin),
                     quote(&def.name)
                 );
+                self.out.push_str(" (params");
+                for p in &def.params {
+                    self.out.push(' ');
+                    self.out.push_str(&quote(p));
+                }
+                self.out.push(')');
                 for v in &def.variants {
                     self.out.push_str(" (variant ");
                     self.out.push_str(&quote(&v.name));
@@ -418,7 +467,7 @@ impl Writer<'_> {
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per kind of expression")]
-    fn expr(&mut self, e: &mut Expr) {
+    fn expr_inner(&mut self, e: &mut Expr) {
         e.id = self.next;
         self.next += 1;
         match &mut e.kind {
@@ -793,7 +842,7 @@ impl Writer<'_> {
         }
     }
 
-    fn prompt(&mut self, parts: &mut [PromptPart]) {
+    fn prompt_inner(&mut self, parts: &mut [PromptPart]) {
         for p in parts {
             match p {
                 PromptPart::Section(kind, xs) => {
@@ -890,7 +939,7 @@ impl Writer<'_> {
         }
     }
 
-    fn pattern(&mut self, p: &Pattern) {
+    fn pattern_inner(&mut self, p: &Pattern) {
         match p {
             Pattern::Wild => self.out.push('_'),
             Pattern::Bind { slot, sub } => {

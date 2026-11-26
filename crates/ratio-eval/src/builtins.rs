@@ -17,6 +17,7 @@
 use std::fmt::Debug;
 
 use crate::error::{Kind, RtError, raise, raise_with};
+use crate::heap::{Charge, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
 use crate::ops::{cmp_natural, eq, size};
@@ -77,7 +78,8 @@ impl Sizes {
 pub(crate) fn pre_work(class: Class, s: Sizes) -> u64 {
     match class {
         Class::Const => 1,
-        Class::Log => crate::ops::log_work(s.n),
+        // A map's key comparisons walk the key: `n2` is its weight (0 when there is none).
+        Class::Log => crate::ops::log_work(s.n).saturating_mul(s.n2.max(1)),
         Class::NLogN => s.n.saturating_mul(crate::ops::log_work(s.n)),
         Class::Product => s.n.saturating_mul(s.n2).saturating_add(s.c),
         Class::Output => s.m,
@@ -92,6 +94,8 @@ pub(crate) enum Resume {
     Value(Value),
     /// The callback raised (only for tasks that catch).
     Raised(RtError),
+    /// The steps a [`TaskStep::Charge`] asked for were debited.
+    Charged,
 }
 
 /// What a callback-taking built-in asks for next.
@@ -100,6 +104,9 @@ pub(crate) enum TaskStep {
     /// Call a function value with these arguments and resume with its result.
     Call(Value, Vec<Value>),
     Done(Value),
+    /// Debit these steps (a charge known only once the callbacks have run), then resume with
+    /// [`Resume::Charged`].
+    Charge(u64),
 }
 
 /// A built-in that calls back into the program: a small state machine the evaluator drives,
@@ -164,6 +171,14 @@ fn s_weight_first(a: &Args) -> Sizes {
 }
 fn s_weight_two(a: &Args) -> Sizes {
     Sizes::n(weight(a, 0).saturating_add(weight(a, 1)))
+}
+/// A map lookup or update: the entries, and the weight of the key every comparison walks.
+fn s_map_key(a: &Args) -> Sizes {
+    Sizes {
+        n: sz(a, 0),
+        n2: weight(a, 1),
+        ..Sizes::default()
+    }
 }
 fn s_join(a: &Args) -> Sizes {
     Sizes::n(weight(a, 0).saturating_add(sz(a, 1)))
@@ -233,8 +248,8 @@ table! {
     "text.show", Linear, s_weight_first, Imp::Pure(text_show);
     "text.repeat", Output, s_repeat, Imp::Pure(text_repeat);
     "text.similarity", Product, s_product, Imp::Pure(text_similarity);
-    "map.get", Log, s_first, Imp::Pure(map_get);
-    "map.set", Log, s_first, Imp::Pure(map_set);
+    "map.get", Log, s_map_key, Imp::Pure(map_get);
+    "map.set", Log, s_map_key, Imp::Pure(map_set);
     "map.keys", Linear, s_first, Imp::Pure(map_keys);
     "json.parse", Linear, s_first, Imp::Pure(json_parse);
     "json.decode", Linear, s_weight_first, Imp::Pure(json_decode);
@@ -353,7 +368,7 @@ fn fail(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let data = opt(args, 2).cloned();
     Ok(crate::error::error_value(
         cx.p,
-        Kind::User(text(cx, tag)?),
+        Kind::User(text(cx, tag)?, tag.labels),
         message,
         data,
         cx.loc,
@@ -396,6 +411,13 @@ impl Task for ResultTask {
             Resume::Start => Ok(TaskStep::Call(self.f.clone(), Vec::new())),
             Resume::Value(v) => Ok(TaskStep::Done(result_value(cx, true, v)?)),
             Resume::Raised(e) => Ok(TaskStep::Done(result_value(cx, false, e.value)?)),
+            Resume::Charged => Err(raise(
+                cx.p,
+                Kind::Invalid,
+                "a task resumed out of order",
+                Labels::NONE,
+                cx.loc,
+            )),
         }
     }
 
@@ -533,22 +555,51 @@ impl Walk {
     }
 }
 
+/// A result being gathered by a built-in, charged to the heap as it grows (one slot per
+/// element) and given back when dropped.
+#[derive(Debug)]
+struct Buf {
+    items: Vec<Value>,
+    charge: Charge,
+}
+
+impl Buf {
+    fn new() -> Buf {
+        Buf {
+            items: Vec::new(),
+            charge: Charge::none(),
+        }
+    }
+
+    fn push(&mut self, cx: &Cx<'_>, v: Value) -> Result<(), RtError> {
+        self.charge
+            .grow(cx.heap, cost::SLOT)
+            .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
+        self.items.push(v);
+        Ok(())
+    }
+
+    fn take(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.items)
+    }
+}
+
 #[derive(Debug)]
 struct MapTask {
     walk: Walk,
-    out: Vec<Value>,
+    out: Buf,
 }
 
 impl Task for MapTask {
     fn resume(&mut self, cx: &mut Cx<'_>, input: Resume) -> Result<TaskStep, RtError> {
         if let Resume::Value(v) = input {
-            self.out.push(v);
+            self.out.push(cx, v)?;
         }
         match self.walk.next() {
             Some(x) => Ok(TaskStep::Call(self.walk.f.clone(), vec![x])),
             None => Ok(TaskStep::Done(new_list(
                 cx,
-                std::mem::take(&mut self.out),
+                self.out.take(),
                 self.walk.own,
             )?)),
         }
@@ -558,7 +609,7 @@ impl Task for MapTask {
 fn list_map(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     Ok(Box::new(MapTask {
         walk: Walk::new(cx, args)?,
-        out: Vec::new(),
+        out: Buf::new(),
     }))
 }
 
@@ -567,7 +618,7 @@ fn list_map(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
 #[derive(Debug)]
 struct FilterTask {
     walk: Walk,
-    out: Vec<Value>,
+    out: Buf,
     current: Option<Value>,
     decided: Labels,
     keep_result: bool,
@@ -580,12 +631,12 @@ impl Task for FilterTask {
             let item = self.current.take();
             if self.keep_result {
                 if !v.is_none() {
-                    self.out.push(v);
+                    self.out.push(cx, v)?;
                 }
             } else if v.as_bool() == Some(true)
                 && let Some(item) = item
             {
-                self.out.push(item);
+                self.out.push(cx, item)?;
             }
         }
         match self.walk.next() {
@@ -595,7 +646,7 @@ impl Task for FilterTask {
             }
             None => Ok(TaskStep::Done(new_list(
                 cx,
-                std::mem::take(&mut self.out),
+                self.out.take(),
                 self.walk.own | self.decided,
             )?)),
         }
@@ -605,7 +656,7 @@ impl Task for FilterTask {
 fn list_filter(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     Ok(Box::new(FilterTask {
         walk: Walk::new(cx, args)?,
-        out: Vec::new(),
+        out: Buf::new(),
         current: None,
         decided: Labels::NONE,
         keep_result: false,
@@ -615,7 +666,7 @@ fn list_filter(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
 fn list_filter_map(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     Ok(Box::new(FilterTask {
         walk: Walk::new(cx, args)?,
-        out: Vec::new(),
+        out: Buf::new(),
         current: None,
         decided: Labels::NONE,
         keep_result: true,
@@ -660,29 +711,47 @@ fn list_fold(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
 #[derive(Debug)]
 struct SortTask {
     items: Vec<Value>,
-    keys: Vec<Value>,
+    /// The heap charge of `items`.
+    _items_charge: Charge,
+    keys: Buf,
     f: Value,
     descending: bool,
     own: Labels,
+    /// Whether the comparisons' charge was debited.
+    charged: bool,
 }
 
 impl Task for SortTask {
     fn resume(&mut self, cx: &mut Cx<'_>, input: Resume) -> Result<TaskStep, RtError> {
         if let Resume::Value(k) = input {
-            self.keys.push(k);
+            self.keys.push(cx, k)?;
         }
-        if let Some(x) = self.items.get(self.keys.len()) {
+        if let Some(x) = self.items.get(self.keys.items.len()) {
             return Ok(TaskStep::Call(self.f.clone(), vec![x.clone()]));
         }
+        if !self.charged {
+            // Comparing keys walks them: on top of the class's `n * log2(n + 1)`, the keys'
+            // weight times the comparisons each takes part in.
+            self.charged = true;
+            let n = self.items.len() as u64;
+            let weight = self
+                .keys
+                .items
+                .iter()
+                .fold(0u64, |w, k| w.saturating_add(k.weight()));
+            return Ok(TaskStep::Charge(
+                weight.saturating_mul(crate::ops::log_work(n)).div_ceil(64),
+            ));
+        }
         let mut order: Vec<usize> = (0..self.items.len()).collect();
-        let keys = &self.keys;
+        let keys = &self.keys.items;
         if self.descending {
             order.sort_by(|a, b| cmp_natural(&keys[*b], &keys[*a]));
         } else {
             order.sort_by(|a, b| cmp_natural(&keys[*a], &keys[*b]));
         }
         // The order depends on every key.
-        let decided = self.keys.iter().fold(self.own, |l, k| l | k.quick());
+        let decided = self.keys.items.iter().fold(self.own, |l, k| l | k.quick());
         let items = order.into_iter().map(|i| self.items[i].clone()).collect();
         Ok(TaskStep::Done(new_list(cx, items, decided)?))
     }
@@ -691,18 +760,26 @@ impl Task for SortTask {
 fn list_sort_by(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     let xs = arg(cx, args, 0)?;
     let own = xs.labels;
-    let items: Vec<Value> = list(cx, xs)?
+    let source = list(cx, xs)?;
+    // The copy the sort works on is charged before it is made.
+    let mut items_charge = Charge::none();
+    items_charge
+        .grow(cx.heap, cost::SLOT.saturating_mul(source.len()))
+        .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
+    let items: Vec<Value> = source
         .to_vec()
         .into_iter()
         .map(|v| v.with_labels(own))
         .collect();
     let descending = opt(args, 2).and_then(Value::as_bool).unwrap_or(false);
     Ok(Box::new(SortTask {
-        keys: Vec::with_capacity(items.len()),
+        keys: Buf::new(),
         items,
+        _items_charge: items_charge,
         f: arg(cx, args, 1)?.clone(),
         descending,
         own: own | opt(args, 2).map_or(Labels::NONE, |d| d.labels),
+        charged: false,
     }))
 }
 
@@ -851,7 +928,8 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let labels = m.labels | k.labels;
     Ok(match map(cx, m)?.get_entry(k) {
         Some((stored, v)) => v.clone().with_labels(labels | stored.labels),
-        None => Value::none().with_labels(labels),
+        // A miss depends on every key the probe was compared with.
+        None => Value::none().with_labels(labels | m.quick()),
     })
 }
 
@@ -939,10 +1017,10 @@ fn json_decode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 fn json_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (j, ptr) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = ptr.labels;
-    match crate::json::get(j, text(cx, ptr)?).map_err(|f| cx.fault(f, labels))? {
-        Some(v) => Ok(v.with_labels(labels)),
-        None => Ok(Value::none().with_labels(j.labels | labels)),
-    }
+    // A hit or a miss: the pointer's labels reach it either way.
+    Ok(crate::json::get(j, text(cx, ptr)?)
+        .map_err(|f| cx.fault(f, labels))?
+        .with_labels(labels))
 }
 
 // ---- math ----
@@ -969,7 +1047,8 @@ fn math_abs(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn min_max(cx: &Cx<'_>, args: &Args, max: bool) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
-    let labels = a.labels | b.labels;
+    // Which value is picked depends on all of both.
+    let labels = a.quick() | b.quick();
     // IEEE 754 minNum / maxNum: a NaN operand gives the other.
     if let (Repr::Float(x), Repr::Float(y)) = (&a.repr, &b.repr) {
         return Ok(Value::float(if max { x.max(*y) } else { x.min(*y) }).with_labels(labels));

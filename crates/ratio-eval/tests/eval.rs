@@ -159,10 +159,13 @@ fn arguments_reach_the_entry() {
 fn preparing_changes_no_hash_and_effects_carry_their_site() {
     let src = "fn main(x: Untrusted<Str>) -> Str { trust(x, because: \"reviewed\") }";
     let prog = support::program(src);
-    let before = ratio_ir::canon::canonical_text(&prog, 0);
+    let before = ratio_ir::canon::canonical_text(&prog, 0).unwrap();
     let hash = prog.packages[0].hash;
     let p = ratio_eval::prepare(&prog).unwrap();
-    assert_eq!(ratio_ir::canon::canonical_text(&prog, 0), before);
+    assert_eq!(
+        ratio_ir::canon::canonical_text(&prog, 0).as_deref(),
+        Some(before.as_str())
+    );
     assert_eq!(prog.packages[0].hash, hash);
     let entry = p.find("main.ratio", "main").unwrap();
     let mut m = ratio_eval::Machine::new(

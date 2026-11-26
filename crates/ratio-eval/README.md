@@ -32,7 +32,9 @@ code always runs on the walk's own stack. Values are `Send + Sync`, and so is th
 
 `par` and `race` run their branches in written order in this stage (a valid schedule; stage 11
 brings real concurrency) and enforce the branch restriction: a `var` declared outside a branch
-cannot be assigned inside it (`Invalid`). Harness calls, `with` blocks, call overrides, `with
+cannot be assigned inside it. That is a program defect, not a recoverable error: it raises
+`Invalid` with the class `Fatal`, which no `catch`, `result` or sibling `race` branch can
+swallow. Harness calls, `with` blocks, call overrides, `with
 timeout`, tool sets and `state` raise `Unsupported` until frames (stage 10) and the host (stage
 11) exist.
 
@@ -57,7 +59,10 @@ it; debug builds scan every value and assert that the summary covers the scan.
 Lists are persistent AVL ropes with leaves of up to 32 elements (O(log n) push, get, set, slice
 and concatenation); maps are persistent AVL trees in key order; records have a fixed, sorted
 layout; text caches its character count and an ASCII flag. Values nest at most 256 deep
-(`Invalid` beyond), so every walk, comparison and drop of a value fits a small stack.
+(`Invalid` beyond), so every walk and comparison of a value fits a small stack; dropping a value
+never recurses at all (every container frees its children through a work-list). Rendering a
+value as text (`text.show`, interpolation, the `json` spec) stops writing as soon as the text is
+longer than 16 MiB, and the result is refused.
 
 ## Limits and charges
 
@@ -73,9 +78,18 @@ cost-class charge `1 + ⌈w / 64⌉` (chapter 06, `data`), its argument part deb
 (so a `product` built-in over large inputs raises `Budget` without running) and a `linear`
 built-in's output part on return; `+` on text and interpolation `1 + ⌈m / 64⌉` for an `m`-character
 result; a formatted part `1 + ⌈(n + m) / 64⌉`; comparisons of containers or text `⌈n / 64⌉` over
-the operands' weights; `in` and indexing `Json` linear, list `+` and spreads `log`. The **heap**
+the operands' weights (a record's weight counts its field names); `in` and indexing `Json`
+linear, list `+` and spreads `log`; a map lookup or update (`map.get`, `map.set`, `m[k]`, `k in
+m`, `m[k] = v`) `1 + ⌈log2(n + 1) · |k| / 64⌉`, since every comparison walks the key;
+`list.sort_by` its class's charge plus `⌈W · log2(n + 1) / 64⌉` for keys of total weight `W`;
+a prompt's `include` `1 + ⌈s / 64⌉` for the `s` sections and values it copies. The **heap**
 ledger charges every allocation a fixed, platform-independent size before it is made and credits
-it when the value is freed, so it counts live values. `Budget` and `Cancelled` pass through every
+it when the value is freed, so it counts live values: values, each prompt section as it is
+built, and the buffers built-ins gather into (a slot per element). What it does not count is the
+evaluator's continuation stack: at most one frame per IR node being evaluated, each holding at
+most its node's children (a number fixed by the program text), per call, for at most
+`call_depth` calls; so it is bounded by `call_depth` times the deepest function body's size, not
+by the data. `Budget` and `Cancelled` pass through every
 `catch`; `defer` blocks run on every exit, in reverse order (the first error wins when one
 raises).
 

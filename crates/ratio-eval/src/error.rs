@@ -23,6 +23,10 @@ pub enum Class {
     Cancelled,
     /// A replay diverged (stage 11): never catchable.
     Replay,
+    /// A defect of the program that ends the evaluation, such as assigning, inside a
+    /// concurrent branch, a `var` declared outside it: no `catch`, `result` or `race` may
+    /// swallow it.
+    Fatal,
 }
 
 /// A raised error: the `Error` value a `catch` binds, and its class.
@@ -96,8 +100,8 @@ pub(crate) enum Kind<'a> {
     Cancelled,
     /// `Denied { by }`.
     Denied(&'static str),
-    /// `User { tag }`, from `fail`.
-    User(&'a str),
+    /// `User { tag }`, from `fail`, with the tag's labels.
+    User(&'a str, Labels),
 }
 
 impl Kind<'_> {
@@ -111,7 +115,7 @@ impl Kind<'_> {
             Kind::Budget(_) => "Budget",
             Kind::Cancelled => "Cancelled",
             Kind::Denied(_) => "Denied",
-            Kind::User(_) => "User",
+            Kind::User(..) => "User",
         }
     }
 
@@ -172,8 +176,13 @@ fn kind_value(p: &Prepared, kind: Kind<'_>) -> Value {
                 .ok()
             })
         }
-        Kind::User(tag) => p.layout_of(ek, index).and_then(|layout| {
-            Value::new_record(&heap, Arc::clone(layout), vec![Value::text(tag)]).ok()
+        Kind::User(tag, labels) => p.layout_of(ek, index).and_then(|layout| {
+            Value::new_record(
+                &heap,
+                Arc::clone(layout),
+                vec![Value::text(tag).with_labels(labels)],
+            )
+            .ok()
         }),
         _ => None,
     };

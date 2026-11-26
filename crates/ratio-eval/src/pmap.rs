@@ -49,6 +49,9 @@ pub(crate) fn key_cmp(a: &Value, b: &Value) -> Ordering {
         (Repr::Int(x), Repr::Int(y)) => x.cmp(y),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
         (Repr::Variant(e1, i1), Repr::Variant(e2, i2)) => (e1, i1).cmp(&(e2, i2)),
+        // Keys the checker accepts beyond the four kinds (variants with payloads, tuples):
+        // the natural order, which is total on them.
+        _ if rank(a) == rank(b) => crate::ops::cmp_natural(a, b),
         _ => rank(a).cmp(&rank(b)),
     }
 }
@@ -267,7 +270,37 @@ fn remove(
     }
 }
 
+impl MNode {
+    /// Moves the node's entry and subtrees onto the drop work-list.
+    pub(crate) fn take_children(&mut self, stack: &mut Vec<crate::drop::Garbage>) {
+        stack.push(crate::drop::Garbage::Value(std::mem::take(&mut self.key)));
+        stack.push(crate::drop::Garbage::Value(std::mem::take(&mut self.value)));
+        for side in [self.left.take(), self.right.take()].into_iter().flatten() {
+            stack.push(crate::drop::Garbage::MNode(side));
+        }
+    }
+}
+
+impl Drop for MNode {
+    fn drop(&mut self) {
+        if self.left.is_some()
+            || self.right.is_some()
+            || self.value.meta().is_some()
+            || self.key.meta().is_some()
+        {
+            let mut stack = Vec::new();
+            self.take_children(&mut stack);
+            crate::drop::dispose(stack);
+        }
+    }
+}
+
 impl Map {
+    /// The tree, for the drop work-list.
+    pub(crate) fn into_root(self) -> Option<Arc<MNode>> {
+        self.root
+    }
+
     #[must_use]
     pub fn empty() -> Map {
         Map { root: None }
