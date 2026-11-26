@@ -1,7 +1,11 @@
 # Loops, vectorised operations and functional syntax
 
 Task DESIGN-LOOPS (user request: "make looping and vectorised operations compatible and
-optimised", widened to "also add in other function syntax"). Reviewed against `main` at
+optimised", widened to "also add in other function syntax", then to "`Result<T>` types and
+monadic chain expressions", under the style "a nice fusion between Haskell and Java").
+Revision 2: the user adopted FS-1, FS-2, FS-3 and `scan`/`zip_with`; this revision adds
+[Style](#style), [Result and monadic chains](#result-and-monadic-chains) and re-evaluates the
+syntax options. Reviewed against `main` at
 `4837678` (stages 1 to 7, specification draft 0.14) and the in-flight branches
 `feat/wt-s8-data2` (`1278e59`), `feat/wt-s9-data3` (`834e7db`), `feat/wt-s10-frames`
 (`f1f2429`), `feat/wt-sC-checker` (`79b1e37`) and `feat/wt-s11a-host` (local, no commits of its
@@ -22,9 +26,11 @@ need to be. This document
 2. measures the **baseline** on `main` and stage 9;
 3. ranks **optimisations** (LV-1 to LV-10), each keeping the hashed Core IR (`IR_VERSION` 1,
    fixed by v0.1.0) apart from the prepared form;
-4. proposes and ranks **functional syntax** (FS-1 to FS-11), all desugared in lowering, so no
+4. proposes and ranks **functional syntax** (FS-1 to FS-13), all desugared in lowering, so no
    IR node and no `IR_VERSION` bump;
-5. sequences the work around the in-flight branches so no two touch the same file at once.
+5. proposes **Result combinators, a `?` operator and chain blocks** (R-1 to R-6), with their
+   equivalence to `raise`/`try`;
+6. sequences the work around the in-flight branches so no two touch the same file at once.
 
 Read in full or in the relevant ranges: `crates/ratio-eval/README.md`; `machine.rs` (the walk,
 loop frames, `call_builtin`, `drive_task`, `enter`), `prepare.rs` (`PKind`), `value.rs`
@@ -46,6 +52,35 @@ charge before work; no Rust-stack recursion over data depth; labels from everyth
 decides a result (misses and composite keys included); heap-charged buffers; the 16 MiB output
 stop; cancellation checkpoints in long built-ins. Each proposal states its effect on them.
 
+## Style
+
+The user's principle for every syntax proposal: **a fusion of Haskell and Java**. From Java:
+braces and blocks, `.method()` chains, explicit readable type annotations, familiar keywords,
+statement-like layout. From Haskell: expressions everywhere, `<-` binding in `do` blocks,
+comprehensions, composition, `where`, pattern matching, `Result`/`Maybe` error values.
+
+Ratio v0.1.0 already reads as Rust-like Java (`fn`, braces, `let`, `match`, `|x|` closures,
+`|>`), and `IR_VERSION` 1 is fixed. So every form here is **additive** and desugars to the
+existing Core IR; breaking alternatives are listed apart, as options with their migration cost
+([Breaking options](#breaking-options-not-adopted)).
+
+| Form | Java side | Haskell side |
+| --- | --- | --- |
+| FS-1 comprehensions `[f(x) for x in xs if p(x)]` | `for … in` keyword reading, brackets | list comprehensions |
+| FS-2 placeholders `xs.map(_.score)`, `add(_, 2)` | method chains stay short | sections and partial application |
+| FS-3 `xs \|> .filter(p) \|> .map(f)` | `.method()` chaining, one stage per line | point-free pipelines |
+| FS-4 `f.then(g)`, `g.compose(f)` | `Function.andThen` / `compose` as methods | composition `g . f` |
+| FS-6 `fn area(…) -> Float { … } where { let … }` | braces, typed signature first | `where` clauses |
+| R-2 `r.map(f).and_then(g).unwrap_or(d)` | `Optional.map(…).flatMap(…).orElse(…)` | `fmap`, `>>=`, `fromMaybe` |
+| R-4 `let v = r?` | checked exceptions bridged in one character | `Either` unwrapping |
+| R-5 `do { a <- f(x); b <- g(a); h(b) }` | a braced block of statements | do-notation |
+
+**Naming: snake_case.** New built-ins and methods are `and_then`, `or_else`, `unwrap_or`,
+`map_err`, `ok_or`, `zip_with`. Reasons: the 479 existing built-ins are snake_case; the checker
+already warns on non-snake names for everything that is not a type or a variant
+(`spec/02-syntax.md:28-31`), so camelCase built-ins would contradict the language's own lint;
+and method syntax already gives the Java reading (`r.and_then(f)` reads as `r.andThen(f)`).
+
 ## Summary
 
 | ID | Title | Kind | Recommendation | Stage | Risk |
@@ -63,10 +98,19 @@ stop; cancellation checkpoints in long built-ins. Each proposal states its effec
 | LV-10 | Fusing `filter`/`map` chains in the prepared form | Interpreter | Defer | after 24 | Medium |
 | — | Per-element step discounts for callback built-ins | Cost model | Reject | — | — |
 | — | Parallel chunked float reductions on the pool | Pool | Reject | — | — |
-| FS-1 | List comprehensions | Syntax | Adopt | F (after C and 10) | Low |
-| FS-2 | Placeholder closures and partial application (`_ + 1`, `f(_, 2)`, `_.name`) | Syntax | Adopt | F | Medium |
-| FS-3 | Method stages in pipes (`xs \|> .map(f)`) | Syntax | Adopt | F | Low |
-| FS-4–FS-11 | Composition, multi-clause functions, `where`, `scan`, lazy sequences, … | Syntax, stdlib | Options for the user | — | — |
+| FS-1 | List comprehensions | Syntax | Adopted (user) | F (after C and 10) | Low |
+| FS-2 | Placeholder closures and partial application (`_ + 1`, `f(_, 2)`, `_.name`) | Syntax | Adopted (user) | F | Medium |
+| FS-3 | Method stages in pipes (`xs \|> .map(f)`) | Syntax | Adopted (user) | F | Low |
+| FS-4 | Composition as methods `f.then(g)`, `g.compose(f)` (no `>>` operator) | Syntax | Adopt | F | Low |
+| FS-6 | `where` after a function body | Syntax | Adopt | F | Low |
+| FS-7 | `list.scan`, `list.zip_with` | Stdlib | Adopted (user) | D4 | Low |
+| FS-5, 8–13 | Multi-clause functions, fold sugar, arrow lambdas, lazy sequences, … | Syntax | Options / rejected | — | — |
+| R-1 | Keep `Result<T>` with the fixed `Error`; no user generic enums | Types | Accept | — | — |
+| R-2 | `res.*` and `opt.*` combinators (methods on `Result<T>` and `T?`) | Stdlib | Adopt | D4 | Low |
+| R-3 | `res.sequence`, `res.traverse` | Stdlib | Adopt | D4 | Low |
+| R-4 | Postfix `?`: unwrap `Ok` or re-raise | Syntax | Adopt | F | Medium |
+| R-5 | Chain blocks `do { a <- f(x); … }` over `Result<T>` and `T?` | Syntax | Adopt | F | Medium |
+| R-6 | Lint: branching combinators and `?` as guards in `C0039` | Checker | Adopt | F | Low |
 
 ## Equivalence rules
 
@@ -440,7 +484,7 @@ hashes the same as one written in the desugared form. Common to all of them:
 - **Printer.** The syntax tree keeps the sugar node; the canonical printer writes it back as
   written, and the round trip (parse, print, parse) holds as for every production.
 
-### FS-1 (adopt): list comprehensions
+### FS-1 (adopted): list comprehensions
 
 ```ratio
 let names = [f.path for f in files if f.size > 0]
@@ -474,7 +518,7 @@ exactly as in the loop; the explicit `list.filter` keeps them (open question Q2 
 with tests. **Risk.** Low. **Interchangeability.** High: it is the loop's shape with the
 built-in's semantics.
 
-### FS-2 (adopt): placeholder closures and partial application
+### FS-2 (adopted): placeholder closures and partial application
 
 ```ratio
 xs.map(_ + 1)                 // |a| a + 1
@@ -497,7 +541,7 @@ type. **Cost.** Parser rule plus checker scoping, about 300 lines. **Risk.** Med
 must be taught; the printer writes the sugar back unchanged, so diffs stay readable.
 **Interchangeability.** Medium-high: it makes the vectorised form as short as the loop body.
 
-### FS-3 (adopt): method stages in pipes
+### FS-3 (adopted): method stages in pipes
 
 `xs |> .filter(p) |> .map(f)` is `xs.filter(p).map(f)`: grammar `pipe_expr = coalesce_expr ,
 { "|>" , ( postfix_expr | "." , MEMBER , postfix ) }`. A line starting with `|>` or `.` already
@@ -505,18 +549,272 @@ continues the expression (semicolon rule 3), so long chains format one stage per
 to the method call. **Cost.** Small. **Risk.** Low. **Interchangeability.** Low; it is about
 reading pipelines uniformly.
 
-### Options for the user (FS-4 to FS-11)
+### FS-4 (adopt): composition as methods on function values
 
-| ID | Form | Desugars to | Trade-off |
+`f.then(g)` is `|a| g(f(a))` and `g.compose(f)` the same, as Java's `Function.andThen` and
+`compose`; with FS-2, `xs.map(parse.then(_.score))`. The checker knows `then` and `compose` as
+intrinsic methods of function types (no module: a function value has none), and lowering
+evaluates `f` and `g` once, in order, into fresh locals, then builds the closure. Calling it
+adds the labels of `f` and `g` as any call of a labelled function value does. The `>>`
+operator (FS-13) is rejected: the token reader would have to split `>>` back into two `>` when it
+closes nested type arguments (`f::<Map<K, Map<K, V>>>(…)`), and the method form is the Java
+reading anyway. **Cost.** Small (checker, lowering). **Risk.** Low. **Stage.** F.
+
+### FS-6 (adopt): `where` after a function body
+
+```ratio
+fn score(r: Review) -> Float {
+  weight * coverage
+} where {
+  let weight = if r.critical { 2.0 } else { 1.0 }
+  let coverage = r.covered / math.to_float(r.total)
+}
+```
+
+Grammar: `fn_decl = … , block , [ "where" , where_block ]`, `where_block = "{" , { let_stmt ,
+";" } , "}"`, on `fn` and `harness` declarations only. `where` is a **contextual** keyword: a
+keyword only directly after the `}` of an item's body, an identifier everywhere else, so no
+existing name breaks; semicolon rule 3 gains `where` (a line starting with it continues the
+item). Desugaring: the `let`s are placed at the start of the body block, in written order,
+after the parameters are bound; they see the parameters and each earlier `where` binding, and
+the body sees them all. Evaluation is **strict and in order** (Ratio is strict), so the
+bindings must be effect-free: an effect there is refused as in a constant (`C0016`, with the
+context named), which makes eager evaluation unobservable except for the steps it charges and
+an error a binding raises. **Cost.** Small. **Risk.** Low. **Stage.** F.
+
+### Options (re-evaluated for the Haskell–Java style)
+
+| ID | Form | Desugars to | Recommendation and trade-off |
 | --- | --- | --- | --- |
-| FS-4 | Composition `f >> g`, `g << f` | `\|a\| g(f(a))` | Pipes cover most uses; `>>` must be split back into two `>` when it closes nested type arguments (`f::<Map<K, Map<K, V>>>(…)`), a token-reader change |
-| FS-5 | Multi-clause functions (`fn fact(0) -> Int = 1` then `fn fact(n) -> Int = n * fact(n - 1)`) | one `fn` whose body is a `match` on the parameter tuple | Exhaustiveness comes free from `match`; merging items by name meets the duplicate-definition rule and the item index; an alternative is `fn f(…) -> T match { … }` |
-| FS-6 | `e where { let a = …; let b = … }` | `do { let a = …; let b = …; e }` | `do` blocks already do this; adds a contextual keyword for word order only |
-| FS-7 | `list.scan` and `list.zip_with` built-ins | new `linear` callback built-ins | Stdlib rows, not syntax; `scan` is the missing fold-with-history; adds `builtins.txt` rows and the stdlib version, no IR change |
-| FS-8 | Fold sugar (`fold a = 0 for x in xs { a + x }`) | `list.fold(xs, 0, \|a, x\| a + x)` | Readable accumulators without `var`; a new keyword form for something `fold` and FS-2 already express |
-| FS-9 | Lazy sequences or generators | — | Needs suspended producers: new IR (a coroutine node) and `IR_VERSION` 2; effects in a producer would interleave with the consumer, and an abandoned producer needs cancellation; reject for now |
-| FS-10 | Named arguments on function values | — | Function types have no parameter names; a type-system change for little gain; reject |
-| FS-11 | Automatic currying | — | Conflicts with defaults and named arguments; FS-2's `f(_, 2)` covers partial application; reject |
+| FS-5 | Match-bodied functions `fn fact(n: Int) -> Int match { 0 => 1, n => n * fact(n - 1) }` | `fn fact(n: Int) -> Int { match n { … } }` (a tuple of the parameters when there are several) | Option. The braced, typed variant of Haskell's clauses; Java readers see a `switch`. Separate clauses (`fn fact(0) = 1`) are rejected: merging items by name meets the duplicate-definition rule and the item index |
+| FS-7 | `list.scan`, `list.zip_with` | `linear` callback built-ins | Adopted by the user; stage D4 |
+| FS-8 | Fold sugar `fold a = 0 for x in xs { a + x }` | `list.fold(xs, 0, \|a, x\| a + x)` | Reject: `fold` with FS-2 already reads well |
+| FS-9 | Lazy sequences, generators | — | Reject: needs a coroutine IR node (`IR_VERSION` 2); effects in a producer would interleave with its consumer |
+| FS-10 | Java arrow lambdas `x -> x + 1`, `(a, b) -> a + b`, beside `\|x\| …` | the same closure node | Option, additive (`->` never follows an expression today), but two spellings of one thing; recommended not now |
+| FS-11 | Automatic currying | — | Reject: conflicts with defaults and named arguments; FS-2 covers partial application |
+| FS-12 | Named arguments on function values | — | Reject: function types carry no parameter names |
+| FS-13 | `f >> g`, `g << f` | `\|a\| g(f(a))` | Reject in favour of FS-4 (token-reader conflict with nested type closers) |
+
+### Breaking options (not adopted)
+
+Each would move further towards the Haskell–Java look but changes what v0.1.0 programs mean or
+how they are written. The canonical printer could rewrite most of them mechanically (the AST is
+the same), but every package, the conformance corpus, `std`, the chapter 09 examples and the
+Imperium harness sessions would need the rewrite and a re-selection by hash.
+
+| ID | Change | Migration cost |
+| --- | --- | --- |
+| B-1 | `<-` as one token everywhere (today `a<-b` is `a < -b`, `spec/02-syntax.md:178`) | Silent meaning change of `a<-b` anywhere; the adopted rule confines `<-` to `do` blocks instead |
+| B-2 | Replace `\|x\| e` with `x -> e` or `\x -> e` | Every closure; the printer can rewrite them |
+| B-3 | Java-style declarations `Int add(Int a, Int b) { … }` | Every signature; type-first parsing conflicts with expression statements; registry signatures change text |
+| B-4 | camelCase built-ins (`andThen`, `flatMap`) | 479 renames, `builtins.txt`, every program; contradicts the snake_case lint |
+| B-5 | `return e` meaning "wrap" inside `do` blocks (Haskell's `return`) | `return` inside existing `do` blocks leaves the function today |
+
+## Result and monadic chains
+
+### What exists
+
+`enum Result<T> { Ok { value: T }, Err { error: Error } }` is one of two generic built-in enums
+(`spec/06-stdlib/README.md:144`); programs cannot declare generic enums (`C0033`,
+`spec/02-syntax.md:244-246`; `conformance/types/err-generic-enum.ratio` shows the laundering a
+contravariant parameter would allow, `C0035`). Errors are raised and caught (`raise`,
+`try … catch`); `result(|| e)` reifies an outcome, letting `Cancelled`, `Replay` and the frame's
+own `Budget` through (`spec/06-stdlib/control.md:124`); `par_map_settled` returns
+`[Result<U>]`. Options have `x?.f` and `x ?? d`. There is no `?` on `Result`, no combinator and
+no chain syntax.
+
+### R-1 (accept): keep `Result<T>` with the fixed `Error`; no user generic enums
+
+- **`Result<T, E = Error>`.** For: typed domain errors, as Haskell's `Either e` or Java's checked
+  exception types. Against: `raise`, `catch` and the R-4 bridge need an `Error`, so every `E`
+  would need a conversion Ratio does not have; `catch` arms are exhaustive over the closed
+  `ErrorKind` (decision R7) and an open `E` breaks that; `par_map_settled`, `par_fold`'s `step`,
+  schemas and tapes all fix `Error`; every combinator gains a parameter. Domain errors are
+  already expressible: `raise fail("tag", message, data)` gives `User { tag }` with a `Json`
+  payload, read back with `json.decode::<MyError>(e.data)`.
+- **User generic enums.** Reverses stage 4's decision; sound only with variance checking (the
+  laundering in `err-generic-enum.ratio`) and schemas for generic enums. A larger change for a
+  different goal.
+
+Revisit (Q4) if typed errors are widely wanted: then `Result<T, E = Error>` with `E` limited to
+user enums without function-typed fields (covariant by construction), and `?` only on `E = Error`.
+
+### R-2 and R-3 (adopt): combinators on `Result<T>` and `T?`
+
+Two modules whose first parameter is the receiver, so every row is also a method
+(`r.map(f).and_then(g).unwrap_or(d)`): `res` for `Result<T>` and `opt` for `T?`. Short names, as
+`re`, `vec` and `url`; `result` is taken by the control function `result(f)`. Method lookup goes
+by the receiver's static type, so `x.map(f)` on `[Int]?` is `opt.map` and `x?.map(f)` keeps its
+optional-chaining meaning (`list.map` on the present value).
+
+**Label rule.** Every result carries the labels of everything that decided it: `Lr`, the
+receiver's own labels (for a `Result`, which variant it is; for `T?`, the present value's own
+labels or those of the `none`), is added to whatever the call returns on either branch, and the
+labels of any callback result that decided a choice (`opt.filter`) too. Values that pass through
+keep their own labels. **Charge:** `const` (1 step) plus the callback's own steps; `sequence`
+and `traverse` are `linear` (`1 + ⌈n/64⌉` before, the output part on return), stopping early as
+`list.any` does. **Needs:** `pure`, or "as `f`" for the rows with a callback, like `list.map`.
+
+| Built-in | Signature | Result and labels |
+| --- | --- | --- |
+| `res.map` | `<T, U>(r: Result<T>, f: fn(T) -> U) -> Result<U>` | `Ok { f(v) }` or `r`; own labels `+ Lr` |
+| `res.and_then` | `<T, U>(r: Result<T>, f: fn(T) -> Result<U>) -> Result<U>` | `f(v)` or `r`; `+ Lr` |
+| `res.map_err` | `<T>(r: Result<T>, f: fn(Error) -> Error) -> Result<T>` | `Err { f(e) }` or `r`; `+ Lr` |
+| `res.or_else` | `<T>(r: Result<T>, f: fn(Error) -> Result<T>) -> Result<T>` | `f(e)` or `r`; `+ Lr` |
+| `res.unwrap_or` | `<T>(r: Result<T>, d: T) -> T` | `v` or `d`; `+ Lr` |
+| `res.unwrap_or_else` | `<T>(r: Result<T>, f: fn(Error) -> T) -> T` | `v` or `f(e)`; `+ Lr` |
+| `res.or_raise` | `<T>(r: Result<T>) -> T` | `v + Lr`, or raises `e` unchanged (kind, message, data, site, scope) with `+ Lr`; the target of R-4 |
+| `res.ok` | `<T>(r: Result<T>) -> T?` | `v` or `none`; `+ Lr` |
+| `res.is_ok`, `res.is_err` | `<T>(r: Result<T>) -> Bool` | `Lr` |
+| `res.zip` | `<A, B>(a: Result<A>, b: Result<B>) -> Result<(A, B)>` | the first `Err` in argument order, else `Ok { (x, y) }`; `+ La + Lb` |
+| `res.sequence` | `<T>(rs: [Result<T>]) -> Result<[T]>` | the first `Err` by index, else `Ok` of the values; own labels: the list's own and `Lr` of every element read |
+| `res.traverse` | `<T, U>(xs: [T], f: fn(T) -> Result<U>) -> Result<[U]>` | stops calling `f` at the first `Err`; labels as `sequence`, plus `xs`'s own |
+| `opt.map` | `<T, U>(x: T?, f: fn(T) -> U) -> U?` | `f(v)` or `none`; `+ Lx` (a `U` that is itself an option collapses, `T??` is `T?`) |
+| `opt.and_then` | `<T, U>(x: T?, f: fn(T) -> U?) -> U?` | `f(v)` or `none`; `+ Lx` |
+| `opt.or_else` | `<T>(x: T?, f: fn() -> T?) -> T?` | `x` or `f()`; `+ Lx` |
+| `opt.unwrap_or` | `<T>(x: T?, d: T) -> T` | exactly `x ?? d` (value, labels, steps) |
+| `opt.unwrap_or_else` | `<T>(x: T?, f: fn() -> T) -> T` | `v` or `f()`; `+ Lx` |
+| `opt.ok_or` | `<T>(x: T?, err: Error) -> Result<T>` | `Ok { v }` or `Err { err }`; `+ Lx` |
+| `opt.filter` | `<T>(x: T?, p: fn(T) -> Bool) -> T?` | `x` or `none`; `+ Lx +` the labels of `p`'s result |
+| `opt.zip` | `<A, B>(a: A?, b: B?) -> (A, B)?` | `+ La + Lb` |
+| `opt.is_some`, `opt.is_none` | `<T>(x: T?) -> Bool` | `Lx` |
+
+`res.sequence(par_map_settled(xs, f))` is `par_map` without cancellation whose error is the first
+by index (E-4's `par_map` exception does not apply).
+
+### R-4 (adopt): postfix `?`
+
+`e?`, for `e: Result<T>`, is `res.or_raise(e)`: the `Ok` value, or the `Err`'s error raised again
+unchanged. It is the bridge from `Result` values back to raised errors, as `result(|| …)` is the
+bridge the other way: `result(|| r?)` equals `r` in value. Grammar: `postfix = … | "?"`
+(level 11, with calls and fields). Only on `Result`: on a `T?` it is a check error suggesting
+`x ?? d` or `x.ok_or(err)?` (Rust's `?` on an option returns `none` from the function; Ratio
+functions have no implicit option return). The token reader is unchanged.
+
+| Written | Today | With R-4 |
+| --- | --- | --- |
+| `let v = r?` (line end) | `?` already ends a statement (rule 2 of insertion) | propagate; the statement ends |
+| `r?` then a line starting `.f()` | — | `(r?).f()`: a line starting with `.` continues |
+| `r?.f` | `?.` is one token: optional chaining | unchanged; on a `Result` receiver a check error with the fix `(r?).f` (no type-directed parsing) |
+| `r ?? d`, `r??d` | `??` is one token: coalescing | unchanged; on a `Result` a check error suggesting `r.unwrap_or(d)` |
+| `r? ?? d` | parse error | `(r?) ?? d` |
+| `r?[i]`, `r?(x)` | parse error | `(r?)[i]`, `(r?)(x)` |
+| `T?`, `x?: T` | option type, optional field | unchanged: types are parsed in type position only |
+| `{ r? }` | — | a block (rule 1 skips a `?` only before `:` or `,`) |
+
+**Contexts.** `?` is a raise, so it behaves as one everywhere: inside a closure it leaves the
+closure's call (a `list.map` stops there, E-4); in a `par` or `par_map` branch it fails the
+branch, which cancels its siblings fail-fast (recorded, PC-1); in a `race` branch it is that
+branch's failure; in `par_fold`'s `step`, `Fold.Next { acc: acc.push(r?) }` turns an `Err`
+outcome into fail-fast, cancelling the running branches; inside `result(|| …)` it is caught back
+into an `Err`. An `Err` never holds `Cancelled` or `Replay` (`result` lets them through), and a
+re-raised `Budget` keeps its scope, so `?` cannot move an uncatchable error into a catchable
+place. **Labels:** the value gets `Lr`; a re-raised error gets `Lr` on its message and data.
+**Charge:** the call node and the `const` built-in, 2 steps.
+
+### R-5 (adopt): chain blocks `do { a <- f(x); … }`
+
+Three candidates were compared on the same program:
+
+| Candidate | Example | Assessment |
+| --- | --- | --- |
+| (a) chain block | `do { a <- f(x); b <- g(a); h(b) }` | Chosen: Java statements in braces, Haskell `<-`; generic over `Result` and `T?`; labels exact |
+| (b) `?` in a `result` call | `result(\|\| { let a = f(x)?; let b = g(a)?; h(b) })` | Already possible with R-4, no new syntax; but it also turns any raise inside into `Err`, and it is `Result`-only |
+| (c) pipes | `f(x) \|> .and_then(\|a\| g(a) \|> .map(\|b\| h(b)))` | Possible with R-2 and FS-3; later steps nest to keep earlier names in scope |
+
+Grammar (the `do` expression is unchanged; one statement form is added, allowed only directly
+in a `do` block):
+
+```text
+bind_stmt  = pattern , "<-" , expr ;     (* "<-" is "<" immediately followed by "-" *)
+```
+
+The parser recognises a bind when a statement directly in a `do` block reads as a pattern
+followed by `<` and `-` with no space between; `do { x < -y }` stays a comparison. A `do` block
+with at least one bind is a **chain block**:
+
+- **Kind.** The first bind's source decides: `Result<_>` or an option. Every bind must be of that
+  kind (convert with `.ok()` or `.ok_or(err)`), else a check error.
+- **Value.** The final expression `e: U`, wrapped: `Ok { value: e }` for a `Result` chain
+  (`Result<U>`), `e` as `U?` for an option chain (an option passes through, `T??` is `T?`).
+- **Other statements.** `let` and expression statements run in order. An expression statement
+  of the chain's own type is a check error ("bind it with `_ <- e`, or ignore it with
+  `let _ = e`"), so no `Err` is dropped silently.
+- **Exits.** `return`, `break` and `continue` may not leave a chain block, and it may not assign
+  a `var` declared outside it (check errors): its body becomes closures. `return` keeps its Java
+  meaning, leaving the function, everywhere (Q5); the user's sketch `return h(b)` is written
+  `h(b)`.
+- **Desugaring.**
+
+  ```text
+  do { p1 <- e1; s1…; p2 <- e2; s2…; e }
+    ⇒ res.and_then(e1, |p1| { s1…; res.and_then(e2, |p2| { s2…; Ok { value: e } }) })
+  ```
+
+  `opt.and_then` and a bare `e` for an option chain. A refutable pattern that does not match
+  raises `Invalid`, as in `for`. Raises inside the block propagate as raises: the chain
+  short-circuits on `Err` values only (wrap it in `result(|| …)` to reify those too).
+- **Labels.** Each `and_then` adds its receiver's own labels, so the chain's result carries the
+  labels of every bind that decided it, independently of Q2.
+- **Charge.** Per bind about 4 steps (a call, a closure, `and_then`'s step, the parameter
+  pattern) and one closure allocation; LV-3 does not apply (the bodies are not simple).
+- **Checker.** Types flow from each bind into its pattern; `C0016` applies to the desugared
+  calls; the printer keeps the `<-` form.
+
+**With comprehensions (FS-1).** A comprehension builds a list and does not short-circuit: over a
+function returning `Result<U>` it gives `[Result<U>]`. To stop at the first `Err`, use
+`res.traverse(xs, f)` (stops calling `f`) or `res.sequence([f(x) for x in xs])` (calls every
+`f`); `[f(x)? for x in xs]` raises at the first `Err` by index. Comprehensions are deliberately
+not made monadic: the same brackets would then mean two things.
+
+**With `par_fold`.** `Fold<A>` is a control enum, not a monad, so chain blocks do not apply to it;
+`?` in `step` gives fail-fast as above.
+
+### R-6 (adopt): guards for the guarded-effect lint
+
+`C0039` reports an effect whose only guards are model-derived conditions. The new forms hide a
+branch inside a call, so the lint must see it: the callback of a branching combinator
+(`res.map`, `and_then`, `map_err`, `or_else`, `unwrap_or_else`, and the `opt.*` rows with a
+callback) is treated as guarded by its receiver (a model-only guard when the receiver is
+derived); the statements after a `?` on a derived `Result` are guarded by it; chain blocks follow
+from their desugaring. `r.is_ok()` as an `if` condition is already handled as a derived
+condition. **Stage.** F (`lint.rs`, after stage C).
+
+### Equivalence for results (E-7 to E-9)
+
+**E-7 Chains.** Four spellings of one computation:
+
+- A, the chain `do { a <- f(x); b <- g(a); h(b) }`;
+- B, its desugared combinators `f(x).and_then(|a| g(a).and_then(|b| Ok { value: h(b) }))`;
+- C, `result(|| { let a = f(x)?; let b = g(a)?; h(b) })`;
+- D, explicit matching: `match f(x) { Ok { value: a } => match g(a) { Ok { value: b } => Ok { value: h(b) }, Err { error } => Err { error } }, Err { error } => Err { error } }`.
+
+When no expression in the block raises:
+
+- **Values** are equal. **First failing step:** the first bind, in written order, whose source is
+  an `Err`; its `Error` is returned unchanged (kind, message, data, site) in all four.
+- **Labels.** `A = B ⊇ C ⊇ D`, with equality when the final value depends on every bound value
+  (or Q2 is adopted, which makes `D = B`).
+- **Steps.** `A = B` exactly (the same IR). C and D differ from A by at most a constant per bind,
+  pinned by `steps` expectations in the corpus.
+
+When an expression raises, A, B and D propagate the raise, and C returns it as an `Err`.
+
+**E-8 Options.** `x.unwrap_or(d)` is `x ?? d` exactly; `x.map(f)` equals `if let v = x { f(v) }
+else { none }` in value, with labels ⊇ (the `if let` drops `Lx` on `none`, an implicit flow).
+
+**E-9 Lists of results.** `res.traverse(xs, f)`, `result(|| list.map(xs, |x| f(x)?))` and the loop
+`for x in xs { out = out.push(f(x)?) }` inside `result` agree on value and on the first failing
+index, and none calls `f` after it; `res.sequence(list.map(xs, f))` agrees on value but calls `f`
+on every element.
+
+**Errata.** `spec/06-stdlib/README.md:144` (a note: the combinators live in `res` and `opt`);
+`spec/06-stdlib/data.md` (two new sections `res` and `opt`, rows in the submodule table and the
+`const`/`linear` classes); `spec/06-stdlib/control.md:124` (`result(|| r?)` equals `r`);
+`spec/03-semantics.md:480` (after `result`: the `?` operator and chain blocks, with E-7);
+`spec/02-syntax.md` (`postfix` gains `"?"`, `bind_stmt` in `do` blocks, `where` after a body, a
+note at `:178` that the token reader still reads `<` then `-`, and new disambiguation rules for
+`<-` and `?`).
 
 ## Conformance tests
 
@@ -543,6 +841,11 @@ directive, labelled ones with `secret` (source 0).
 | 13 | `repeat n { … }` | `for _ in 0..n { … }` | `n = 100` | same value; `repeat` steps ≤ `for` steps |
 | 14 | `par_map(xs, f)` | `list.map(xs, f)` | one failing element | same error kind and element |
 | 15 | loop of length 10,000 | `list.map` | steps left 5,000 | `Budget { which: steps }` in both (kind only) |
+| 16 | E-7 forms C and D | chain A, combinators B | `f` gives a secret `Ok 1`, `g` an `Err` `User { tag: "b" }` | `Err` tag `b`, same site in all four; labels `A = B ⊇ C ⊇ D`; steps `A = B` |
+| 17 | `result(\|\| list.map(rs, \|r\| r?))` | `res.sequence(rs)` | `[Ok 1, Err a, Err b]` | `Err a` in both |
+| 18 | `x ?? d` | `x.unwrap_or(d)` | `none` with a secret own label | identical value, labels and steps |
+| 19 | loop with `f(x)?` inside `result` | `res.traverse(xs, f)` | `f` fails at index 1 of 3 | `Err` of index 1; `f` called twice in both |
+| 20 | `par_fold` with `step` using `r?` | `par_map` | one failing element | the same error kind |
 
 **Fast-path tests** (P2): the whole corpus, `conformance/eval` and `conformance/data` with the
 fast paths on and off give identical values, labels, steps and heap peaks; a differential property
@@ -553,7 +856,13 @@ unchanged (no IR change).
 **Syntax tests** (stage F): `conformance/syntax/` parse and round-trip files for FS-1 to FS-3
 (nested clauses, `_` scoping, `_` in patterns unaffected, `|> .m()` across lines); `conformance/types/`
 errors for two `_` in one closure, `_` without an expected type, and a comprehension over a
-non-iterable; a hash test that the sugar and its desugared form hash identically.
+non-iterable; a hash test that the sugar and its desugared form hash identically. For R-4 to
+R-6 and FS-4, FS-6: every row of the R-4 parse table (`r?.f` and `r ?? d` on a `Result` as check
+errors with their fixes, `r? ?? d`, `r?` before a line starting with `.`); `do { x < -y }` a
+comparison and `do { x <- y }` a bind; a chain-kind mismatch, a dropped `Result` statement and a
+`return` inside a chain as check errors; `where` as an ordinary identifier elsewhere and an
+effect in a `where` binding refused; `C0039` warnings for an effect inside `and_then` on a
+model-derived `Result` and after a `?` on one.
 
 ## Sequencing and file ownership
 
@@ -563,15 +872,16 @@ non-iterable; a hash test that the sugar and its desugared form hash identically
 | **P1** built-in-local | LV-4a, LV-6, LV-7 | stages 8 and 9 merged; runs beside 11a | `plist.rs`, `builtins/util.rs`, `builtins/list.rs`, `builtins/vec.rs`, `builtins/math.rs`, `tests/data3_limits.rs` | none: 10 and 11a do not touch these files (11a owns `control` and the machine) |
 | **P2** machine hot path | LV-1, LV-2, LV-3, LV-4b, LV-5 | stage 11a merged (10 and 11a rewrite `machine.rs`: frames, scheduler) | `machine.rs` (and a new `machine/fast.rs`), `prepare.rs`, `stack.rs`, `heap.rs`, `builtins.rs` (`Task` protocol), `builtins/list.rs`, `builtins/map.rs` | 11b (control, `par_fold`) also touches `machine.rs` and `builtins.rs`: land P2 before 11b starts, or after it merges, never both open |
 | **P2b** | LV-8 | P2 merged | `prepare.rs`, `machine.rs`, `plist.rs`, `pmap.rs` | as P2 |
-| **F** functional syntax | FS-1 to FS-3 (and any options chosen) | stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md` (one paragraph), `conformance/syntax/**`, `conformance/types/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
+| **D4** built-ins | R-2, R-3 (`res.*`, `opt.*`), FS-7 (`list.scan`, `zip_with`) | stages 8, 9 and C merged (C owns the checker's signatures); after P0 (both edit `data.md`) | `crates/ratio-eval/src/builtins/{res,opt}.rs` (new), `builtins/list.rs`, one new block in `builtins.rs`'s table, `crates/ratio-check/src/builtins.rs` (signatures), `conformance/builtins.txt`, `conformance/data/{res,opt}-*.ratio`, `spec/06-stdlib/data.md`, `spec/06-stdlib/README.md` | 11a adds control rows to `builtins.rs`'s table: a separate block, rebased by whichever lands second |
+| **F** functional syntax | FS-1 to FS-4, FS-6, R-4 to R-6 | D4 merged (the desugarings call `res.and_then` and `res.or_raise`); stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body,lint}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md`, `spec/06-stdlib/control.md`, `conformance/syntax/**`, `conformance/types/**`, `conformance/taint/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
 
-P1 and F can run in parallel with 11a; P2 is the only slice that waits for the scheduler. The
+P1, D4 and F can run in parallel with 11a; P2 is the only slice that waits for the scheduler. The
 deferred items (LV-9, LV-10) and the remaining options wait for stage 24's measurements.
 
 ## Open questions
 
-- **Q1 (scope of syntax).** Adopt FS-1 to FS-3 now, and which of FS-4 to FS-8 besides? My
-  recommendation: FS-1 to FS-3 now, FS-7 (`scan`, `zip_with`) with them, the rest not.
+Decided by the user: FS-1, FS-2, FS-3 and FS-7 (the former Q1). Remaining:
+
 - **Q2 (implicit flows in values).** Should an `if` or `match` *value* carry the labels of its
   condition or scrutinee? Then a comprehension's filter labels its result as `list.filter` does,
   and `if secret { a } else { b }` is labelled, at no cost to statements (assignments under a
@@ -580,3 +890,14 @@ deferred items (LV-9, LV-10) and the remaining options wait for stage 24's measu
 - **Q3 (calibration).** Agree that stage 24 calibrates the 64-units-per-step rate only after
   LV-1 to LV-3 land, since they widen the wall-time gap between interpreted and built-in steps
   from 4–8× to an *estimated* 10–20×?
+- **Q4 (typed errors).** Keep `Result<T>` with the fixed `Error` (recommended, R-1), or add
+  `Result<T, E = Error>` with `E` limited to user enums without function-typed fields?
+- **Q5 (`return` in chain blocks).** The chain's value is its final expression and `return`
+  keeps its Java meaning (recommended), or `return e` as the last statement of a chain block
+  means the chain's value, as in Haskell (B-5 shows the cost)?
+- **Q6 (`<-` spelling).** Bare `a <- f(x)` in `do` blocks, recognised by the adjacent `<-`
+  (recommended; the only previously valid text it changes, a statement `x<-y` directly in a `do`
+  block, now fails to check instead of changing meaning silently, and none exists in the corpus,
+  `std` or the spec), or the fully compatible `let a <- f(x)`?
+- **Q7 (FS-5, FS-10).** Adopt match-bodied functions and Java arrow lambdas as additive
+  spellings? Recommended: FS-5 yes if the user wants clause-style recursion, FS-10 not now.
