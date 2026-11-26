@@ -231,18 +231,62 @@ with empty bodies, `@pure` where chapter 06's Needs column is `pure`. A declarat
 `@pure` counts as effectful (of an unknown kind), so one added carelessly fails closed. Stage 5's
 attributes say the rest: `@audited(trust | as_task | declassify)`, `@effect(write | command |
 network | delegate | any_tool | model)`, `@tool(name)`, `@secrecy_sink`, `@schema(T)`, `@user`
-(the result is the person's answer), `@secret_answers`, `@loads` and `@local` (its effects keep
-its arguments on the machine: not a secrecy sink). A name that is a Ratio
-keyword is written with a trailing `_` (`meta.harness_`, `agents.spawn`'s `harness_`), which
-the checker drops. The type-parameter names `S`
-(any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,
-`Money`) carry chapter 06's bounds.
+(the result is the person's answer), `@secret_answers`, `@loads`, `@state` (the `state`
+built-ins, below) and `@local` (its effects keep its arguments on the machine: not a secrecy
+sink). A name that is a Ratio keyword is written with a trailing `_` (`meta.harness_`,
+`model.loop_`, `memory.search`'s `type_`), which the checker drops; such a parameter can be
+passed only by position. The same holds for the fields and variants of prelude types
+(`MemoryHit.type_` reads as `h.type`), though a program cannot write such a field in a record
+literal. The type-parameter names `S` (any text, normalised to `Str` or `Untrusted<Str>`) and
+`Num` (`Int`, `Float`, `Duration`, `Money`) carry chapter 06's bounds.
 
-**Scope cut**: the table is deliberately partial. It holds what the conformance programs use
-(`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
-`meta`, `agents`), a few dozen of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
-reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
-that does not exist (`C0001`).
+**Stage C (checker-complete).** The table has every built-in of `agents`, `context`, `control`
+(with `log`, `trace` and `state`), `eval`, `memory`, `meta`, `model`, `session`, `think` and
+`tools`, and of `rand` and `time` (their run time is stage 11b), with the types they need in
+the prelude (provisional where chapter 06 gives a record only in prose, chosen by chapter 03's
+effect rule). How the attributes were decided:
+
+- **Sinks.** Every built-in that sends its arguments off the machine, to another agent, to the
+  person or into persisted or published state is `@secrecy_sink`: the network, browser, MCP and
+  media tools, commands and scripts, writes, delegation, memory writes and searches (a search
+  may use a hosted embedding model), `eval` records, `session.notify`, `stream`, `emit`,
+  `checkpoint`, `branch` and `start`, extension installs and `meta.author`. Model calls are not
+  static sinks (chapter 03 allows a local model; the run-time labels decide), nor are logs and
+  traces (chapter 03 redacts them), but neither is `@local`, so a generic function reaching one
+  cannot be instantiated at a secret (`C0037`).
+- **`@local`** only where nothing a program gives reaches a model, the network, a command,
+  another agent or persisted state: engine and frame reads (`session.info`, `meta.frame`,
+  `context.messages`, `agents.status`), local reads (`tools.read_file`, `list_dir`, `glob`,
+  `grep`, `context.load`, `tools.load_skill`), `rand` and the clock, `retry`'s
+  waits and the user-facing conversions already reviewed (`trust`, `as_task`, `declassify`,
+  `session.ask`, `request_approval`).
+- **Effect kinds** feed the lint and `harnesses.check`: `tools.install_extension` is a write
+  that reaches the network under its own tool name (Imperium asks for every install);
+  `meta.author` a write under `write_harness`; `agents.merge`, memory writes, checkpoints and
+  rewinds writes; `session.start` delegation; `model.loop`, `tools.dispatch` and `dispatch_all`
+  any tool of the frame.
+- **Trusted parameters** stay instruction positions: rubrics, outcomes, a choice's options,
+  test commands, a new session's prompt, harness and package names, extension sources.
+- **`state`.** `state.get`, `set`, `update` and `reset` work at the package's declared `state`
+  type, found in its modules; never inferred or given (a turbofish is `C0015`, no declaration
+  `C0001`), and they may only be called, since a function value's expected type would choose
+  the type (`C0036`).
+- **Generics.** No signature turns untrusted text into trusted text: results built from a model
+  are `Untrusted<T>` (`model.extract`, `think.steps`), and `model.classify`'s label is
+  `Classified<Untrusted<E>>`, the trusted scalar chapter 06 promises for a unit-only enum and
+  untrusted text at any other type (stage 5's `Classified<E>` let `classify::<Str>` launder).
+  A type parameter that only omitted, defaulted parameters mention is `()` at that call
+  (`log.info("done")`'s `data: T?`), so nothing is guessed. Type parameters named `S` mean
+  text, so `think.tree_search` and its kin use `N` for their states.
+- **Optional callbacks** (`model.stream`'s and `model.loop`'s `until`) are declared
+  `fn(..) -> Bool = none`, since chapter 06's `(fn(..) -> Bool)?` is an option of a
+  one-element tuple; a closure where an optional function is expected is shaped by it.
+
+**Scope cut**: `json`, `list` and `map` are completed by stage 8 and `math` to `codec` by
+stage 9; `tests/signatures.rs` lists them as pending and checks everything else against
+`conformance/builtins.txt` (every built-in present, with chapter 06's parameter names, order
+and defaults). A standard name the table lacks is reported with its own code, `C0034` ("no
+signature yet"), so it is never confused with a name that does not exist (`C0001`).
 
 ## Bounds
 
@@ -323,10 +367,17 @@ refuses nesting beyond 12.
   file, each folder a package whose `main.ratio` imports the others by path. The entry's header
   says `check-ok`, or lists `check-error CODE at LINE:COL [in FILE]` and `check-warning …`
   lines, all of the checker's diagnostics in any order. Every code has a file.
+- `tests/signatures.rs`: the table against `conformance/builtins.txt`, by module, with the
+  modules stages 8 and 9 add listed as pending.
+- `conformance/taint/ok-module-*.ratio` use each module of stage C as a harness would;
+  `err-secret-stdlib-sinks`, `sink-stdlib-trusted-params` and `warn-model-guard-stdlib` refuse
+  secrets at its sinks, untrusted text at its trusted parameters, and show its guarded effects;
+  `conformance/types/err-state-*` and `err-launder-classify` close the laundering paths.
 - `tests/taint.rs`: schema and digest snapshots (fixed bytes, so the same on every platform),
   types without schemas, a doubling type refused quickly, trust sites listed transitively,
   the package summary, `harnesses_check` following loads through a registry (and incomplete for
-  a computed or missing name), and the lint and analysis on hostile bodies.
+  a computed or missing name) and listing extension installs and authored harnesses, and the
+  lint and analysis on hostile bodies.
 - `tests/taint_property.rs`: a fixed-seed generator of well-typed programs mixing untrusted
   sources, joins, generics, closures, `var`s and the conversions, with ground truth computed by
   data provenance; accepted programs never put untrusted text in an instruction position, a

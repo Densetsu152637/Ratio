@@ -179,6 +179,28 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   labelled values entering frames without `secrets`.
 - Status: pending
 
+## Stage C: checker-complete and the `ratio check` CLI
+
+- Requested by the user so the "Imperium Harnesses" session can write harnesses with full
+  static checking before the run time exists.
+- Depends on: 7 merged (built on stage 7's head; merges `origin/main` when stage 7 lands).
+  Runs beside stages 8, 9 and 10, which add their own modules' signatures.
+- Owned paths: the checker signatures of `agents`, `context`, `control` (with `log`, `trace`,
+  `state`), `eval`, `memory`, `meta`, `model`, `session`, `think`, `tools`, and of `rand` and
+  `time` (their run time is stage 11b), in `crates/ratio-check/src/builtins.rs` (one block per
+  module) and the prelude types they need; `crates/ratio-check/tests/signatures.rs`; a new
+  `crates/ratio-cli/**` (binary `ratio`); its conformance files in `conformance/types/` and
+  `conformance/taint/`.
+- Acceptance checks: every chapter 06 built-in outside `json`, `list`, `map` (stage 8) and
+  `math` to `codec` (stage 9) has a signature, proved against `conformance/builtins.txt`; one
+  accepted conformance file per new module, and rejected files for secrets at each new class of
+  sink, untrusted text at trusted parameters, and installs and harness loads in
+  `harnesses.check` and the guarded-effect lint; the chapter 09 examples check through
+  `ratio check` but for the stage 8 and 9 built-ins and listed errata; `ratio check [--json]`
+  with exit statuses 0, 1 and 2, `ratio --version` and `ratio help`, tested on the built
+  binary; `bash scripts/check-rust.sh` and `scripts/ci/check-links.py` clean.
+- Status: in progress (branch feat/wt-sC-checker).
+
 ## Stage 11: Host, tape and concurrency (security review)
 
 Split into two PRs (draft 0.9, chapter 10 rows 11a and 11b; design PC-1, PC-2, PC-3, PC-7 in 11a,

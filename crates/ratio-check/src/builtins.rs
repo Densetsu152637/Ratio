@@ -451,7 +451,7 @@ fn span<T>(name: Str, f: fn() -> T) -> T {}
         "memory",
         r"
 @tool(memory_search) @secrecy_sink fn search(query: Untrusted<Str>, scope: MemoryScope? = none, type_: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]> {}
-@tool(memory_read) @local fn read(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry> {}
+@tool(memory_read) fn read(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry> {}
 @effect(write) @tool(memory_remember) @secrecy_sink fn remember(entry: NewMemory) -> () {}
 @effect(write) @tool(memory_edit) @secrecy_sink fn edit(name: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>, scope: MemoryScope? = none) -> () {}
 @effect(write) @tool(memory_forget) @secrecy_sink fn forget(name: Untrusted<Str>, scope: MemoryScope? = none) -> () {}
