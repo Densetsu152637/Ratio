@@ -18,6 +18,20 @@ pub struct Module {
     pub span: Span,
 }
 
+impl Module {
+    /// The span-free S-expression of the tree (see [`crate::dump`]).
+    #[must_use]
+    pub fn sexpr(&self) -> String {
+        crate::dump::dump(self)
+    }
+
+    /// The canonical source text of the tree (see [`crate::print`]).
+    #[must_use]
+    pub fn to_source(&self) -> String {
+        crate::printer::print(self)
+    }
+}
+
 /// The file's `meta { … }` header.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Meta {
@@ -590,7 +604,10 @@ pub enum PatternKind {
     /// A bare name: a binding, or a variant of the scrutinee's enum (rule 6 decides later).
     Name(Ident),
     /// `name @ pattern`.
-    Bind { name: Ident, pattern: Box<Pattern> },
+    Bind {
+        name: Ident,
+        pattern: Box<Pattern>,
+    },
     /// A qualified variant (`Verdict.Fail`) or a variant with a payload (`Denied { by }`).
     Variant {
         path: Vec<Ident>,
@@ -643,9 +660,18 @@ pub enum SectionKind {
     System(Expr),
     Instruct(Expr),
     Task(Expr),
-    Data { value: Expr, label: Option<Expr> },
-    Image { value: Expr, label: Option<Expr> },
-    Example { input: Expr, output: Expr },
+    Data {
+        value: Expr,
+        label: Option<Expr>,
+    },
+    Image {
+        value: Expr,
+        label: Option<Expr>,
+    },
+    Example {
+        input: Expr,
+        output: Expr,
+    },
     Format(Type),
     Steps(Expr),
     Context(Expr),
