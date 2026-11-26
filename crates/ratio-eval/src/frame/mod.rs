@@ -25,8 +25,8 @@ pub(crate) mod stack;
 
 pub use config::Settings;
 pub use ledger::{
-    Admission, Amounts, Card, Ledgers, MIN_REPLY_TOKENS, ModelCall, NodeId, Prices, Refused,
-    Reservation,
+    Admission, Amounts, Card, LedgerError, Ledgers, MIN_REPLY_TOKENS, ModelCall, NodeId, Prices,
+    Refused, Reservation,
 };
 pub use meta::gate;
 pub use scope::{

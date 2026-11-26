@@ -205,20 +205,20 @@ impl ToolSet {
         ToolSet::default()
     }
 
+    /// The set of these patterns, without one another covers. Duplicates are dropped first,
+    /// so the work is quadratic in the distinct patterns only.
     #[must_use]
     pub fn of(pats: impl IntoIterator<Item = ToolPat>) -> ToolSet {
-        let all: Vec<ToolPat> = pats.into_iter().collect();
-        let mut out = BTreeSet::new();
-        for (i, p) in all.iter().enumerate() {
-            // Keep `p` unless another pattern covers it (of two equal ones, the first).
-            let covered = all
-                .iter()
-                .enumerate()
-                .any(|(j, q)| j != i && q.covers(p) && (!p.covers(q) || j < i));
-            if !covered {
-                out.insert(p.clone());
-            }
-        }
+        let all: Vec<ToolPat> = pats
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let out = all
+            .iter()
+            .filter(|p| !all.iter().any(|q| q != *p && q.covers(p)))
+            .cloned()
+            .collect();
         ToolSet(out)
     }
 
@@ -293,56 +293,101 @@ impl Rules {
     }
 }
 
-/// A folder, as normalised components (`/` and `\` separate them; a leading separator is a
-/// root component `/`). `..` is refused, so a folder never names anything outside itself by
-/// its text.
+/// The root an absolute folder hangs from. Different roots never contain each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Folder(Vec<Arc<str>>);
+pub enum Root {
+    /// `/` (a POSIX root, or a Windows path from the current drive's root).
+    Posix,
+    /// A Windows drive, by its letter in upper case (`C:` and `c:` are one root).
+    Drive(char),
+    /// A Windows UNC share, `//server/share`, lower-cased (UNC names ignore case).
+    Unc(Arc<str>, Arc<str>),
+}
+
+/// An absolute folder: a root and normalised components (`/` and `\` separate them).
+/// Relative folders, `.`, the empty path, `..`, drive-relative paths (`C:foo`) and components
+/// holding `:`, `*` or `?` are refused, so a folder never names anything outside itself by
+/// its text, and the engine (which resolves paths itself) can only refuse more.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Folder {
+    root: Root,
+    parts: Vec<Arc<str>>,
+}
+
+/// A name a folder may hold: not empty, `.` or `..`, and without `:`, `*`, `?` or NUL.
+fn plain_component(c: &str) -> bool {
+    !c.is_empty() && c != "." && c != ".." && !c.contains([':', '*', '?', '\0'])
+}
 
 impl Folder {
-    /// The folder `text` names, or `None` when it holds `..`, a NUL or is over 4096 bytes.
+    /// The absolute folder `text` names, or `None` (see [`Folder`]); at most 4096 bytes.
     #[must_use]
     pub fn parse(text: &str) -> Option<Folder> {
-        if text.len() > 4096 || text.contains('\0') {
+        if text.len() > 4096 {
             return None;
         }
+        let sep = ['/', '\\'];
+        let (root, rest) = if let Some(unc) = text
+            .strip_prefix("//")
+            .or_else(|| text.strip_prefix("\\\\"))
+            .or_else(|| text.strip_prefix("/\\"))
+            .or_else(|| text.strip_prefix("\\/"))
+        {
+            let mut it = unc.splitn(3, sep);
+            let server = it.next()?;
+            let share = it.next()?;
+            if !plain_component(server) || !plain_component(share) {
+                return None;
+            }
+            let root = Root::Unc(
+                Arc::from(server.to_lowercase()),
+                Arc::from(share.to_lowercase()),
+            );
+            (root, it.next().unwrap_or(""))
+        } else if let Some(rest) = text.strip_prefix(sep) {
+            (Root::Posix, rest)
+        } else {
+            let mut chars = text.chars();
+            let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+            let rest = chars.as_str().strip_prefix(':')?;
+            if !(rest.is_empty() || rest.starts_with(sep)) {
+                return None;
+            }
+            (Root::Drive(letter.to_ascii_uppercase()), rest)
+        };
         let mut parts = Vec::new();
-        if text.starts_with(['/', '\\']) {
-            parts.push(Arc::from("/"));
-        }
-        for c in text.split(['/', '\\']) {
+        for c in rest.split(sep) {
             match c {
                 "" | "." => {}
-                ".." => return None,
-                c => parts.push(Arc::from(c)),
+                c if plain_component(c) => parts.push(Arc::from(c)),
+                _ => return None,
             }
         }
-        Some(Folder(parts))
+        Some(Folder { root, parts })
     }
 
-    /// Whether `other` is this folder or inside it.
+    /// Whether `other` is this folder or inside it: the same root, and this folder's
+    /// components a prefix of its components (so `/a` does not contain `/ab`).
     #[must_use]
     pub fn contains(&self, other: &Folder) -> bool {
-        other.0.len() >= self.0.len() && other.0[..self.0.len()] == self.0[..]
+        self.root == other.root
+            && other.parts.len() >= self.parts.len()
+            && other.parts[..self.parts.len()] == self.parts[..]
     }
 }
 
 impl fmt::Display for Folder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for c in &self.0 {
-            if &**c == "/" {
-                f.write_str("/")?;
-                continue;
-            }
-            if !first {
-                f.write_str("/")?;
-            }
-            f.write_str(c)?;
-            first = false;
+        match &self.root {
+            Root::Posix => {}
+            Root::Drive(d) => write!(f, "{d}:")?,
+            Root::Unc(server, share) => write!(f, "//{server}/{share}")?,
         }
-        if self.0.is_empty() {
-            f.write_str(".")?;
+        for c in &self.parts {
+            write!(f, "/{c}")?;
+        }
+        if self.parts.is_empty() && !matches!(self.root, Root::Unc(..)) {
+            f.write_str("/")?;
         }
         Ok(())
     }
@@ -359,18 +404,32 @@ pub enum Paths {
 
 impl Paths {
     fn of(folders: impl IntoIterator<Item = Folder>) -> Paths {
-        let all: Vec<Folder> = folders.into_iter().collect();
-        let mut out = BTreeSet::new();
-        for (i, f) in all.iter().enumerate() {
-            let covered = all
-                .iter()
-                .enumerate()
-                .any(|(j, g)| j != i && g.contains(f) && (g != f || j < i));
-            if !covered {
-                out.insert(f.clone());
-            }
-        }
+        let all: Vec<Folder> = folders
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let out = all
+            .iter()
+            .filter(|f| !all.iter().any(|g| g != *f && g.contains(f)))
+            .cloned()
+            .collect();
         Paths::Within(out)
+    }
+
+    /// How many folders (0 for `Any`).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Paths::Any => 0,
+            Paths::Within(f) => f.len(),
+        }
+    }
+
+    /// Whether no folder is listed (`Any` included).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// The folders within both.
@@ -964,7 +1023,9 @@ fn main_allowed(parent: &Scope, kind: FrameKind) -> bool {
 /// Whether `child`, a frame of `kind`, is within `parent` in every dimension: the check a host
 /// repeats when a frame opens. Pass as `parent` the host's own record of the parent frame
 /// (with its budget caps lowered to what its ledgers have left, for the tighter check), never
-/// a scope the interpreter supplied.
+/// a scope the interpreter supplied. Take `kind`, and the depth `parent.depth` the check
+/// compares against, from that record too, never from the `FrameCtx` the interpreter passes:
+/// a forged `kind` (`Block` for a harness call) or depth would skip the depth check.
 ///
 /// # Errors
 ///

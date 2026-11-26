@@ -35,14 +35,21 @@ pub(crate) struct StdModule {
 
 /// The built-in sources, parsed once per check.
 pub(crate) fn std_modules(internal: &mut Vec<String>) -> Vec<StdModule> {
-    let mut all = Vec::with_capacity(builtins::MODULES.len() + 1);
-    // A module may be given in more than one table (the frames block adds to `control`,
-    // `meta` and the prelude): its sources are joined, in table order.
-    let mut sources: Vec<(&'static str, String)> = Vec::new();
     let tables = std::iter::once(("prelude", builtins::PRELUDE))
         .chain(builtins::MODULES.iter().copied())
         .chain(std::iter::once(("prelude", builtins::FRAME_PRELUDE)))
         .chain(builtins::FRAME_MODULES.iter().copied());
+    std_modules_from(tables, internal)
+}
+
+/// The modules of these tables. A module may be given in more than one table (the frames
+/// block adds to `control`, `meta` and the prelude): its sources are joined, in table order.
+pub(crate) fn std_modules_from(
+    tables: impl Iterator<Item = (&'static str, &'static str)>,
+    internal: &mut Vec<String>,
+) -> Vec<StdModule> {
+    let mut all = Vec::with_capacity(builtins::MODULES.len() + 1);
+    let mut sources: Vec<(&'static str, String)> = Vec::new();
     for (name, source) in tables {
         match sources.iter_mut().find(|(n, _)| *n == name) {
             Some((_, text)) => {
@@ -54,6 +61,7 @@ pub(crate) fn std_modules(internal: &mut Vec<String>) -> Vec<StdModule> {
     }
     for (name, source) in &sources {
         let name = *name;
+        let module_name = name;
         let parsed = ratio_syntax::parse(source);
         for d in &parsed.diagnostics {
             internal.push(format!("built-in `{name}`: {d:?}"));
@@ -62,7 +70,13 @@ pub(crate) fn std_modules(internal: &mut Vec<String>) -> Vec<StdModule> {
         for (index, item) in parsed.module.items.iter().enumerate() {
             if let Some(ident) = item_name(&item.kind) {
                 let name = builtins::builtin_name(&ident.name).to_owned();
-                scope.entry(name).or_insert(index);
+                // A name given twice (in one table, or in two joined ones) is an error in the
+                // tables, never a silent choice of one.
+                if scope.insert(name.clone(), index).is_some() {
+                    internal.push(format!(
+                        "built-in `{name}` is declared twice in `{module_name}`"
+                    ));
+                }
             }
         }
         all.push(StdModule {
@@ -1082,5 +1096,29 @@ impl ModRef {
             ModRef::Std(s) => Some(Origin::Std(s)),
             ModRef::Missing(_) | ModRef::Broken => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{std_modules, std_modules_from};
+
+    #[test]
+    fn a_built_in_declared_twice_in_joined_tables_is_an_error() {
+        let mut internal = Vec::new();
+        let tables = [
+            ("meta", "@local fn depth() -> Int {}"),
+            ("meta", "@local fn depth() -> Int {}"),
+        ];
+        let _ = std_modules_from(tables.into_iter(), &mut internal);
+        assert_eq!(internal.len(), 1, "{internal:?}");
+        assert!(internal[0].contains("declared twice"));
+    }
+
+    #[test]
+    fn the_real_tables_have_no_duplicates() {
+        let mut internal = Vec::new();
+        let _ = std_modules(&mut internal);
+        assert!(internal.is_empty(), "{internal:?}");
     }
 }

@@ -378,8 +378,6 @@ struct Opening {
     loc: Loc,
     site: u32,
     overrides: Option<Value>,
-    /// Whether any argument is labelled (refused unless the frame sees `secrets`).
-    labelled: bool,
 }
 
 #[derive(Debug)]
@@ -417,6 +415,8 @@ pub struct Machine {
     pending_override: Option<Value>,
     /// The site of the call being made (for frame paths).
     site_hint: u32,
+    /// Harness calls between binding their arguments and opening their frames.
+    opening: u32,
 }
 
 /// Why an evaluation could not start.
@@ -504,6 +504,7 @@ impl Machine {
             frames: FrameStack::new(session, limits.steps),
             pending_override: None,
             site_hint: 0,
+            opening: 0,
         };
         let mut given: Vec<Option<Value>> = args.into_iter().map(Some).collect();
         given.resize(m.p.funcs[func as usize].params.len(), None);
@@ -896,17 +897,16 @@ impl Machine {
         self.envs.push(Env { slots });
         self.ctl.push(K::CallRet);
         if f.kind == FuncKind::Harness {
-            let labelled = args
-                .iter()
-                .flatten()
-                .any(|v| crate::sink::check(v).is_err());
+            // From here until the frame opens, the defaults and the declared configuration
+            // run: effect-free (the checker refuses effects there), and refused at run time
+            // too (`opening`).
+            self.opening = self.opening.saturating_add(1);
             self.ctl.push(K::Open(Box::new(Opening {
                 func,
                 kind,
                 loc,
                 site: self.site_hint,
                 overrides,
-                labelled,
             })));
         }
         self.bind_params(func, 0, args, loc);
@@ -956,7 +956,10 @@ impl Machine {
             return;
         }
         match self.ctl.pop() {
-            Some(K::Open(o)) => self.open_harness(&o, None),
+            Some(K::Open(o)) => {
+                self.opening = self.opening.saturating_sub(1);
+                self.open_harness(&o, None);
+            }
             _ => self.invalid(
                 "a harness call lost its frame",
                 Labels::NONE,
@@ -1154,6 +1157,12 @@ impl Machine {
         match &n.kind {
             PKind::Const(v) | PKind::ToolName(v) => self.mode = Mode::Ret(v.clone()),
             PKind::Local(s) => match self.get(*s) {
+                // A frame without `secrets` (a `with` block that dropped it) cannot read a
+                // secret its enclosing scope holds.
+                Some(v) if self.refuses_secret(&v) => {
+                    let e = self.sees_refusal("a secret local was read");
+                    self.fail(e);
+                }
                 Some(v) => self.mode = Mode::Ret(v),
                 None => self.invalid("a local slot out of range", Labels::NONE, loc),
             },
@@ -2005,6 +2014,19 @@ impl Machine {
             }
             PKind::Effect { name, order, .. } => {
                 let args = arrange(order, vals);
+                if self.opening > 0 {
+                    let e = raise(
+                        &p,
+                        Kind::Invalid,
+                        &format!(
+                            "`{name}` in a harness's parameter defaults or configuration, \
+                             which run before its frame opens and must be effect-free"
+                        ),
+                        Labels::NONE,
+                        loc,
+                    );
+                    return self.fail(e);
+                }
                 if crate::frame::meta::answers(name) {
                     let limit = self.limits.heap;
                     match crate::frame::meta::answer(&p, &heap, &self.frames, limit, name) {
@@ -2349,7 +2371,10 @@ impl Machine {
                 self.depth = self.depth.saturating_sub(1);
                 self.mode = Mode::Ret(v);
             }
-            K::Open(o) => self.open_harness(&o, Some(&v)),
+            K::Open(o) => {
+                self.opening = self.opening.saturating_sub(1);
+                self.open_harness(&o, Some(&v));
+            }
             K::WithCfg(node) => self.open_block(node, &v),
             K::Override { node, f, args } => {
                 self.pending_override = Some(v);
@@ -2901,6 +2926,7 @@ impl Machine {
                 K::PromptRoot => {
                     self.prompts.pop();
                 }
+                K::Open(_) => self.opening = self.opening.saturating_sub(1),
                 _ => {}
             }
         }
@@ -2912,9 +2938,39 @@ impl Machine {
 
     // ---- frames (stage 10) ----
 
-    /// Whether `v` holds a secret and the current frame's `sees` lacks `secrets`.
+    /// Whether `v` holds a secret and the current frame's `sees` lacks `secrets`. A clear
+    /// summary passes in O(1); a set one falls back to the leaf scan.
     fn refuses_secret(&self, v: &Value) -> bool {
-        !self.frames.top().ctx.scope.sees.has(SeesItem::Secrets) && crate::sink::check(v).is_err()
+        !self.frames.top().ctx.scope.sees.has(SeesItem::Secrets)
+            && !v.quick().is_empty()
+            && !v.scan().is_empty()
+    }
+
+    /// Whether anything a new frame received (its bound parameters, configuration values and
+    /// settings) holds a secret its `sees` does not allow.
+    fn frame_refuses(&self, values: &[Option<&Value>], settings: bool, params: bool) -> bool {
+        if self.frames.top().ctx.scope.sees.has(SeesItem::Secrets) {
+            return false;
+        }
+        let s = &self.frames.top().ctx.settings;
+        let from_settings = settings
+            && [
+                &s.model,
+                &s.effort,
+                &s.thinking,
+                &s.sampling,
+                &s.system,
+                &s.title,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|v| self.refuses_secret(v));
+        let from_params = params
+            && self
+                .envs
+                .last()
+                .is_some_and(|e| e.slots.iter().any(|slot| self.refuses_secret(&slot.value)));
+        from_settings || from_params || values.iter().flatten().any(|v| self.refuses_secret(v))
     }
 
     fn sees_refusal(&self, what: &str) -> RtError {
@@ -2963,6 +3019,13 @@ impl Machine {
         site: u32,
         loc: Loc,
     ) -> bool {
+        // The meets are charged for the work they do (bounded by the configuration's list
+        // limits, chapter 07).
+        let work = self.frames.open_work(&request);
+        if let Err(e) = self.charge(steps_for(work), loc) {
+            self.fail(e);
+            return false;
+        }
         match self
             .frames
             .open(self.steps, kind, &request, settings, name, site, loc)
@@ -3025,9 +3088,11 @@ impl Machine {
         if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc) {
             return;
         }
-        if o.labelled && !self.frames.top().ctx.scope.sees.has(SeesItem::Secrets) {
+        // Every parameter (given or defaulted), every configuration value and the settings
+        // the frame inherited are what it receives: none may be a secret it may not see.
+        if self.frame_refuses(&[declared, o.overrides.as_ref()], true, true) {
             self.frames.close(self.steps);
-            let e = self.sees_refusal("a secret argument was passed");
+            let e = self.sees_refusal("a secret argument, setting or configuration value went");
             return self.fail(e);
         }
         self.ctl.push(K::FrameClose);
@@ -3045,6 +3110,11 @@ impl Machine {
             return;
         };
         if self.open_frame(FrameKind::Block, config, &Arc::from("with"), n.site, n.loc) {
+            if self.frame_refuses(&[Some(cfg)], true, false) {
+                self.frames.close(self.steps);
+                let e = self.sees_refusal("a secret setting or configuration value went");
+                return self.fail(e);
+            }
             self.ctl.push(K::FrameClose);
             self.mode = Mode::Eval(body);
         }

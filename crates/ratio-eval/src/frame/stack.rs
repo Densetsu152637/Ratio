@@ -185,6 +185,27 @@ impl FrameStack {
             .unwrap_or(0);
     }
 
+    /// The work opening a frame with `request` does over the top frame: the meets of tools
+    /// and paths (pairwise, then the cover filter over the result) and the rules copied.
+    pub(crate) fn open_work(&self, request: &Request) -> u64 {
+        let s = &self.top().ctx.scope;
+        let n = |x: usize| x as u64;
+        let (pt, pp) = (n(s.tools.len()), n(s.paths.len()));
+        let rt = request
+            .tools
+            .as_ref()
+            .map_or(0, |t| n(t.need.len() + t.want.len()));
+        let rp = request.paths.as_ref().map_or(0, |p| n(p.len()));
+        let rules = n(s.rules.allow.len() + s.rules.ask.len() + s.rules.deny.len())
+            .saturating_add(n(request.deny.len() + request.ask.len()));
+        let square = |x: u64| x.saturating_mul(x);
+        rt.saturating_mul(pt)
+            .saturating_add(square(rt.saturating_add(pt)))
+            .saturating_add(rp.saturating_mul(pp))
+            .saturating_add(square(rp.saturating_add(pp)))
+            .saturating_add(rules)
+    }
+
     /// Opens a frame of `kind` over the top frame with `request`; `site` is the call site
     /// (or the block's) and `name` the harness's.
     #[allow(
@@ -238,7 +259,13 @@ impl FrameStack {
                 top.branch_prefix()
             ))
         };
-        let node = self.ledgers.open(parent_node, scope.budget, scope.width);
+        let Some(node) = self.ledgers.open(parent_node, scope.budget, scope.width) else {
+            return Err(refuse(Refusal {
+                depth: false,
+                dimension: super::scope::Dimension::Budget(BudgetKind::Steps),
+                message: "the caller's ledger is closed".to_owned(),
+            }));
+        };
         // Every setting left out is inherited from the caller, except a harness's title,
         // which defaults to its name (chapter 04).
         let settings = match kind {

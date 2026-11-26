@@ -3,10 +3,12 @@
 //! and concurrent admissions that never overspend a cap, in a frame or in a child frame with a
 //! lower cap, under deterministic interleavings and under real threads.
 
+use std::sync::Arc;
 use std::thread;
 
 use ratio_eval::frame::{
-    Admission, Amounts, BudgetKind, Caps, Card, Ledgers, ModelCall, NodeId, Prices, Refused,
+    Admission, Amounts, BudgetKind, Caps, Card, LedgerError, Ledgers, ModelCall, NodeId, Prices,
+    Refused,
 };
 
 struct Rng(u64);
@@ -59,7 +61,7 @@ fn the_max_tokens_sent_follows_the_formula() {
     for seed in 1..=5_000u64 {
         let mut r = Rng(seed);
         let (ledgers, root) = Ledgers::new(tokens(5_000 + r.below(50_000)), 16);
-        let child = ledgers.open(root, tokens(r.below(20_000)), 16);
+        let child = ledgers.open(root, tokens(r.below(20_000)), 16).unwrap();
         // Some spend and some held reservations first.
         let mut held = Vec::new();
         for _ in 0..r.below(4) {
@@ -70,14 +72,18 @@ fn the_max_tokens_sent_follows_the_formula() {
             }
         }
         if let Some(first) = held.pop() {
-            assert!(ledgers.complete(
-                &first,
-                Amounts {
-                    tokens: first.held.tokens / 2,
-                    model_calls: 1,
-                    ..Amounts::default()
-                }
-            ));
+            assert!(
+                ledgers
+                    .complete(
+                        &first,
+                        Amounts {
+                            tokens: first.held.tokens / 2,
+                            model_calls: 1,
+                            ..Amounts::default()
+                        }
+                    )
+                    .is_ok()
+            );
         }
         let input = r.below(3_000);
         let requested = (r.below(3) > 0).then(|| 1 + r.below(8_000));
@@ -110,10 +116,10 @@ fn the_max_tokens_sent_follows_the_formula() {
                 assert_eq!(res.max_tokens, Some(e), "seed {seed}");
                 assert_eq!(res.held.tokens, input + e, "seed {seed}");
             }
-            (Some(e), Admission::Wait) => {
+            (Some(e), Admission::Wait { .. }) => {
                 assert!(e < floor && ledgers.held() > 0, "seed {seed}");
             }
-            (None, Admission::Wait) => assert!(ledgers.held() > 0, "seed {seed}"),
+            (None, Admission::Wait { .. }) => assert!(ledgers.held() > 0, "seed {seed}"),
             (Some(e), Admission::Refused(f)) => {
                 assert!(e < floor && ledgers.held() == 0, "seed {seed}");
                 assert_eq!(f.which, BudgetKind::Tokens);
@@ -149,28 +155,40 @@ fn below_the_floor_an_admission_waits_for_a_held_reservation_and_is_refused_with
     // A sibling holds 100 + 800.
     let sibling = admitted(ledgers.admit_model(root, &call(100, Some(800))));
     // 1,000 − 900 − 50 = 50 tokens of room: below the floor of 256, and a reservation is held.
-    assert_eq!(ledgers.admit_model(root, &call(50, None)), Admission::Wait);
-    let before = ledgers.releases();
+    let Admission::Wait { epoch, node } = ledgers.admit_model(root, &call(50, None)) else {
+        panic!("expected a wait");
+    };
+    assert_eq!(node, root);
+    assert_eq!(epoch, ledgers.releases());
     // The sibling completes having used 100 + 300.
-    assert!(ledgers.complete(
-        &sibling,
-        Amounts {
-            tokens: 400,
-            model_calls: 1,
-            ..Amounts::default()
-        }
-    ));
-    assert!(ledgers.releases() > before);
+    assert!(
+        ledgers
+            .complete(
+                &sibling,
+                Amounts {
+                    tokens: 400,
+                    model_calls: 1,
+                    ..Amounts::default()
+                }
+            )
+            .is_ok()
+    );
+    // The epoch moved: a waiter that read it before the release retries at once.
+    assert_ne!(ledgers.wait_for_release(epoch), epoch);
     let res = admitted(ledgers.admit_model(root, &call(50, None)));
     assert_eq!(res.max_tokens, Some(550));
-    assert!(ledgers.complete(
-        &res,
-        Amounts {
-            tokens: 600,
-            model_calls: 1,
-            ..Amounts::default()
-        }
-    ));
+    assert!(
+        ledgers
+            .complete(
+                &res,
+                Amounts {
+                    tokens: 600,
+                    model_calls: 1,
+                    ..Amounts::default()
+                }
+            )
+            .is_ok()
+    );
     // Nothing held now, and 0 tokens of room: refused, naming the ledger.
     assert_eq!(
         ledgers.admit_model(root, &call(0, None)),
@@ -207,19 +225,19 @@ fn an_unpriced_hosted_model_is_refused_under_any_cost_cap() {
     // The cap on the session's ledger, on the frame's, or on an ancestor's.
     for (root_caps, frame_caps) in [(cost, Caps::NONE), (Caps::NONE, cost)] {
         let (ledgers, root) = Ledgers::new(root_caps, 16);
-        let mid = ledgers.open(root, frame_caps, 16);
-        let leaf = ledgers.open(mid, Caps::NONE, 16);
+        let mid = ledgers.open(root, frame_caps, 16).unwrap();
+        let leaf = ledgers.open(mid, Caps::NONE, 16).unwrap();
         match ledgers.admit_model(leaf, &unpriced(false)) {
             Admission::Refused(f) => assert_eq!(f.which, BudgetKind::Cost),
             other => panic!("expected a cost refusal, got {other:?}"),
         }
         // A local model prices at zero; a configured price of 0 counts as priced.
-        admitted(ledgers.admit_model(leaf, &unpriced(true)));
-        admitted(ledgers.admit_model(leaf, &call(10, Some(10))));
+        let _ = admitted(ledgers.admit_model(leaf, &unpriced(true)));
+        let _ = admitted(ledgers.admit_model(leaf, &call(10, Some(10))));
     }
     // Without any cost cap, an unpriced model is admitted.
     let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
-    admitted(ledgers.admit_model(root, &unpriced(false)));
+    let _ = admitted(ledgers.admit_model(root, &unpriced(false)));
 }
 
 #[test]
@@ -299,9 +317,9 @@ fn concurrent_model_calls_never_exceed_a_token_cap_under_any_interleaving() {
         );
         // Child frames with lower caps (and a grandchild), as `with { budget }` and harness
         // calls make them.
-        let low = ledgers.open(root, tokens(r.below(6_000)), 16);
-        let mid = ledgers.open(root, Caps::NONE, 16);
-        let lower = ledgers.open(mid, tokens(r.below(3_000)), 16);
+        let low = ledgers.open(root, tokens(r.below(6_000)), 16).unwrap();
+        let mid = ledgers.open(root, Caps::NONE, 16).unwrap();
+        let lower = ledgers.open(mid, tokens(r.below(3_000)), 16).unwrap();
         let nodes = [root, low, mid, lower];
         let mut branches: Vec<Branch> = (0..2 + r.below(6))
             .map(|_| Branch {
@@ -328,7 +346,7 @@ fn concurrent_model_calls_never_exceed_a_token_cap_under_any_interleaving() {
                     model_calls: 1,
                     ..Amounts::default()
                 };
-                assert!(ledgers.complete(&res, actual));
+                assert!(ledgers.complete(&res, actual).is_ok());
                 br.left -= 1;
             } else if br.left > 0 {
                 let mut c = call(
@@ -339,12 +357,20 @@ fn concurrent_model_calls_never_exceed_a_token_cap_under_any_interleaving() {
                 c.min_reply = r.below(400);
                 match ledgers.admit_model(br.node, &c) {
                     Admission::Admitted(res) => br.holding = Some(res),
-                    Admission::Wait => {
+                    Admission::Wait { epoch, node } => {
                         br.waits += 1;
-                        assert!(ledgers.held() > 0, "seed {seed}: waits with nothing held");
+                        assert!(
+                            ledgers.held_on(node) > 0,
+                            "seed {seed}: waits on nothing held"
+                        );
+                        assert_eq!(epoch, ledgers.releases());
                     }
-                    Admission::Refused(_) => {
-                        assert_eq!(ledgers.held(), 0, "seed {seed}: refused while held");
+                    Admission::Refused(f) => {
+                        assert_eq!(
+                            ledgers.held_on(f.node),
+                            0,
+                            "seed {seed}: refused while the binding ledger held reservations"
+                        );
                         br.refused += 1;
                         br.left -= 1;
                     }
@@ -369,7 +395,7 @@ fn concurrent_model_calls_never_exceed_a_token_cap_under_any_interleaving() {
 #[test]
 fn concurrent_model_calls_on_threads_never_exceed_any_cap() {
     let (ledgers, root) = Ledgers::new(tokens(200_000), 16);
-    let child = ledgers.open(root, tokens(30_000), 16);
+    let child = ledgers.open(root, tokens(30_000), 16).unwrap();
     let nodes = [root, child];
     let mut handles = Vec::new();
     for t in 0..8u64 {
@@ -386,17 +412,25 @@ fn concurrent_model_calls_on_threads_never_exceed_any_cap() {
                         let out = r.below(res.max_tokens.unwrap_or(0) + 1);
                         let input = res.held.tokens - res.max_tokens.unwrap_or(0);
                         thread::yield_now();
-                        assert!(ledgers.complete(
-                            &res,
-                            Amounts {
-                                tokens: input + out,
-                                model_calls: 1,
-                                ..Amounts::default()
-                            }
-                        ));
+                        assert!(
+                            ledgers
+                                .complete(
+                                    &res,
+                                    Amounts {
+                                        tokens: input + out,
+                                        model_calls: 1,
+                                        ..Amounts::default()
+                                    }
+                                )
+                                .is_ok()
+                        );
                         done += 1;
                     }
-                    Admission::Wait => thread::yield_now(),
+                    // Blocks until a release; one between the admission and the wait is not
+                    // lost, so this never hangs.
+                    Admission::Wait { epoch, .. } => {
+                        ledgers.wait_for_release(epoch);
+                    }
                     Admission::Refused(_) => done += 1,
                 }
             }
@@ -430,14 +464,16 @@ fn tool_calls_steps_and_width_are_ledgers_too() {
         },
         2,
     );
-    let child = ledgers.open(
-        root,
-        Caps {
-            steps: Some(30),
-            ..Caps::NONE
-        },
-        1,
-    );
+    let child = ledgers
+        .open(
+            root,
+            Caps {
+                steps: Some(30),
+                ..Caps::NONE
+            },
+            1,
+        )
+        .unwrap();
     let t1 = ledgers.admit_tool(child).unwrap();
     let _t2 = ledgers.admit_tool(root).unwrap();
     assert_eq!(
@@ -447,9 +483,13 @@ fn tool_calls_steps_and_width_are_ledgers_too() {
             node: root
         })
     );
-    assert!(ledgers.cancel(&t1));
-    assert!(!ledgers.cancel(&t1), "a reservation is given back once");
-    ledgers.admit_tool(child).unwrap();
+    assert!(ledgers.cancel(&t1).is_ok());
+    assert_eq!(
+        ledgers.cancel(&t1),
+        Err(LedgerError::Released),
+        "a reservation is given back once"
+    );
+    let _ = ledgers.admit_tool(child).unwrap();
     // Steps: the child's own cap binds first.
     ledgers.debit_steps(child, 30).unwrap();
     assert_eq!(
@@ -475,7 +515,7 @@ fn tool_calls_steps_and_width_are_ledgers_too() {
 #[test]
 fn a_closed_frame_admits_nothing_and_its_held_reservations_stay_on_its_ancestors() {
     let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
-    let child = ledgers.open(root, tokens(500), 16);
+    let child = ledgers.open(root, tokens(500), 16).unwrap();
     let res = admitted(ledgers.admit_model(child, &call(10, Some(100))));
     ledgers.close(child);
     assert!(matches!(
@@ -483,14 +523,18 @@ fn a_closed_frame_admits_nothing_and_its_held_reservations_stay_on_its_ancestors
         Admission::Refused(_)
     ));
     assert_eq!(ledgers.reserved(root).tokens, 110);
-    assert!(ledgers.complete(
-        &res,
-        Amounts {
-            tokens: 60,
-            model_calls: 1,
-            ..Amounts::default()
-        }
-    ));
+    assert!(
+        ledgers
+            .complete(
+                &res,
+                Amounts {
+                    tokens: 60,
+                    model_calls: 1,
+                    ..Amounts::default()
+                }
+            )
+            .is_ok()
+    );
     assert_eq!(ledgers.spent(root).tokens, 60);
     assert_eq!(ledgers.reserved(root).tokens, 0);
 }
@@ -499,14 +543,18 @@ fn a_closed_frame_admits_nothing_and_its_held_reservations_stay_on_its_ancestors
 fn overflowing_amounts_only_ever_refuse() {
     let (ledgers, root) = Ledgers::new(tokens(u64::MAX), 16);
     let res = admitted(ledgers.admit_model(root, &call(u64::MAX - 1_000, None)));
-    assert!(ledgers.complete(
-        &res,
-        Amounts {
-            tokens: u64::MAX,
-            model_calls: 1,
-            ..Amounts::default()
-        }
-    ));
+    assert!(
+        ledgers
+            .complete(
+                &res,
+                Amounts {
+                    tokens: u64::MAX,
+                    model_calls: 1,
+                    ..Amounts::default()
+                }
+            )
+            .is_ok()
+    );
     assert!(matches!(
         ledgers.admit_model(root, &call(1, Some(1))),
         Admission::Refused(_)
@@ -528,4 +576,162 @@ fn overflowing_amounts_only_ever_refuse() {
         ledgers.admit_model(root, &c),
         Admission::Refused(_)
     ));
+}
+
+#[test]
+fn a_reservation_is_given_back_once_and_only_to_its_own_tree() {
+    let (a, root_a) = Ledgers::new(tokens(1_000), 16);
+    let (b, _) = Ledgers::new(tokens(1_000), 16);
+    let res = admitted(a.admit_model(root_a, &call(10, Some(10))));
+    assert_eq!(
+        b.complete(&res, Amounts::default()),
+        Err(LedgerError::WrongTree)
+    );
+    assert_eq!(b.cancel(&res), Err(LedgerError::WrongTree));
+    assert_eq!(a.held(), 1, "the wrong tree's call changed nothing");
+    assert!(a.complete(&res, Amounts::default()).is_ok());
+    assert_eq!(
+        a.complete(&res, Amounts::default()),
+        Err(LedgerError::Released)
+    );
+    assert_eq!(a.cancel(&res), Err(LedgerError::Released));
+}
+
+#[test]
+fn an_overshoot_is_charged_and_returned() {
+    let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
+    let res = admitted(ledgers.admit_model(root, &call(100, Some(300))));
+    let over = ledgers
+        .complete(
+            &res,
+            Amounts {
+                tokens: 450,
+                model_calls: 1,
+                ..Amounts::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(over.tokens, 50);
+    assert_eq!(ledgers.spent(root).tokens, 450);
+    assert_eq!(ledgers.remaining(root).tokens, Some(550));
+}
+
+#[test]
+fn an_admission_waits_only_for_reservations_on_the_ledger_that_binds() {
+    // Root uncapped; frame `a` has 300 tokens; a sibling frame `b` holds a reservation.
+    let (ledgers, root) = Ledgers::new(Caps::NONE, 16);
+    let a = ledgers.open(root, tokens(300), 16).unwrap();
+    let b = ledgers.open(root, Caps::NONE, 16).unwrap();
+    let held = admitted(ledgers.admit_model(b, &call(100, Some(100))));
+    // `a` alone binds, and nothing is held there: a release in `b` cannot help, so refused.
+    assert_eq!(
+        ledgers.admit_model(a, &call(200, None)),
+        Admission::Refused(Refused {
+            which: BudgetKind::Tokens,
+            node: a
+        })
+    );
+    // The input alone uncovered in `a`: refused too, not a wait on `b`.
+    assert!(matches!(
+        ledgers.admit_model(a, &call(400, Some(1))),
+        Admission::Refused(Refused {
+            which: BudgetKind::Tokens,
+            ..
+        })
+    ));
+    // With a reservation held on `a` itself, the same admission waits on `a`.
+    let in_a = admitted(ledgers.admit_model(a, &call(10, Some(1))));
+    assert!(matches!(
+        ledgers.admit_model(a, &call(200, None)),
+        Admission::Wait { node, .. } if node == a
+    ));
+    assert!(ledgers.cancel(&in_a).is_ok());
+    assert!(ledgers.cancel(&held).is_ok());
+}
+
+#[test]
+fn a_waiter_registered_or_blocked_sees_every_release() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Wake, Waker};
+    struct Flag(AtomicBool);
+    impl Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
+    let first = admitted(ledgers.admit_model(root, &call(100, Some(800))));
+    let Admission::Wait { epoch, .. } = ledgers.admit_model(root, &call(50, None)) else {
+        panic!("expected a wait");
+    };
+    let flag = Arc::new(Flag(AtomicBool::new(false)));
+    let waker = Waker::from(Arc::clone(&flag));
+    assert!(ledgers.register_waker(epoch, &waker));
+    // The release happens on another thread before the blocked wait starts.
+    let other = ledgers.clone();
+    thread::spawn(move || assert!(other.cancel(&first).is_ok()))
+        .join()
+        .unwrap();
+    assert!(
+        flag.0.load(Ordering::SeqCst),
+        "the registered waker was woken"
+    );
+    assert_ne!(ledgers.wait_for_release(epoch), epoch, "no lost wakeup");
+    assert!(
+        !ledgers.register_waker(epoch, &waker),
+        "the epoch already moved"
+    );
+}
+
+#[test]
+fn closed_frames_admit_and_open_nothing_below_them() {
+    let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
+    let mid = ledgers.open(root, Caps::NONE, 16).unwrap();
+    let leaf = ledgers.open(mid, Caps::NONE, 16).unwrap();
+    ledgers.close(mid);
+    assert!(ledgers.open(mid, Caps::NONE, 16).is_none());
+    assert!(
+        ledgers.open(leaf, Caps::NONE, 16).is_none(),
+        "an ancestor is closed"
+    );
+    assert!(ledgers.admit_tool(leaf).is_err());
+    assert!(matches!(
+        ledgers.admit_model(leaf, &call(1, Some(1))),
+        Admission::Refused(_)
+    ));
+}
+
+#[test]
+fn closed_nodes_are_freed_and_stale_ids_name_nothing() {
+    let (ledgers, root) = Ledgers::new(tokens(1_000_000), 16);
+    let first = ledgers.open(root, tokens(5), 16).unwrap();
+    ledgers.close(first);
+    for _ in 0..10_000 {
+        let n = ledgers.open(root, tokens(5), 16).unwrap();
+        ledgers.debit_steps(n, 1).unwrap();
+        ledgers.close(n);
+    }
+    assert!(ledgers.slots() <= 3, "{} slots", ledgers.slots());
+    // The first id's slot was reused under another generation: the stale id is refused.
+    assert_eq!(ledgers.caps(first), Caps::NONE);
+    assert!(ledgers.admit_tool(first).is_err());
+    assert_eq!(ledgers.spent(root).steps, 10_000);
+    // A node with a held reservation is kept until it completes.
+    let n = ledgers.open(root, Caps::NONE, 16).unwrap();
+    let res = ledgers.admit_tool(n).unwrap();
+    ledgers.close(n);
+    assert_eq!(ledgers.held_on(n), 1);
+    assert!(
+        ledgers
+            .complete(
+                &res,
+                Amounts {
+                    tool_calls: 1,
+                    ..Amounts::default()
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(ledgers.held_on(n), 0);
+    assert_eq!(ledgers.spent(root).tool_calls, 1);
 }

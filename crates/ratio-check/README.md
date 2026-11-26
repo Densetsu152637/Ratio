@@ -243,7 +243,11 @@ adds `question` to `control`, `meta.frame`, `meta.caller`, `meta.depth`, `meta.l
 `meta.permissions`, and the provisional types they return (`FrameInfo`, `CallerInfo`,
 `FrameLimits`, `PermissionView`, `Rule`); a module named in more than one table has its sources
 joined in table order, so the block grows without touching the tables of other stages.
-`FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword.
+`FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword. A
+harness's parameter defaults are checked under the same rule as its declared configuration
+(both run before its frame opens): no effects, and no calls of function values, since a
+parameter's value may be the caller's closure (`C0016`). A built-in named twice across the
+joined tables is an internal error, and a check with internal errors is never clean.
 
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
 (`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,

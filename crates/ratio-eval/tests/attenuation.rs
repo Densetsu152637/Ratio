@@ -50,13 +50,23 @@ const TOOLS: [&str; 12] = [
     "web_*",
     "*",
 ];
-const FOLDERS: [&str; 6] = [
+const FOLDERS: [&str; 16] = [
     "/repo",
     "/repo/src",
     "/repo/src/a",
     "/repo/docs",
     "/tmp",
     "/",
+    "/a",
+    "/ab",
+    "C:/Repo",
+    "c:\\Repo\\src",
+    "C:/repo",
+    "D:/",
+    "d:",
+    "//server/share/x",
+    "\\\\SERVER\\Share",
+    "//server/other",
 ];
 const RULES: [&str; 5] = [
     "Bash(rm:*)",
@@ -189,7 +199,7 @@ fn assert_within(parent: &Scope, child: &Scope, seed: u64) {
         child.rules.deny.is_superset(&parent.rules.deny),
         "deny ({seed})"
     );
-    assert!(child.paths.within(&parent.paths), "paths ({seed})");
+    assert!(paths_within(&child.paths, &parent.paths), "paths ({seed})");
     assert!(child.location.within(parent.location), "location ({seed})");
     for k in BudgetKind::ALL {
         if let Some(p) = parent.budget.get(k) {
@@ -478,15 +488,123 @@ fn modes_meet_as_the_specification_orders_them() {
 }
 
 #[test]
-fn tool_patterns_and_folders_are_parsed_exactly() {
+fn tool_patterns_are_parsed_exactly() {
     assert!(ToolPat::parse("mcp__*__x").is_none());
     assert!(ToolPat::parse("a b").is_none());
     assert!(ToolPat::parse("").is_none());
     assert_eq!(ToolPat::parse("*"), Some(ToolPat::Prefix(Arc::from(""))));
-    assert!(Folder::parse("/repo/../etc").is_none());
-    let src = Folder::parse("/repo/src").unwrap();
-    assert!(Folder::parse("/repo").unwrap().contains(&src));
-    assert!(!Folder::parse("/repo/sr").unwrap().contains(&src));
-    assert!(!Folder::parse("repo/src").unwrap().contains(&src));
-    assert_eq!(Folder::parse("\\repo\\.\\src\\").unwrap(), src);
+}
+
+/// An oracle for folder containment, independent of `Folder::contains` and `Paths::within`:
+/// each folder written out, normalised as text (separators, drive letters and UNC names
+/// folded, a trailing `/`), and compared as a string prefix.
+fn canon(text: &str) -> String {
+    let t = text.replace('\\', "/");
+    let mut out = String::new();
+    let rest = if let Some(unc) = t.strip_prefix("//") {
+        let mut it = unc.splitn(3, '/');
+        let server = it.next().unwrap().to_lowercase();
+        let share = it.next().unwrap().to_lowercase();
+        out = format!("unc:{server}/{share}/");
+        it.next().unwrap_or("").to_owned()
+    } else if t.len() >= 2 && t.as_bytes()[1] == b':' {
+        out = format!("drive:{}/", t[..1].to_uppercase());
+        t[2..].to_owned()
+    } else {
+        out.push_str("posix:/");
+        t[1..].to_owned()
+    };
+    for c in rest.split('/') {
+        if !c.is_empty() && c != "." {
+            out.push_str(c);
+            out.push('/');
+        }
+    }
+    out
+}
+
+fn paths_within(child: &Paths, parent: &Paths) -> bool {
+    match (child, parent) {
+        (_, Paths::Any) => true,
+        (Paths::Any, Paths::Within(_)) => false,
+        (Paths::Within(c), Paths::Within(p)) => c.iter().all(|f| {
+            let f = canon(&f.to_string());
+            p.iter().any(|g| f.starts_with(&canon(&g.to_string())))
+        }),
+    }
+}
+
+#[test]
+fn the_folder_oracle_agrees_with_the_source_strings() {
+    // The oracle read from the strings themselves, before any `Folder` is built.
+    for a in FOLDERS {
+        for b in FOLDERS {
+            let want = canon(b).starts_with(&canon(a));
+            let fa = Folder::parse(a).unwrap();
+            let fb = Folder::parse(b).unwrap();
+            assert_eq!(fa.contains(&fb), want, "{a} contains {b}");
+            assert_eq!(canon(&fa.to_string()), canon(a), "{a} round-trips");
+        }
+    }
+}
+
+#[test]
+fn folders_must_be_absolute_and_plain() {
+    for bad in [
+        "",
+        ".",
+        "./",
+        "repo",
+        "repo/src",
+        "./repo",
+        "..",
+        "/repo/../etc",
+        "C:repo",
+        "C:..",
+        "//server",
+        "//server/",
+        "/a/b:c",
+        "/a/*",
+        "/a/?",
+        "\\\\?\\C:\\x",
+        "\\\\.\\pipe",
+    ] {
+        assert!(Folder::parse(bad).is_none(), "`{bad}` was accepted");
+    }
+    let f = |t: &str| Folder::parse(t).unwrap();
+    assert!(f("/a").contains(&f("/a/b")));
+    assert!(!f("/a").contains(&f("/ab")), "`/a` does not contain `/ab`");
+    assert!(
+        f("C:/x").contains(&f("c:\\x\\y")),
+        "drive letters ignore case"
+    );
+    assert!(!f("C:/x").contains(&f("D:/x")));
+    assert!(!f("/").contains(&f("C:/x")), "a POSIX root is not a drive");
+    assert!(!f("C:/").contains(&f("//server/share")));
+    assert!(f("//Server/Share").contains(&f("\\\\server\\share\\docs")));
+    assert!(!f("//server/share").contains(&f("//server/other")));
+    // P4: a parent confined to "." used to contain every path; "." is refused now, and an
+    // absolute request outside the parent's folders is dropped.
+    let parent = Scope {
+        paths: Paths::Within([f("/repo")].into_iter().collect()),
+        ..Scope::session()
+    };
+    let req = Request {
+        paths: Some(vec![f("/etc"), f("C:/Windows"), f("/repo/src")]),
+        ..Request::default()
+    };
+    let child = attenuate(&parent, &Caps::NONE, &req, FrameKind::Harness).unwrap();
+    assert_eq!(
+        child.paths,
+        Paths::Within([f("/repo/src")].into_iter().collect())
+    );
+    assert_eq!(check_within(&parent, &child, FrameKind::Harness), Ok(()));
+    let forged = Scope {
+        paths: Paths::Within([f("/etc"), f("C:/Windows")].into_iter().collect()),
+        ..child
+    };
+    assert_eq!(
+        check_within(&parent, &forged, FrameKind::Harness),
+        Err(Dimension::Paths)
+    );
 }

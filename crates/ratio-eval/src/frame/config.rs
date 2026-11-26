@@ -74,10 +74,20 @@ fn small(v: &Value, what: &str) -> Result<u32, String> {
     u32::try_from(n).map_err(|_| format!("`{what}` is too large"))
 }
 
+/// The most entries a configuration list (tools, paths, rules) may hold: the meets that open
+/// a frame are quadratic in them, and charged for it.
+pub const MAX_CONFIG_LIST: usize = 256;
+
 fn texts(v: &Value, what: &str) -> Result<Vec<Arc<str>>, String> {
     let items = v
         .elements()
         .ok_or_else(|| format!("`{what}` is not a list"))?;
+    if items.len() > MAX_CONFIG_LIST {
+        return Err(format!(
+            "`{what}` holds {} entries, over the limit of {MAX_CONFIG_LIST}",
+            items.len()
+        ));
+    }
     items
         .iter()
         .map(|x| match &x.repr {
