@@ -885,6 +885,12 @@ impl Machine {
                     Err(budget) => self.fail(budget),
                 },
                 Ok(v) => {
+                    // Work done that no argument sized (a schema's derivation) is paid for too.
+                    if cx.debit > 0
+                        && let Err(budget) = self.charge(cx.debit, loc)
+                    {
+                        return self.fail(budget);
+                    }
                     if builtin.class == Class::Linear
                         && let Err(e) = self.charge_output(sizes.n, output_size(&v), loc)
                     {

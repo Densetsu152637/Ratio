@@ -211,7 +211,7 @@ fn insert(
         }
         // The key keeps the labels of both writes.
         Ordering::Equal => {
-            let key = key.with_labels(n.key.labels);
+            let key = key.with_labels(n.key.quick());
             mk(heap, key, value, n.left.clone(), n.right.clone())
         }
     }
@@ -379,10 +379,12 @@ impl Map {
     /// compared with (the whole path, found or not): what a hit or a miss depended on.
     #[must_use]
     pub fn probe(&self, key: &Value) -> (Option<(&Value, &Value)>, Labels) {
-        let mut seen = Labels::NONE;
+        // A key's labels are all the labels inside it: a composite key (a tuple) is compared by
+        // its parts.
+        let mut seen = key.quick();
         let mut n = self.root.as_deref();
         while let Some(node) = n {
-            seen |= node.key.labels;
+            seen |= node.key.quick();
             match key_cmp(key, &node.key) {
                 Ordering::Less => n = node.left.as_deref(),
                 Ordering::Greater => n = node.right.as_deref(),

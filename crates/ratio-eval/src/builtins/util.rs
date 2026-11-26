@@ -204,6 +204,7 @@ pub(super) struct Order {
 pub(super) fn merge_sort(
     cx: &Cx<'_>,
     n: usize,
+    weight: &dyn Fn(usize) -> u64,
     cmp: &mut dyn FnMut(usize, usize) -> Ordering,
 ) -> Result<Order, RtError> {
     let mut charge = Charge::none();
@@ -221,7 +222,8 @@ pub(super) fn merge_sort(
             let hi = (lo + 2 * width).min(n);
             let (mut i, mut j, mut k) = (lo, mid, lo);
             while i < mid && j < hi {
-                pace.tick(cx, 1)?;
+                // A comparison walks the values it compares: it is work by their weight.
+                pace.tick(cx, 1 + weight(a[j]).min(weight(a[i])))?;
                 if cmp(a[j], a[i]) == Ordering::Less {
                     b[k] = a[j];
                     j += 1;

@@ -402,7 +402,7 @@ pub(super) fn index_of(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut c = xs_of(cx, xs)?.cursor();
     let mut i = 0i64;
     while let Some(v) = c.next() {
-        pace.tick(cx, 1)?;
+        pace.tick(cx, v.weight().min(x.weight()))?;
         if eq(&v, x) {
             return Ok(Value::int(i).with_labels(labels));
         }
@@ -417,7 +417,7 @@ fn extreme(cx: &Cx<'_>, args: &Args, max: bool) -> Result<Value, RtError> {
     let mut pace = Pace::new();
     let mut c = xs_of(cx, xs)?.cursor();
     while let Some(v) = c.next() {
-        pace.tick(cx, 1)?;
+        pace.tick(cx, v.weight())?;
         let better = match &best {
             None => true,
             Some(b) => {
@@ -449,9 +449,12 @@ pub(super) fn max(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 pub(super) fn sort(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let xs = arg(cx, args, 0)?;
     let items = collect(cx, xs_of(cx, xs)?, xs.labels)?;
-    let order = merge_sort(cx, items.len(), &mut |a, b| {
-        cmp_natural(&items.items()[a], &items.items()[b])
-    })?;
+    let order = merge_sort(
+        cx,
+        items.len(),
+        &|i| items.items()[i].weight(),
+        &mut |a, b| cmp_natural(&items.items()[a], &items.items()[b]),
+    )?;
     let mut out = Gather::with_capacity(cx, items.len() as u64, xs.labels)?;
     for &i in &order.indexes {
         out.push(cx, items.items()[i].clone())?;
@@ -467,7 +470,10 @@ pub(super) fn unique(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut pace = Pace::new();
     let mut c = xs_of(cx, xs)?.cursor();
     while let Some(v) = c.next() {
-        pace.tick(cx, 1)?;
+        pace.tick(
+            cx,
+            v.weight().saturating_mul(crate::ops::log_work(seen.len())),
+        )?;
         if seen.get_entry(&v).is_none() {
             seen = seen
                 .insert(cx.heap, v.clone(), Value::unit())
@@ -778,7 +784,7 @@ impl KeyedTask {
         let mut seen = Map::empty();
         let mut out = Gather::new();
         for (k, x) in self.keys.items().iter().zip(self.items.items().iter()) {
-            pace.tick(cx, 1)?;
+            pace.tick(cx, k.weight().saturating_mul(log_work(seen.len())))?;
             match self.mode {
                 Keyed::UniqueBy => {
                     if seen.get_entry(k).is_none() {

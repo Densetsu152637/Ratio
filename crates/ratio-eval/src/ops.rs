@@ -90,7 +90,13 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
             let get = |r: &crate::value::RecordData, n: &str| {
                 r.layout.index(n).and_then(|i| r.items.get(i)).cloned()
             };
-            x.layout.names.iter().chain(y.layout.names.iter()).all(|n| {
+            // Each field is compared once: x's names, then the names only y has.
+            let only_y = y
+                .layout
+                .names
+                .iter()
+                .filter(|n| x.layout.index(n).is_none());
+            x.layout.names.iter().chain(only_y).all(|n| {
                 eq(
                     &get(x, n).unwrap_or_else(|| none.clone()),
                     &get(y, n).unwrap_or_else(|| none.clone()),

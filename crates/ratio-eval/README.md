@@ -60,7 +60,7 @@ it; debug builds scan every value and assert that the summary covers the scan.
 Lists are persistent AVL ropes with leaves of up to 32 elements (O(log n) push, get, set, slice
 and concatenation); maps are persistent AVL trees in key order; records have a fixed, sorted
 layout; text caches its character count and an ASCII flag. Values nest at most 256 deep
-(`Invalid` beyond), so every walk and comparison of a value fits a small stack; dropping a value
+(`Invalid` beyond), so every walk and comparison of a value fits a small stack in a release build (in a debug build the frames of stage 6's recursive walks (`==` and order on lists and records, `json.encode`, `json.decode`) are larger and a 256 KiB stack may not hold a value nested near the limit; stage 8's JSON walks are iterative and are tested on 256 KiB in debug); dropping a value
 never recurses at all (every container frees its children through a work-list). Rendering a
 value as text (`text.show`, interpolation, the `json` spec) stops writing as soon as the text is
 longer than 16 MiB, and the result is refused; `text.show` is then charged for what it wrote
@@ -139,8 +139,13 @@ message carries the same labels.
 long loops check for cancellation every checkpoint's worth of work (`util::Pace`).
 `json.parse`, JSON equality and order, `merge`, `set`, `patch`, `diff` and rendering keep their
 nesting on an explicit stack; the recursive walks that remain (`json.validate`'s, and the
-derivation of `json.schema`) are bounded (192 levels, 256 levels) and run on the large-stack
-worker the preparation pass uses. `json.stringify` stops writing at 16 MiB and is charged for
+derivation of `json.schema`) are bounded (192 levels of nesting, `$ref` hops counted apart, at
+most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 24
+levels, and on the large-stack worker the preparation pass uses (its counted work added to the
+caller's) beyond that. `json.validate` also counts its visits of a schema node to an instance
+node and raises `Budget { which: steps }` past four times its charge (plus a floor), so shared
+sub-schemas reached over and over (`$ref` into `allOf`) cannot do more work than was paid for;
+a failing or finished `json.schema` is charged one step for each unit of its derivation work. `json.stringify` stops writing at 16 MiB and is charged for
 what it wrote. In debug builds `work::add` counts the units of work the structures, comparisons
 and built-ins do (`work::reset`, `work::total`).
 
@@ -152,6 +157,8 @@ subset chapter 03 allows in `@pattern`. A pointer is strict RFC 6901 (`~` is fol
 `1`) and names at most 257 tokens. `list.insert` takes an index in `0..=len` and `remove_at` one in
 `0..len`: negative indexes are `Invalid`. `list.unique`, `unique_by`, `group_by`, `count_by` and
 `map.from` take keys equal when the natural order says so (so every `NaN` is one key).
+The natural order compares an `Int` with a `Float` through `f64`, so beyond 2^53 it is not transitive
+(a sort still terminates and never panics, but its order among such numbers is arbitrary).
 `json.keys` and `json.stringify` give an object's keys in the order the IR keeps (a record's
 fields are in name order). `json.stringify` returns `Untrusted<Str>`, as `text.show` does.
 

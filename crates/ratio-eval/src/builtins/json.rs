@@ -67,7 +67,10 @@ pub(super) fn schema(cx: &mut Cx<'_>, _args: &Args) -> Result<Value, RtError> {
     let Some(&t) = cx.type_args.first() else {
         return Err(invalid(cx, "json.schema without a type", Labels::NONE));
     };
-    let text = crate::schema::schema_text(cx.p, t).map_err(|f| cx.fault(f, Labels::NONE))?;
+    let (text, used) = crate::schema::schema_text(cx.p, t);
+    // The derivation's work is paid for whether it finishes or not.
+    cx.debit = used;
+    let text = text.map_err(|f| cx.fault(f, Labels::NONE))?;
     crate::json::parse(cx.heap, &text, Labels::NONE).map_err(|f| cx.fault(f, Labels::NONE))
 }
 
@@ -77,10 +80,11 @@ pub(super) fn validate_(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
     json_of(cx, schema)?;
     // Whether there are violations depends on everything in both.
     let labels = j.quick() | schema.quick();
+    let budget = super::validate::visit_budget(j.weight(), schema.weight());
     let layout = std::sync::Arc::clone(&cx.p.rt.violation);
     let mut out = Gather::new();
     let cx_ref: &Cx<'_> = cx;
-    validate(cx_ref, j, schema, &mut |pointer, message| {
+    validate(cx_ref, j, schema, budget, &mut |pointer, message| {
         let message = Value::new_text(cx_ref.heap, message).map_err(|f| cx_ref.fault(f, labels))?;
         let pointer = Value::new_text(cx_ref.heap, pointer.to_owned())
             .map_err(|f| cx_ref.fault(f, labels))?;

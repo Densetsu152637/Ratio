@@ -193,6 +193,20 @@ pub(crate) fn lookup(doc: &Value, toks: &[String]) -> Option<Value> {
     Some(cur)
 }
 
+/// The node at `toks` with the labels of the path to it: every container's own labels and the
+/// labels of the keys searched in each object. A value taken from there (`copy`, `move`) must
+/// carry them, since where it was found depended on them.
+pub(crate) fn lookup_labelled(doc: &Value, toks: &[String]) -> Option<Value> {
+    let mut cur = doc.clone();
+    let mut seen = Labels::NONE;
+    for t in toks {
+        seen |= cur.labels | object(&cur).map_or(Labels::NONE, key_labels);
+        let pos = find(&cur, t)?;
+        cur = child_at(&cur, pos)?;
+    }
+    Some(cur.with_labels(seen))
+}
+
 /// What an edit does at the last token of its pointer.
 #[derive(Debug)]
 pub(crate) enum Edit {
@@ -627,7 +641,7 @@ pub(crate) fn apply_op(
             .and_then(|n| string_of(n))
             .ok_or_else(|| invalid(format!("operation {at} has no `from`")))?;
         let ftoks = tokens(f)?;
-        let v = lookup(doc, &ftoks)
+        let v = lookup_labelled(doc, &ftoks)
             .ok_or_else(|| invalid(format!("operation {at}: nothing at `from`")))?;
         Ok((ftoks, v))
     };
@@ -883,7 +897,13 @@ fn render_nodes(j: &Value, pretty: bool, out: &mut String) -> bool {
                 Some(Json::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
                 Some(Json::Int(i)) => out.push_str(&i.to_string()),
                 Some(Json::Float(f)) => crate::json::number(*f, out),
-                Some(Json::Str(s)) => crate::json::quote(s.as_str(), out),
+                Some(Json::Str(s)) => {
+                    // The total, not the node: a string is written only if it fits.
+                    if out.len().saturating_add(s.as_str().len()) > MAX_STR_BYTES {
+                        return false;
+                    }
+                    crate::json::quote(s.as_str(), out);
+                }
             }
         }
         let depth = stack.len();
@@ -919,7 +939,11 @@ fn render_nodes(j: &Value, pretty: bool, out: &mut String) -> bool {
                     if pretty {
                         indent(out, depth);
                     }
-                    crate::json::quote(k.as_text().unwrap_or(""), out);
+                    let key = k.as_text().unwrap_or("");
+                    if out.len().saturating_add(key.len()) > MAX_STR_BYTES {
+                        return false;
+                    }
+                    crate::json::quote(key, out);
                     out.push(':');
                     if pretty {
                         out.push(' ');

@@ -11,9 +11,11 @@
 //! boolean or an object, a keyword of the wrong shape, a `$ref` that does not resolve, a remote
 //! `$ref` or a bad `pattern` is `Invalid`.
 //!
-//! The walk recurses over the instance's and the schema's nesting, which the callers bound
-//! (at most 192 levels, an `Invalid` beyond), with a small frame; its work is the pairs of
-//! instance and schema nodes it visits, which the `product` charge covers.
+//! The walk recurses over the instance's and the schema's nesting (at most 192 levels, an
+//! `Invalid` beyond; `$ref` hops are counted apart, at most 32 at one node), on the caller's
+//! stack when it is small and on a large-stack worker when it is not. Its work is the visits of
+//! a schema node to an instance node, which the `product` charge pays for: it is counted, and
+//! a walk that visits more than a multiple of the charge raises `Budget { which: steps }`.
 
 use std::cmp::Ordering;
 
@@ -110,33 +112,67 @@ pub(super) struct Validator<'a, 'b> {
     silent: u32,
     sink: &'a mut Sink<'a>,
     pace: Pace,
-    /// How deep the walk may nest: the most the stack it runs on takes.
+    /// How deep the walk may nest (instance levels and applicators, not `$ref` hops): the most
+    /// the stack it runs on takes.
     nest: u32,
+    /// The most `$ref` hops at one instance node.
+    max_hops: u32,
+    /// Runs on the caller's stack with small bounds, buffering what it reports; going past a
+    /// bound sets `restart` and the walk is made again on a large stack.
+    inline: bool,
+    restart: bool,
+    buffer: Vec<(String, String)>,
+    /// The visits of a schema node to an instance node so far, and the most there may be: a
+    /// multiple of the product the built-in was charged, so shared sub-schemas reached over and
+    /// over (`$ref` into `allOf`) cannot do more work than was paid for.
+    visits: u64,
+    budget: u64,
     /// The patterns compiled so far, with the heap each holds.
     patterns: Vec<(String, Regex, Charge)>,
-    /// The labels of the schema: what a bad schema's error depends on.
+    /// The labels of the instance and the schema: what a bad schema's error depends on.
     labels: Labels,
 }
 
 /// Receives each violation: the instance pointer and a message.
 pub(super) type Sink<'a> = dyn FnMut(&str, String) -> Result<(), RtError> + Send + 'a;
 
-/// Validates `instance` against `schema`, reporting each violation to `sink`.
+/// The nesting and `$ref` hops the walk takes on the caller's stack, and the violations it
+/// buffers there.
+const INLINE_NEST: u32 = 24;
+const INLINE_HOPS: u32 = 8;
+const INLINE_BUFFER: usize = 256;
+
+/// The walk's work allowed for a charge of `n1 * n2 + n1 + n2` (the sizes of the two inputs):
+/// a few visits per pair of nodes, and a floor for tiny inputs.
+pub(super) fn visit_budget(n1: u64, n2: u64) -> u64 {
+    n1.saturating_mul(n2)
+        .saturating_add(n1)
+        .saturating_add(n2)
+        .saturating_mul(4)
+        .saturating_add(256)
+}
+
+/// Validates `instance` against `schema`, reporting each violation to `sink`. `budget` bounds
+/// the visits (see [`visit_budget`]); past it the call raises `Budget { which: steps }`.
 ///
-/// The walk recurses over the nesting, which is bounded ([`MAX_NEST`]); it runs on a thread
-/// with a large stack (as the preparation pass does), so a caller's small stack cannot be
-/// exhausted by a deeply nested document or schema.
+/// Small walks run on the caller's stack. A walk that nests deeper than [`INLINE_NEST`] (or
+/// hops further, or reports more than a few violations) is made again on a thread with a large
+/// stack, as the preparation pass does, so no caller's stack can be exhausted by a nested
+/// document or schema; its counted work is added to the caller's.
 ///
 /// # Errors
 ///
-/// `Invalid` for a bad schema or too deep a nesting; what `sink` returns; `Cancelled`; heap.
+/// `Invalid` for a bad schema or too deep a nesting; `Budget` past the budget; what `sink`
+/// returns; `Cancelled`; heap.
 pub(super) fn validate(
     cx: &Cx<'_>,
     instance: &Value,
     schema: &Value,
+    budget: u64,
     sink: &mut Sink<'_>,
 ) -> Result<(), RtError> {
-    crate::stack::run(|max_depth| {
+    let labels = instance.quick() | schema.quick();
+    let walk = |sink: &mut Sink<'_>, nest: u32, max_hops: u32, inline: bool| {
         let mut v = Validator {
             cx,
             root: schema,
@@ -144,21 +180,45 @@ pub(super) fn validate(
             silent: 0,
             sink,
             pace: Pace::new(),
-            nest: MAX_NEST.min(u32::try_from(max_depth).unwrap_or(MAX_NEST)),
+            nest,
+            max_hops,
+            inline,
+            restart: false,
+            buffer: Vec::new(),
+            visits: 0,
+            budget,
             patterns: Vec::new(),
-            labels: schema.quick(),
+            labels,
         };
-        v.check(instance, schema, 0, 0).map(|_| ())
+        let r = v.check(instance, schema, 0, 0).map(|_| ());
+        (r, v.restart, std::mem::take(&mut v.buffer))
+    };
+    let (r, restart, buffered) = walk(&mut *sink, INLINE_NEST, INLINE_HOPS, true);
+    if !restart {
+        for (pointer, message) in buffered {
+            sink(&pointer, message)?;
+        }
+        return r;
+    }
+    let (r, units) = crate::stack::run(|max_depth| {
+        let nest = MAX_NEST.min(u32::try_from(max_depth).unwrap_or(MAX_NEST));
+        let (r, _, _) = walk(sink, nest, MAX_HOPS, false);
+        (r, crate::work::total())
     })
     .unwrap_or_else(|| {
-        Err(raise(
-            cx.p,
-            Kind::Invalid,
-            "json.validate could not start its worker",
-            Labels::NONE,
-            cx.loc,
-        ))
-    })
+        (
+            Err(raise(
+                cx.p,
+                Kind::Invalid,
+                "json.validate could not start its worker",
+                Labels::NONE,
+                cx.loc,
+            )),
+            0,
+        )
+    });
+    crate::work::add(units);
+    r
 }
 
 impl Validator<'_, '_> {
@@ -175,9 +235,28 @@ impl Validator<'_, '_> {
     /// Reports a violation at the current path, unless a branch is being tried silently.
     fn fail(&mut self, message: &str) -> Check {
         if self.silent == 0 {
-            (self.sink)(&self.path, message.to_owned())?;
+            if self.inline {
+                if self.buffer.len() >= INLINE_BUFFER {
+                    return Err(self.restart());
+                }
+                self.buffer.push((self.path.clone(), message.to_owned()));
+            } else {
+                (self.sink)(&self.path, message.to_owned())?;
+            }
         }
         Ok(false)
+    }
+
+    /// Gives up the walk on the caller's stack: it is made again on a large one.
+    fn restart(&mut self) -> RtError {
+        self.restart = true;
+        raise(
+            self.cx.p,
+            Kind::Invalid,
+            "json.validate restarts on a larger stack",
+            Labels::NONE,
+            self.cx.loc,
+        )
     }
 
     fn count(&self, v: &Value, what: &str) -> Result<u64, RtError> {
@@ -243,7 +322,20 @@ impl Validator<'_, '_> {
 
     /// Checks `inst` against `schema`; `Ok(true)` when it is valid.
     fn check(&mut self, inst: &Value, schema: &Value, depth: u32, hops: u32) -> Check {
+        self.visits += 1;
+        if self.visits > self.budget {
+            return Err(raise(
+                self.cx.p,
+                Kind::Budget("steps"),
+                "json.validate visited more of the schema than its charge paid for",
+                Labels::NONE,
+                self.cx.loc,
+            ));
+        }
         if depth > self.nest {
+            if self.inline {
+                return Err(self.restart());
+            }
             return Err(self.bad("the instance and the schema nest too deeply to validate"));
         }
         match node(schema) {
@@ -273,14 +365,19 @@ impl Validator<'_, '_> {
         let Some(pointer) = target.strip_prefix('#') else {
             return Err(self.bad("only references into the schema itself (`#…`) are supported"));
         };
-        if hops >= MAX_HOPS {
+        if hops >= self.max_hops {
+            if self.inline && hops < MAX_HOPS {
+                return Err(self.restart());
+            }
             return Err(self.bad("`$ref` refers to itself"));
         }
         let toks = tokens(pointer).map_err(|f| self.cx.fault(f, self.labels))?;
         let Some(sub) = crate::jsonedit::lookup(self.root, &toks) else {
             return Err(self.bad(&format!("`$ref` `{target}` does not resolve")));
         };
-        self.check(inst, &sub, depth + 1, hops + 1)
+        // A hop is counted in `hops`, not in the nesting: a recursive schema reaches as deep as
+        // the instance nests.
+        self.check(inst, &sub, depth, hops + 1)
     }
 
     fn shape(&mut self, inst: &Value, kw: &Kw<'_>) -> Check {
@@ -375,7 +472,9 @@ impl Validator<'_, '_> {
         }
         if let Some(m) = bound(self, kw.multiple_of, "multipleOf")? {
             let multiple = match (x, m) {
-                (_, Num::Int(0)) => return Err(self.bad("`multipleOf` is above 0")),
+                (_, Num::Int(b)) if b <= 0 => {
+                    return Err(self.bad("`multipleOf` is above 0"));
+                }
                 (Num::Int(a), Num::Int(b)) => a.checked_rem(b) == Some(0) || b == -1,
                 (a, b) => {
                     let (a, b) = (as_f64(a), as_f64(b));

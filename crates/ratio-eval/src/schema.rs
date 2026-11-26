@@ -207,6 +207,8 @@ struct Writer<'a> {
     p: &'a Prepared,
     /// How deep the walk may nest: the most the stack it runs on takes.
     nest: usize,
+    /// Set when the walk stopped for nesting deeper than `nest`.
+    deep: bool,
     /// Enums that contain themselves, with their `$defs` name.
     defs: Vec<(EnumKey, String)>,
     size: usize,
@@ -361,6 +363,7 @@ impl Writer<'_> {
 
     fn schema(&mut self, t: u32, env: &Env, depth: usize) -> Result<J, Fault> {
         if depth > self.nest {
+            self.deep = true;
             return Err(too_large());
         }
         self.grow(16)?;
@@ -545,26 +548,50 @@ impl Writer<'_> {
 /// # Errors
 ///
 /// `Invalid`, when the type is not schema-able or its schema is over the bounds.
-pub(crate) fn schema_text(p: &Prepared, t: u32) -> Result<String, Fault> {
-    // The walks recurse over the type's nesting (at most 256); they run on a thread with a
-    // large stack, as the preparation pass does, so a small caller's stack is safe.
-    crate::stack::run(|max_depth| schema_on(p, t, MAX_SCHEMA_DEPTH.min(max_depth))).unwrap_or_else(
-        || {
+pub(crate) fn schema_text(p: &Prepared, t: u32) -> (Result<String, Fault>, u64) {
+    // A shallow type is walked on the caller's stack. One that nests deeper than `INLINE_NEST`
+    // is walked again on a thread with a large stack, as the preparation pass does (the walks
+    // recurse over the type's nesting, at most 256). The work done is returned for the caller to
+    // charge, on success and on failure.
+    let (r, used, deep) = schema_on(p, t, INLINE_NEST.min(MAX_SCHEMA_DEPTH));
+    if !deep {
+        return (r, used);
+    }
+    let (r2, used2) = crate::stack::run(|max_depth| {
+        let (r, used, _) = schema_on(p, t, MAX_SCHEMA_DEPTH.min(max_depth));
+        (r, used)
+    })
+    .unwrap_or_else(|| {
+        (
             Err(Fault::Invalid(
                 "the schema's worker could not start".to_owned(),
-            ))
-        },
-    )
+            )),
+            0,
+        )
+    });
+    (r2, used.saturating_add(used2))
 }
 
-fn schema_on(p: &Prepared, t: u32, nest: usize) -> Result<String, Fault> {
+/// The nesting the derivation walks on the caller's stack.
+const INLINE_NEST: usize = 24;
+
+/// The result, the fuel used, and whether the walk stopped for nesting deeper than `nest`.
+fn schema_on(p: &Prepared, t: u32, nest: usize) -> (Result<String, Fault>, u64, bool) {
     let mut w = Writer {
         p,
         nest,
+        deep: false,
         defs: Vec::new(),
         size: 0,
         fuel: FUEL,
     };
+    let r = write_schema(&mut w, t);
+    let used = FUEL - w.fuel;
+    crate::work::add(used);
+    (r, used, w.deep)
+}
+
+fn write_schema(w: &mut Writer<'_>, t: u32) -> Result<String, Fault> {
     w.find_recursive(t)?;
     let root = w.schema(t, &Env::new(), 0)?;
     let mut defs = Vec::new();

@@ -830,7 +830,7 @@ impl Task for SortTask {
         }
         let keys = &self.keys.items;
         let descending = self.descending;
-        let order = util::merge_sort(cx, self.items.len(), &mut |a, b| {
+        let order = util::merge_sort(cx, self.items.len(), &|i| keys[i].weight(), &mut |a, b| {
             if descending {
                 cmp_natural(&keys[b], &keys[a])
             } else {
@@ -1072,7 +1072,7 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = m.labels | k.labels;
     Ok(match map(cx, m)?.get_entry(k) {
-        Some((stored, v)) => v.clone().with_labels(labels | stored.labels),
+        Some((stored, v)) => v.clone().with_labels(labels | stored.quick() | k.quick()),
         // A miss depends on every key the probe was compared with.
         None => Value::none().with_labels(labels | m.quick()),
     })
@@ -1092,8 +1092,12 @@ fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 fn map_keys(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let m = arg(cx, args, 0)?;
     let mut keys = Vec::new();
-    map(cx, m)?.for_each(&mut |k, _| keys.push(k.clone().with_labels(m.labels)));
-    new_list(cx, keys, m.labels)
+    let mut own = m.labels;
+    map(cx, m)?.for_each(&mut |k, _| {
+        own |= k.quick();
+        keys.push(k.clone().with_labels(m.labels));
+    });
+    new_list(cx, keys, own)
 }
 
 // ---- json ----

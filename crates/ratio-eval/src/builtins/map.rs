@@ -56,7 +56,7 @@ fn entries_with(
     let mut c = map_of(cx, m)?.cursor();
     while let Some((k, v)) = c.next() {
         pace.tick(cx, 1)?;
-        keys |= k.labels;
+        keys |= k.quick();
         each(cx, k, v)?;
     }
     Ok(keys)
@@ -94,32 +94,32 @@ pub(super) fn merge(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         match (ea.take(), eb.take()) {
             (Some((ka, va)), Some((kb, vb))) => match key_cmp(&ka, &kb) {
                 Ordering::Less => {
-                    keys |= ka.labels;
+                    keys |= ka.quick();
                     out.push_pair(cx, ka, va)?;
                     ea = ca.next();
                     eb = Some((kb, vb));
                 }
                 Ordering::Greater => {
-                    keys |= kb.labels;
+                    keys |= kb.quick();
                     out.push_pair(cx, kb, vb)?;
                     eb = cb.next();
                     ea = Some((ka, va));
                 }
                 Ordering::Equal => {
-                    keys |= ka.labels | kb.labels;
-                    let key = kb.with_labels(ka.labels);
+                    keys |= ka.quick() | kb.quick();
+                    let key = kb.with_labels(ka.quick());
                     out.push_pair(cx, key, vb)?;
                     ea = ca.next();
                     eb = cb.next();
                 }
             },
             (Some((ka, va)), None) => {
-                keys |= ka.labels;
+                keys |= ka.quick();
                 out.push_pair(cx, ka, va)?;
                 ea = ca.next();
             }
             (None, Some((kb, vb))) => {
-                keys |= kb.labels;
+                keys |= kb.quick();
                 out.push_pair(cx, kb, vb)?;
                 eb = cb.next();
             }
@@ -138,7 +138,11 @@ pub(super) fn from(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut pace = Pace::new();
     let mut c = l.cursor();
     while let Some(pair) = c.next() {
-        pace.tick(cx, 1)?;
+        pace.tick(
+            cx,
+            pair.weight()
+                .saturating_mul(crate::ops::log_work(map.len())),
+        )?;
         let Repr::Tuple(t) = &pair.repr else {
             return Err(raise(
                 cx.p,
@@ -162,7 +166,7 @@ pub(super) fn from(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             k.clone().with_labels(pair.labels),
             v.clone().with_labels(pair.labels),
         );
-        decided |= k.labels;
+        decided |= k.quick();
         map = map
             .insert(cx.heap, k, v)
             .map_err(|f| cx.fault(f, decided))?;
@@ -257,7 +261,7 @@ impl Task for EntriesTask {
         }
         if let Some((k, v)) = self.cursor.next() {
             crate::work::add(1);
-            self.keys |= k.labels;
+            self.keys |= k.quick();
             let args = if self.filter {
                 vec![
                     k.clone().with_labels(self.own),
