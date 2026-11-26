@@ -139,7 +139,9 @@ The parser's token reader inserts one at a line end when **all** of these hold:
    type, an enum body, a `match` or `catch` arm list, or a declaration head from `fn`, `harness`
    or `prompt` up to the `{` of its body;
 2. the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or one of `break`,
-   `continue`, `return`, `none`, `true`, `false`;
+   `continue`, `return`, `none`, `true`, `false`; or it is a `>` that closes a generic argument
+   list, when the statement is a type declaration (it began with `type`) or a prompt's `format`
+   section (see below);
 3. the next non-blank line does not start with `.` (including `..` and `..=`), `?.`, `|>`, `??`,
    `and`, `or`, `else` or `catch`. Lines holding only a `//` comment count as blank; a line
    holding a `///` documentation comment does not.
@@ -149,6 +151,20 @@ one or several) does not end a statement, although its last token is an identifi
 attribute belongs to the item on the lines below it. An attribute counts as such when its `@`
 starts a statement or item (at the start of the file, or after `;`, `{` or another attribute);
 it lasts through its name and, when present, its parenthesised arguments.
+
+A `>` is otherwise never the last token of a statement, because it is the comparison operator.
+Inside a type declaration (`type T = List<Int>`) and a prompt `format` section
+(`format Map<K, V>`), a `>` that closes a `<` opened in the same statement ends the statement at
+a line end, so the next item or section can start on the next line. The token reader does not
+tell a generic `<` from a comparison, so it pairs each `>` with the nearest open `<` of the same
+delimiter depth; in these two statements the grammar allows no comparison, so the pairing is
+exact. Condition 3 still applies.
+
+A block head (`if c`, `while c`, `for p in xs`, `repeat n`, `with timeout d`, and the heads of
+`loop`, `try`, `defer`, `do`, `test`) must have its `{` on the same line: the line end after
+the head's expression ends a statement as usual, and a `{` that then follows it is reported by
+the parser as `P0008`, not read as a split head. A `fn`, `harness` or `prompt` head, which has
+no expression to end a statement, may span lines up to its `{` (condition 1).
 
 So pipelines and `else` on the next line continue an expression; inside a `match`, `catch`, enum
 or record the line breaks are only whitespace and the entries are separated by commas; a
@@ -190,6 +206,16 @@ The grammar is EBNF (ISO 14977 style: `{ }` repetition, `[ ]` option, `|` choice
 grouping, terminals in double quotes). `IDENT`, `INT`, `QUANTITY`, `FLOAT`, `DURATION`, `MONEY`,
 `STRING` and `RAW_STRING` are lexical tokens defined above (`STRING` includes its
 interpolations); `;` includes inserted semicolons. `MEMBER` is an identifier or any keyword.
+
+The parser applies the grammar strictly. A trailing comma is accepted only where a production
+shows `[ "," ]`; a `return`, `break`, `continue` or `raise` (a `jump_expr`) is an `expr`, so it
+may be a statement, an argument or an arm body, but it is not an operand: `1 + return` and
+`not break` are errors; and `()` is the unit type only, never an expression.
+
+Parser nesting is the depth of the syntax tree: each nested expression, type or pattern counts
+one level, and so does each prefix operator (`not`, `-`) and each link of a postfix, binary or
+`|>` chain, so `a.b.c.d` is deeper than `a`. The limit is `max_nesting` (default 128, chapter
+07); exceeding it is `P0002` and parsing stops.
 
 ```ebnf
 module          = [ meta_decl ] , { item } , EOF ;
@@ -312,7 +338,8 @@ alt_pattern     = "_" | literal | IDENT , [ "@" , alt_pattern ]
                 | "[" , [ list_pattern , { "," , list_pattern } ] , "]"
                 | record_pattern ;
 list_pattern    = pattern | ".." , [ IDENT ] ;
-record_pattern  = "{" , [ field_pattern , { "," , field_pattern } ] , [ "," , ".." ] , "}" ;
+record_pattern  = "{" , [ ( field_pattern , { "," , field_pattern } , [ "," , ".." ]
+                          | ".." ) , [ "," ] ] , "}" ;
 field_pattern   = IDENT , [ ":" , pattern ] ;
 
 (* Prompts, chapter 05 *)
@@ -356,7 +383,9 @@ section         = "system" , expr
    A record or variant literal in an `if`, `while`, `for`, `match`, `repeat` or `with timeout`
    head must be parenthesised. The token reader needs these decisions for semicolon insertion
    before any parsing, so it approximates the parser with the keyword that led to the `{` plus
-   this rule, and the parser makes the same decisions.
+   this rule. The parser does not repeat the decision: it takes the brace kind the token reader
+   attached to each `{` and `}` (the reader's decision is the rule's decision), and reports
+   `P0003` when the kind does not fit the production being parsed.
 2. **Type arguments** use the turbofish: `json.decode::<Plan>(j)`, `model.generate_as::<Note>(p)`.
    Bare `<` is always the comparison operator in expressions.
 3. **Variant literals.** `Name { … }` in expression position (outside heads, rule 1) constructs

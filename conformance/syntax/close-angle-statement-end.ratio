@@ -1,0 +1,10 @@
+// expect: lex-ok
+// tokens: kw:type ident:T = ident:List < ident:Int > ;! kw:fn ident:f ( ) {block int:1 ;! } ;! kw:prompt ident:p {prompt ctx:format ident:Map < ident:K , ident:V > ;! ctx:steps str[ text:"go" ]str ;! } ;!
+type T = List<Int>
+fn f() {
+  1
+}
+prompt p {
+  format Map<K, V>
+  steps "go"
+}
