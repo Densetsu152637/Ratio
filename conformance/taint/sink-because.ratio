@@ -1,0 +1,16 @@
+// expect: check-error C0035 at 7:21
+// expect: check-error C0035 at 11:23
+// expect: check-error C0035 at 15:26
+// The `because` of `trust`, `as_task` and `declassify` is trusted text.
+
+fn a(x: Untrusted<Str>, why: Untrusted<Str>) -> Str {
+  trust(x, because: why)
+}
+
+fn b(x: Untrusted<Str>, why: Untrusted<Str>) -> Brief {
+  as_task(x, because: why)
+}
+
+fn c(x: Secret<Str>, why: Untrusted<Str>) -> Str {
+  declassify(x, because: why)
+}

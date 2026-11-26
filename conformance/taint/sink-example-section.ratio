@@ -1,0 +1,11 @@
+// expect: check-error C0035 at 8:13
+// expect: check-error C0035 at 9:26
+// Untrusted text on either side of an `example` (few-shot pairs are instructions).
+
+fn ask(sample: Untrusted<Str>, task: Task) -> Prompt {
+  prompt {
+    instruct "Classify."
+    example sample -> "positive"
+    example "neutral" -> task.brief
+  }
+}

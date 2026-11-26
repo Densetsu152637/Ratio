@@ -1,0 +1,25 @@
+// expect: check-error C0035 at 14:29
+// expect: check-error C0035 at 22:18
+// The `system` field of a call override, and of a `with` block, is a `TrustedPrompt`.
+
+harness echo(said: Untrusted<Str>) -> Untrusted<Str> {
+  said
+}
+
+fn call(page: Untrusted<Str>) -> Untrusted<Str> {
+  let p = prompt {
+    instruct "Hi."
+    data page
+  }
+  echo(page) with { system: p }
+}
+
+fn block(page: Untrusted<Str>) -> Untrusted<Str> {
+  let p = prompt {
+    instruct "Hi."
+    data page
+  }
+  with { system: p } {
+    echo(page)
+  }
+}

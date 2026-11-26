@@ -1,0 +1,75 @@
+// expect: check-ok
+// The flows chapter 03 allows: untrusted text in `data` sections, tool arguments, labels,
+// harness arguments of untrusted type and results; a `Brief` and trusted text in `task`
+// sections; trusted text and trusted prompts in instruction positions; scalars computed from
+// untrusted text, which are trusted.
+
+type Verdict = { pass: Bool, reasons: [Str] }
+
+prompt rules() {
+  system "You review code."
+  instruct "Be brief."
+  note "Cite lines."
+  example "a = 1" -> "fine"
+  steps ["Read", "Judge"]
+}
+
+prompt review(patch: Untrusted<Str>, files: [Untrusted<FileText>]) {
+  system rules()
+  instruct "Review this patch."
+  data patch as "diff"
+  for f in files {
+    data f.text as f.path
+  }
+  format Verdict
+}
+
+prompt delegated(t: Task, issue: UserText) {
+  task t.brief
+  task "Also: {t.brief}"
+  task issue
+  task "Fix the failing test."
+}
+
+pub harness reviewer(patch: Untrusted<Str>) -> Untrusted<Verdict>
+  with { system: rules() }
+{
+  let files = [tools.read_file("src/lib.rs")]
+  model.generate_as::<Verdict>(review(patch, files))
+}
+
+fn scalars(page: Untrusted<Str>, v: Untrusted<Verdict>) -> Prompt {
+  let n = text.len(page)
+  let ok = v.pass
+  prompt {
+    instruct "The page has {n} characters; it passed: {ok}."
+    data v.reasons as "reasons"
+  }
+}
+
+fn tools_take_untrusted(page: Untrusted<Str>) -> Untrusted<Str> {
+  let w = tools.write_file("notes.md", page)
+  let hits = tools.web_search(page)
+  let r = tools.run_command("wc -l {w.path}")
+  r.stdout
+}
+
+fn approval(detail: Untrusted<Str>) -> Bool {
+  session.request_approval("Hand this to a frontier model?", detail: detail)
+}
+
+fn notice(conv: Conversation, reply: Untrusted<Str>) -> () {
+  context.notice(conv, "The reviewer replied.", data: reply)
+}
+
+fn spawn(brief: Untrusted<Str>) -> Task<Report> {
+  agents.spawn(brief, "std:tdd-fix")
+}
+
+fn generic_untrusted<T>(x: T) -> Untrusted<Str> {
+  "{x}"
+}
+
+fn load() -> harness(Untrusted<Str>) -> Untrusted<Verdict> {
+  meta.harness::<harness(Untrusted<Str>) -> Untrusted<Verdict>>("user:review.reviewer")
+}

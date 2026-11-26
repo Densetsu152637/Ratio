@@ -1,0 +1,13 @@
+// expect: check-error C0035 at 10:18
+// The `system` field of a harness's configuration is a `TrustedPrompt`.
+
+prompt framed(page: Untrusted<Str>) {
+  instruct "Answer."
+  data page as "page"
+}
+
+harness answer(page: Untrusted<Str>) -> Untrusted<Str>
+  with { system: framed(page) }
+{
+  model.generate(framed(page))
+}

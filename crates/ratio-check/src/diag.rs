@@ -103,13 +103,33 @@ codes! {
     GenericEnum => "C0033",
     /// A built-in the checker has no signature for yet (stages 7 to 12 extend the table).
     NoSignature => "C0034",
+    /// Untrusted text (or a value holding it, or an untrusted prompt) where trusted text is
+    /// required: an instruction position, a `task` section (which takes a `Brief`), or any
+    /// position whose type is trusted (chapter 03, "Sinks").
+    Untrusted => "C0035",
+    /// `trust`, `as_task` or `declassify` at a type that is or contains a type parameter, or
+    /// one of them used other than by calling it directly (chapter 03, "Conversion").
+    NotMonomorphic => "C0036",
+    /// A value whose secrecy label is known statically (`Secret<T>`) where an unlabelled value
+    /// is required, including the arguments of the secrecy sinks (chapter 03, "Secrecy").
+    Secret => "C0037",
+    /// A type that must be schema-able is not, or a schema attribute that does not fit its
+    /// field (chapter 03, "Types are schemas").
+    NotSchemaable => "C0038",
+    /// A warning: a condition derived from an untrusted value is the only guard on an effect
+    /// that writes, runs a command, delegates or reaches the network (lint `model_guard`,
+    /// chapter 03, "What the guarantee covers").
+    ModelGuard => "C0039",
 }
 
 impl Code {
     /// Whether the code is a warning; every other code is an error.
     #[must_use]
     pub const fn is_warning(self) -> bool {
-        matches!(self, Code::ShadowedBinding | Code::ShadowsModule)
+        matches!(
+            self,
+            Code::ShadowedBinding | Code::ShadowsModule | Code::ModelGuard
+        )
     }
 
     /// The code spelled `text`, if there is one.

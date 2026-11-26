@@ -1,0 +1,9 @@
+// expect: check-error C0035 at 7:11
+// Untrusted text among `steps`.
+
+fn ask(plan: [Untrusted<Str>]) -> Prompt {
+  prompt {
+    instruct "Work through the steps."
+    steps plan
+  }
+}

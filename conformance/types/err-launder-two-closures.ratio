@@ -1,4 +1,4 @@
-// expect: check-error C0004 at 8:7
+// expect: check-error C0035 at 8:7
 
 fn two<T>(f: fn(T) -> Str, g: fn() -> T) -> Str {
   f(g())

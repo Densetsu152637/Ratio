@@ -337,6 +337,7 @@ impl Checker<'_> {
             ItemKind::State(decl) => {
                 let mut b = Body::new(module, Ret::Forbidden);
                 let ty = self.lower_type(r.origin, &[], &decl.ty);
+                self.require_schema(&b, ty, decl.ty.span, "the `state` type");
                 self.expect(&mut b, &decl.value, ty);
                 self.logs.insert(r, b.log);
             }
@@ -440,16 +441,8 @@ impl Checker<'_> {
     /// Checks a body block against its declared result type.
     fn expect_block(&mut self, b: &mut Body, block: &ast::Block, ret: TypeId) {
         let got = self.block(b, block, Some(ret));
-        if !self.types.subtype(&mut self.memo, got, ret) {
-            let at = block.stmts.last().map_or(block.span, |s| s.span);
-            let (got, want) = (self.types.display(got), self.types.display(ret));
-            self.report(
-                b.origin(),
-                Code::Mismatch,
-                at,
-                format!("expected `{want}` as the result, found `{got}`"),
-            );
-        }
+        let at = block.stmts.last().map_or(block.span, |s| s.span);
+        self.mismatch_at(b, at, got, ret, Some("the result"));
     }
 
     /// A constant's type: its annotation, or (checked on first use) its value's.

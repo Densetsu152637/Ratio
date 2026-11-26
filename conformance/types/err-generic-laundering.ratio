@@ -1,7 +1,7 @@
-// expect: check-error C0004 at 15:9
-// expect: check-error C0004 at 23:9
-// expect: check-error C0004 at 31:7
-// expect: check-error C0004 at 39:13
+// expect: check-error C0035 at 15:9
+// expect: check-error C0035 at 23:9
+// expect: check-error C0035 at 31:7
+// expect: check-error C0035 at 39:13
 
 fn apply<T>(f: fn(T) -> Str, x: T) -> Str {
   f(x)

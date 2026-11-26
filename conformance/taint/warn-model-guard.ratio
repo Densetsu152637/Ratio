@@ -1,0 +1,50 @@
+// expect: check-warning C0039 at 15:13
+// expect: check-warning C0039 at 26:13
+// The guarded-effect lint: a condition derived from model or tool output is the only guard on
+// an effect that writes, runs a command, delegates or reaches the network.
+
+type Verdict = { pass: Bool, reasons: [Str] }
+
+fn review(p: Prompt) -> Untrusted<Verdict> {
+  model.generate_as::<Verdict>(p)
+}
+
+fn fix(p: Prompt, file: Str) -> () {
+  let v = review(p)
+  if v.pass {
+    let _ = tools.write_file(file, "fixed")
+  }
+}
+
+fn run_if_told(p: Prompt) -> () {
+  let says = model.generate(p)
+  var go = false
+  if text.contains(says, "yes") {
+    go = true
+  }
+  while go {
+    let _ = tools.run_command("make deploy")
+    go = false
+  }
+}
+
+fn approved_too(p: Prompt, file: Str) -> () {
+  let v = review(p)
+  if v.pass and session.request_approval("Write the fix?") {
+    let _ = tools.write_file(file, "fixed")
+  }
+}
+
+@allow(model_guard)
+fn reviewed(p: Prompt, file: Str) -> () {
+  let v = review(p)
+  if v.pass {
+    let _ = tools.write_file(file, "fixed")
+  }
+}
+
+fn trusted_guard(force: Bool, file: Str) -> () {
+  if force {
+    let _ = tools.write_file(file, "forced")
+  }
+}

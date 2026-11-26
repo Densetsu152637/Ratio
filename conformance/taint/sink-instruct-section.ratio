@@ -1,0 +1,8 @@
+// expect: check-error C0035 at 6:14
+// Untrusted text in an `instruct` section.
+
+fn ask(page: Untrusted<Str>) -> Prompt {
+  prompt {
+    instruct "Summarise this: {page}"
+  }
+}

@@ -1,0 +1,19 @@
+// expect: check-error C0035 at 8:3
+// expect: check-error C0035 at 12:3
+// expect: check-error C0035 at 17:12
+// Inside generic code a value of a type parameter counts as possibly untrusted, so a
+// generic function cannot launder untrusted text into a `Str`, whatever it is called with.
+
+fn show<T>(x: T) -> Str {
+  "{x}"
+}
+
+fn shown<T>(x: T) -> Str {
+  text.show(x)
+}
+
+fn system_of<T>(x: T) -> Prompt {
+  prompt {
+    system "{x}"
+  }
+}

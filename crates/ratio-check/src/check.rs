@@ -19,7 +19,7 @@ use ratio_names::{Binding, Loaded, ModuleId, prelude};
 use ratio_syntax::Span;
 use ratio_syntax::ast::{self, Ident, ItemKind, TypeKind};
 
-use crate::builtins::{self, Primitive};
+use crate::builtins::{self, Primitive, Traits};
 use crate::diag::{Code, Diagnostic};
 use crate::effects::EffectLog;
 use crate::relate::Memo;
@@ -46,7 +46,8 @@ pub(crate) fn std_modules(internal: &mut Vec<String>) -> Vec<StdModule> {
         let mut scope = HashMap::new();
         for (index, item) in parsed.module.items.iter().enumerate() {
             if let Some(ident) = item_name(&item.kind) {
-                scope.entry(ident.name.clone()).or_insert(index);
+                let name = builtins::builtin_name(&ident.name).to_owned();
+                scope.entry(name).or_insert(index);
             }
         }
         all.push(StdModule {
@@ -108,6 +109,8 @@ pub(crate) struct FnSig {
     pub(crate) kind: FnKind,
     /// Parameter indexes by name (the first of a repeated name).
     pub(crate) by_name: HashMap<String, usize>,
+    /// What a built-in's attributes say about it (the default for user declarations).
+    pub(crate) traits: Traits,
 }
 
 impl FnSig {
@@ -157,6 +160,8 @@ pub(crate) struct Checker<'a> {
     pub(crate) demand_depth: usize,
     /// For each origin, the enums visible at its top level by variant name (built on use).
     pub(crate) variant_index: HashMap<Origin, HashMap<String, Vec<EnumId>>>,
+    /// Trust sites, `meta.harness` loads and harness-value calls, for the analysis.
+    pub(crate) records: crate::analysis::Records,
 }
 
 /// How deep on-demand checks of constants and prompts (and alias lowering) may nest.
@@ -200,6 +205,7 @@ impl<'a> Checker<'a> {
             prompt_types: HashMap::new(),
             demand_depth: 0,
             variant_index: HashMap::new(),
+            records: crate::analysis::Records::default(),
         }
     }
 
@@ -466,6 +472,11 @@ impl<'a> Checker<'a> {
                             Some(t) => self.lower_type(origin, &tparams, t),
                             None => TypeId::UNIT,
                         };
+                        let traits = if builtin {
+                            Traits::of(&item.attrs, &mut self.internal)
+                        } else {
+                            Traits::default()
+                        };
                         let kind = if builtin {
                             FnKind::Builtin {
                                 pure: item.attrs.iter().any(|a| a.name.name == "pure"),
@@ -479,6 +490,7 @@ impl<'a> Checker<'a> {
                             ret,
                             kind,
                             by_name: HashMap::new(),
+                            traits,
                         }
                     }
                     ItemKind::Harness(decl) => {
@@ -504,6 +516,7 @@ impl<'a> Checker<'a> {
                             ret,
                             kind: FnKind::Harness,
                             by_name: HashMap::new(),
+                            traits: Traits::default(),
                         }
                     }
                     ItemKind::Prompt(decl) => {
@@ -515,6 +528,7 @@ impl<'a> Checker<'a> {
                             ret: TypeId::PROMPT,
                             kind: FnKind::Prompt,
                             by_name: HashMap::new(),
+                            traits: Traits::default(),
                         }
                     }
                     _ => continue,
@@ -527,6 +541,11 @@ impl<'a> Checker<'a> {
                         self.types.function(params, sig.ret)
                     };
                     self.tables[m.0].items[index] = Some(ty);
+                }
+                if builtin {
+                    for p in &mut sig.params {
+                        p.name = builtins::builtin_name(&p.name).to_owned();
+                    }
                 }
                 sig.by_name = sig
                     .params
@@ -647,6 +666,7 @@ impl<'a> Checker<'a> {
         span: Span,
     ) -> TypeId {
         let mut out: Vec<Field> = Vec::with_capacity(fields.len());
+        let mut metas: Vec<(Box<str>, crate::types::FieldMeta)> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         for f in fields {
             let ty = self.lower_type(origin, params, &f.ty);
@@ -659,6 +679,8 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             }
+            let meta = self.field_meta(origin, f, ty);
+            metas.push((f.name.name.as_str().into(), meta));
             out.push(Field {
                 name: f.name.name.as_str().into(),
                 ty,
@@ -666,6 +688,11 @@ impl<'a> Checker<'a> {
             });
         }
         let ty = self.types.record(out);
+        if metas.iter().any(|(_, m)| !m.is_empty()) {
+            metas.sort_by(|a, b| a.0.cmp(&b.0));
+            self.types
+                .set_field_meta(ty, metas.into_iter().map(|(_, m)| m).collect());
+        }
         self.check_limits(origin, span);
         ty
     }

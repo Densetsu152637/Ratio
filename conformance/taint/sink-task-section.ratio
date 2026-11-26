@@ -1,0 +1,15 @@
+// expect: check-error C0035 at 7:10
+// expect: check-error C0035 at 13:10
+// A `task` section takes a `Brief` (or trusted text) only: untrusted text is refused.
+
+fn delegate(issue: Untrusted<Str>) -> Prompt {
+  prompt {
+    task issue
+  }
+}
+
+fn delegate_reply(r: Reply) -> Prompt {
+  prompt {
+    task "Fix this: {r.text}"
+  }
+}

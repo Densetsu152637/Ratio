@@ -1,4 +1,4 @@
-// expect: check-error C0004 at 7:3
+// expect: check-error C0035 at 7:3
 // expect: check-error C0033 at 4:11
 
 enum Sink<T> { S { f: fn(T) -> Str } }

@@ -19,11 +19,11 @@ use ratio_syntax::Span;
 use ratio_syntax::ast::{self, Arg, Expr, ExprKind, Ident, ItemKind, RecordLit};
 
 use crate::body::{Body, is_closure};
-use crate::builtins;
+use crate::builtins::{self, TrustKind};
 use crate::check::{Checker, FnKind, FnSig, ItemSig, ModRef, item_name};
 use crate::diag::Code;
 use crate::tables::{ArgSource, CallInfo, ItemRef, Key, Origin, Res};
-use crate::types::{Bound, EnumId, ParamId, Ty, TypeId};
+use crate::types::{Bound, EnumId, Erase, ParamId, Ty, TypeId};
 
 /// What a call's callee is.
 enum Callable {
@@ -146,6 +146,21 @@ impl Checker<'_> {
                 let Some(sig) = self.fn_sig(r) else {
                     return TypeId::ERROR;
                 };
+                if let Some(kind) = sig.traits.audited {
+                    // A function value would convert at whatever type it is called with, and
+                    // its calls would not be trust sites.
+                    self.report(
+                        origin,
+                        Code::NotMonomorphic,
+                        span,
+                        format!(
+                            "`{}` must be called directly, not used as a value: each call is an \
+                             audited trust site at one known type",
+                            kind.name()
+                        ),
+                    );
+                    return TypeId::ERROR;
+                }
                 self.res(b, span, Res::Item(r));
                 self.log_use(b, r, &sig, span, "referring to");
                 let ty = self.sig_type(r, &sig, span);
@@ -981,7 +996,25 @@ impl Checker<'_> {
             b.log
                 .direct
                 .push((span, "calling a harness makes effects".to_owned()));
+            self.records.harness_calls.push((b.module, span));
         }
+        let given: Vec<TypeId> = receiver
+            .map(|(rt, _)| rt)
+            .into_iter()
+            .chain(
+                args.iter()
+                    .filter_map(|a| self.tables[b.module.0].type_at(a.value.span)),
+            )
+            .collect();
+        let secret_arg = given.into_iter().any(|t| {
+            let t = self.types.resolve(t);
+            self.types.secret_inside(t)
+        });
+        let ret = if secret_arg && !self.types.secret_inside(ret) {
+            self.types.secret(ret)
+        } else {
+            ret
+        };
         self.table(b.module).calls.insert(
             Key::from(span),
             CallInfo {
@@ -1168,18 +1201,82 @@ impl Checker<'_> {
         // A later argument may have widened a type argument past what an earlier one allowed
         // (`apply(id, web)` binds `T` to `Str` from `id`, then widens it to `Untrusted<Str>`
         // for `web`): every argument is checked again against its final parameter type.
+        let mut secret_arg = false;
+        let mut fitted: Vec<(TypeId, Span)> = Vec::new();
         for (got, at, i) in placed {
             let want = self.types.resolve(params[i]);
             let got = self.types.resolve(got);
-            self.mismatch(b, at, got, want);
+            secret_arg |= self.types.secret_inside(got);
+            if self.mismatch(b, at, got, want) {
+                fitted.push((got, at));
+            }
         }
-        let result = self.types.resolve(ret);
-        let type_args = pairs.iter().map(|(_, t)| self.types.resolve(*t)).collect();
+        let mut result = self.types.resolve(ret);
+        let mut targs: Vec<TypeId> = pairs.iter().map(|(_, t)| self.types.resolve(*t)).collect();
+        let traits = &sig.traits;
+        if let Some(kind) = traits.audited {
+            let explicit = !type_args.is_empty();
+            result = self.audited(b, span, kind, &mut targs, explicit, args, &slots);
+        }
+        if traits.secrecy_sink {
+            for (got, at) in &fitted {
+                if self.types.secret_inside(*got) {
+                    let shown = self.types.display(*got);
+                    self.report(
+                        origin,
+                        Code::Secret,
+                        *at,
+                        format!(
+                            "`{shown}` holds a secret, which cannot reach `{name}` (a secrecy \
+                             sink: it can send or keep its arguments outside the machine)"
+                        ),
+                    );
+                }
+            }
+        }
+        for (p, t) in sig.type_params.iter().zip(targs.clone()) {
+            let pname = self.types.param_def(*p).name.clone();
+            if traits.schema.contains(&pname) {
+                self.require_schema(b, t, span, &format!("`{name}`'s type argument `{pname}`"));
+            }
+        }
+        if traits.secret_answers && !plain_questions(args, &slots) {
+            // Answers are secret unless every question is written out without `secret: true`.
+            if let Ty::List(elem) = *self.types.get(result) {
+                let secret = self.types.secret(elem);
+                result = self.types.list(secret);
+            }
+        }
+        if traits.loads {
+            let loaded = first_literal(args, &slots);
+            self.records.loads.push((b.module, span, loaded));
+            if let Some(h) = targs.first()
+                && !matches!(self.types.get(*h), Ty::Harness(..) | Ty::Error)
+            {
+                let shown = self.types.display(*h);
+                self.report(
+                    origin,
+                    Code::TypeArguments,
+                    span,
+                    format!("`{name}` loads a harness, so its type argument is a harness type, not `{shown}`"),
+                );
+            }
+        }
+        // A result computed from a statically secret argument is secret too (chapter 03,
+        // "Propagation"), except where `declassify` removes the label and for prompts, whose
+        // sections keep labels at run time.
+        if secret_arg
+            && traits.audited != Some(TrustKind::Declassify)
+            && sig.kind != FnKind::Prompt
+            && !self.types.secret_inside(result)
+        {
+            result = self.types.secret(result);
+        }
         self.table(b.module).calls.insert(
             Key::from(span),
             CallInfo {
                 callee: r,
-                type_args,
+                type_args: targs,
                 args: slots
                     .into_iter()
                     .map(|s| s.unwrap_or(ArgSource::Default))
@@ -1190,6 +1287,61 @@ impl Checker<'_> {
             self.log_use(b, r, sig, span, "calling");
         }
         result
+    }
+
+    /// A call of `trust`, `as_task` or `declassify`: the type it converts to, which must be
+    /// monomorphic (`C0036`), recorded as a trust site. `trust`'s `T`, unless given, is the
+    /// argument's type with its trust labels removed (`Untrusted<Verdict>` gives `Verdict`),
+    /// never what generic inference would bind (the argument's own, untrusted, type).
+    #[allow(clippy::too_many_arguments, reason = "a call's parts")]
+    fn audited(
+        &mut self,
+        b: &Body,
+        span: Span,
+        kind: TrustKind,
+        targs: &mut [TypeId],
+        explicit: bool,
+        args: &[Arg],
+        slots: &[Option<ArgSource>],
+    ) -> TypeId {
+        let to = match kind {
+            TrustKind::Trust => {
+                let t = targs.first().copied().unwrap_or(TypeId::ERROR);
+                let t = if explicit {
+                    t
+                } else {
+                    self.types.erase(t, Erase::Trust)
+                };
+                if let Some(slot) = targs.first_mut() {
+                    *slot = t;
+                }
+                t
+            }
+            TrustKind::Declassify => targs.first().copied().unwrap_or(TypeId::ERROR),
+            TrustKind::AsTask => TypeId::BRIEF,
+        };
+        let reason = match slots.get(1) {
+            Some(Some(ArgSource::Arg(k))) => literal_text(&args[*k].value),
+            _ => None,
+        };
+        self.records
+            .trust_sites
+            .push((b.module, span, kind, to, reason));
+        if self.types.has_params(to) || self.types.has_vars(to) {
+            let shown = self.types.display(to);
+            self.report(
+                b.origin(),
+                Code::NotMonomorphic,
+                span,
+                format!(
+                    "`{}` converts only at a monomorphic type, and `{shown}` is or holds a type \
+                     parameter: a generic helper cannot become a general-purpose launderer",
+                    kind.name()
+                ),
+            );
+            return TypeId::ERROR;
+        }
+        to
     }
 
     /// Checks an explicit type argument against its parameter's bound.
@@ -1302,4 +1454,60 @@ impl Checker<'_> {
             }
         }
     }
+}
+
+/// The text of a string literal without interpolations (possibly parenthesised).
+pub(crate) fn literal_text(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Paren(inner) => literal_text(inner),
+        ExprKind::Lit(ast::Lit::Str(s)) => {
+            let mut out = String::new();
+            for part in &s.parts {
+                match part {
+                    ast::StrPart::Text(t) => out.push_str(t),
+                    ast::StrPart::Interp { .. } => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// The literal text of the argument that fills a call's first parameter, if it is one.
+fn first_literal(args: &[Arg], slots: &[Option<ArgSource>]) -> Option<String> {
+    match slots.first() {
+        Some(Some(ArgSource::Arg(k))) => literal_text(&args[*k].value),
+        _ => None,
+    }
+}
+
+/// Whether `session.ask`'s questions are a list written out whose every question is a record
+/// written out without a `secret` field, or with `secret: false`: only then are the answers
+/// known not to be secret.
+fn plain_questions(args: &[Arg], slots: &[Option<ArgSource>]) -> bool {
+    let Some(Some(ArgSource::Arg(k))) = slots.first() else {
+        return false;
+    };
+    let mut e = &args[*k].value;
+    while let ExprKind::Paren(inner) = &e.kind {
+        e = inner;
+    }
+    let ExprKind::List(items) = &e.kind else {
+        return false;
+    };
+    items.iter().all(|item| {
+        let ExprKind::Record(lit) = &item.expr.kind else {
+            return false;
+        };
+        !item.spread
+            && lit.fields.iter().all(|f| match f {
+                ast::FieldInit::Field { name, value } if name.name == "secret" => {
+                    matches!(value.kind, ExprKind::Lit(ast::Lit::Bool(false)))
+                }
+                ast::FieldInit::Shorthand(name) => name.name != "secret",
+                ast::FieldInit::Spread(_) => false,
+                ast::FieldInit::Field { .. } => true,
+            })
+    })
 }

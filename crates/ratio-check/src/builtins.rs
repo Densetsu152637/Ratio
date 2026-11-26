@@ -5,13 +5,24 @@
 //! The table is written in Ratio itself: each module is a list of `fn` declarations with empty
 //! bodies, `@pure` on those whose Needs column is `pure`. A function without `@pure` counts as
 //! making effects, so a signature added without the attribute fails closed (it is refused in
-//! constants). Two type-parameter names are bounds, as in chapter 06: `S` stands for any text
-//! (`Str` or `Untrusted<Str>`) and `Num` for `Int`, `Float`, `Duration` or `Money`. Default
-//! values are written for the reader only; the checker uses only whether a parameter has one.
+//! constants, and counts as an effect of an unknown kind). Two type-parameter names are bounds,
+//! as in chapter 06: `S` stands for any text (`Str` or `Untrusted<Str>`) and `Num` for `Int`,
+//! `Float`, `Duration` or `Money`. Default values are written for the reader only; the checker
+//! uses only whether a parameter has one.
+//!
+//! Further attributes say what stage 5 needs to know ([`Traits`]): `@audited(kind)` marks the
+//! three trust conversions, `@effect(kind)` and `@tool(name)` what a built-in does (for the
+//! guarded-effect lint and `harnesses.check`'s summary), `@secrecy_sink` the built-ins no
+//! statically secret value may reach, `@schema(T)` type parameters that must be schema-able,
+//! `@user` built-ins whose result is the person's answer, `@secret_answers` `session.ask`,
+//! and `@loads` `meta.harness`. A name that is a keyword in Ratio (`harness`) is written with
+//! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
+//! a keyword.
 //!
 //! The table holds what the conformance programs need. Later stages (7 to 12) extend it module
 //! by module, and stage 7's `builtins.txt` check compares it with chapter 06.
 
+use crate::analysis::Effects;
 use crate::types::{Bound, Handle, TypeId};
 
 /// The shared types, in scope in every file behind the file's own names.
@@ -27,6 +38,9 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn result<T>(f: fn() -> T) -> Result<T> {}
 @pure fn assert(cond: Bool, message: Str = "assertion failed") -> () {}
 @pure fn assert_eq<T>(a: T, b: T, message: Str? = none) -> () {}
+@audited(trust) fn trust<T>(x: Untrusted<T>, because: Str) -> T {}
+@audited(as_task) fn as_task(x: Untrusted<Str>, because: Str) -> Brief {}
+@audited(declassify) @user fn declassify<T>(x: Secret<T>, because: Str) -> T {}
 "#,
     ),
     (
@@ -70,8 +84,9 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
         "json",
         r"
 @pure fn parse<S>(s: S) -> Json {}
-@pure fn decode<T>(j: Json) -> Untrusted<T> {}
+@pure @schema(T) fn decode<T>(j: Json) -> Untrusted<T> {}
 @pure fn get(j: Json, pointer: Str) -> Json? {}
+@pure @schema(T) fn encode<T>(v: T) -> Json {}
 ",
     ),
     (
@@ -85,19 +100,177 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     (
         "model",
         r"
-fn generate(p: Prompt, opts: GenOpts = {}) -> Untrusted<Str> {}
-fn generate_as<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T> {}
-fn classify<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<E> {}
+@effect(model) fn generate(p: Prompt, opts: GenOpts = {}) -> Untrusted<Str> {}
+@effect(model) @schema(T) fn generate_as<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T> {}
+@effect(model) fn classify<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<E> {}
+@effect(model) fn complete(text: Str, opts: GenOpts = {}) -> Untrusted<Str> {}
 @pure fn route(tier: Tier? = none, location: Location? = none, tags: [Str] = [], min_context: Int? = none) -> ModelRef {}
 ",
     ),
     (
         "tools",
+        r#"
+@tool(read_file) fn read_file(path: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> FileText {}
+@effect(write) @tool(write_file) @secrecy_sink fn write_file(path: Untrusted<Str>, content: Untrusted<Str>) -> Written {}
+@effect(write) @tool(edit_file) @secrecy_sink fn edit_file(path: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>) -> Written {}
+@effect(command) @tool(run_command) @secrecy_sink fn run_command(command: Untrusted<Str>, timeout: Duration = 120s, check: Bool = false) -> Untrusted<CommandResult> {}
+@effect(command) @tool(run_command) @secrecy_sink fn run_background(command: Untrusted<Str>) -> Process {}
+@effect(network) @tool(web_search) @secrecy_sink fn web_search(query: Untrusted<Str>, count: Int = 10) -> Untrusted<[SearchHit]> {}
+@effect(network) @tool(web_fetch) @secrecy_sink fn web_fetch(url: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> Untrusted<Page> {}
+@effect(network) @tool("mcp__*") @secrecy_sink fn mcp_call(server: Str, tool: Str, arguments: Json) -> Untrusted<McpResult> {}
+@effect(any_tool) @secrecy_sink fn call_tool(name: Str, arguments: Json) -> Untrusted<ToolResult> {}
+@effect(any_tool) fn dispatch(conv: Conversation, call: ToolCall) -> ToolResult {}
+"#,
+    ),
+    (
+        "session",
         r"
-fn read_file(path: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> FileText {}
+@user @secret_answers fn ask(questions: [Question]) -> [UserText] {}
+@user fn request_approval(summary: Str, detail: Untrusted<Str>? = none) -> Bool {}
+@secrecy_sink fn emit(name: Str, data: Json) -> () {}
+",
+    ),
+    (
+        "context",
+        r"
+fn notice(conv: Conversation, text: Str, data: Untrusted<Str>? = none) -> () {}
+",
+    ),
+    (
+        "meta",
+        r"
+@loads fn harness_<H>(name: Str) -> H {}
+",
+    ),
+    (
+        "agents",
+        r"
+@effect(delegate) @tool(spawn_agent) @secrecy_sink fn spawn(brief: Untrusted<Str>, harness_: Str? = none, agent: Str? = none, model: ModelRef? = none, tier: Tier? = none, location: Location? = none, tags: [Str] = [], effort: Effort? = none, access: Access = read, knowledge: Str? = none, title: Str? = none, single_call: Bool = false, budget: Budget? = none) -> Task<Report> {}
+@effect(delegate) @tool(steer_agent) @secrecy_sink fn steer(task: Task<Report>, text: Untrusted<Str>) -> () {}
+@effect(delegate) @tool(queue_agent) @secrecy_sink fn queue(task: Task<Report>, text: Untrusted<Str>) -> () {}
+@effect(delegate) @tool(ask_agent) @secrecy_sink fn ask(agent: Str, question: Untrusted<Str>, timeout: Duration = 300s) -> Untrusted<Str> {}
 ",
     ),
 ];
+
+/// The conversions chapter 03 audits ("Conversion"): each call is a trust site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TrustKind {
+    /// `trust(x, because:)`: untrusted to trusted.
+    Trust,
+    /// `as_task(x, because:)`: untrusted text to a `Brief`.
+    AsTask,
+    /// `declassify(x, because:)`: removes a secrecy label.
+    Declassify,
+}
+
+impl TrustKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            TrustKind::Trust => "trust",
+            TrustKind::AsTask => "as_task",
+            TrustKind::Declassify => "declassify",
+        }
+    }
+}
+
+/// What a built-in's attributes in the table say about it, beyond its signature. User
+/// declarations have the default (nothing).
+#[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent attributes")]
+pub(crate) struct Traits {
+    /// `@audited(kind)`: a trust site.
+    pub(crate) audited: Option<TrustKind>,
+    /// `@user`: its result is the person's answer, not model or tool output (for the
+    /// guarded-effect lint).
+    pub(crate) user: bool,
+    /// `@effect(kind)`: the kinds of effect it makes; a built-in without `@pure` or
+    /// `@effect` makes effects of an unknown kind ([`Effects::OTHER`]).
+    pub(crate) effects: Effects,
+    /// `@tool(name)`: the tools it runs.
+    pub(crate) tools: Vec<String>,
+    /// `@secrecy_sink`: no argument may hold a statically secret value (chapter 03's secrecy
+    /// sinks), whatever its parameter's type.
+    pub(crate) secrecy_sink: bool,
+    /// `@schema(T)`: these type parameters must be schema-able.
+    pub(crate) schema: Vec<String>,
+    /// `@secret_answers`: `session.ask`, whose answers are `Secret` unless every question is
+    /// written out without `secret: true`.
+    pub(crate) secret_answers: bool,
+    /// `@loads`: `meta.harness`, which loads a harness by name.
+    pub(crate) loads: bool,
+}
+
+impl Traits {
+    /// The traits the attributes of a built-in declaration give; an attribute the table does
+    /// not define (a bug in the table) is pushed to `internal`.
+    pub(crate) fn of(attrs: &[ratio_syntax::ast::Attribute], internal: &mut Vec<String>) -> Self {
+        let mut t = Traits::default();
+        let mut pure = false;
+        for a in attrs {
+            let words: Vec<String> = a
+                .args
+                .iter()
+                .flatten()
+                .filter_map(|arg| word(&arg.value))
+                .collect();
+            match (a.name.name.as_str(), words.as_slice()) {
+                ("pure", []) => pure = true,
+                ("user", []) => t.user = true,
+                ("secrecy_sink", []) => t.secrecy_sink = true,
+                ("secret_answers", []) => t.secret_answers = true,
+                ("loads", []) => t.loads = true,
+                ("audited", [kind]) => {
+                    t.audited = match kind.as_str() {
+                        "trust" => Some(TrustKind::Trust),
+                        "as_task" => Some(TrustKind::AsTask),
+                        "declassify" => Some(TrustKind::Declassify),
+                        _ => {
+                            internal.push(format!("unknown audited kind `{kind}`"));
+                            None
+                        }
+                    };
+                }
+                ("effect", [kind]) => match Effects::named(kind) {
+                    Some(e) => t.effects = t.effects.union(e),
+                    None => internal.push(format!("unknown effect kind `{kind}`")),
+                },
+                ("tool", [name]) => t.tools.push(name.clone()),
+                ("schema", names) if !names.is_empty() => t.schema.extend(names.iter().cloned()),
+                (other, _) => internal.push(format!("unknown built-in attribute `@{other}`")),
+            }
+        }
+        if !pure && t.effects.is_empty() {
+            t.effects = Effects::OTHER;
+        }
+        t
+    }
+}
+
+/// An attribute argument as a word: a name, or a string literal without interpolations.
+fn word(e: &ratio_syntax::ast::Expr) -> Option<String> {
+    use ratio_syntax::ast::{ExprKind, Lit, StrPart};
+    match &e.kind {
+        ExprKind::Name(id) => Some(id.name.clone()),
+        ExprKind::Lit(Lit::Str(s)) => {
+            let mut out = String::new();
+            for part in &s.parts {
+                match part {
+                    StrPart::Text(x) => out.push_str(x),
+                    StrPart::Interp { .. } => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// A built-in's name as the table spells it, without the trailing `_` of a keyword.
+pub(crate) fn builtin_name(name: &str) -> &str {
+    name.strip_suffix('_').unwrap_or(name)
+}
 
 /// The module a method call on a value of a type looks in first (chapter 03, "Modules and
 /// imports": `x.f(a)` resolves to the module of `x`'s type first).

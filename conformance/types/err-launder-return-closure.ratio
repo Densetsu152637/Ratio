@@ -1,4 +1,4 @@
-// expect: check-error C0004 at 12:38
+// expect: check-error C0035 at 12:38
 
 fn mk<T>(x: T) -> fn(T) -> T {
   |y| y

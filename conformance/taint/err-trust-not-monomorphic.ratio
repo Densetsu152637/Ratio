@@ -1,0 +1,23 @@
+// expect: check-error C0036 at 9:3
+// expect: check-error C0036 at 13:3
+// expect: check-error C0036 at 17:11
+// expect: check-error C0036 at 22:14
+// `trust`, `as_task` and `declassify` convert only at monomorphic types, and are called
+// directly: a generic helper or a function value would be a general-purpose launderer.
+
+fn launder<T>(x: Untrusted<T>) -> T {
+  trust(x, because: "generic")
+}
+
+fn reveal<T>(x: Secret<T>) -> T {
+  declassify(x, because: "generic")
+}
+
+fn as_value(x: Untrusted<Str>) -> Str {
+  let f = trust
+  "no"
+}
+
+fn through_closure<T>(xs: [Untrusted<T>]) -> [T] {
+  xs.map(|x| trust(x, because: "in a closure"))
+}
