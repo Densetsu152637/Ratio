@@ -657,3 +657,31 @@ fn junctions_and_reparse_points_are_refused() {
         assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
     }
 }
+
+/// An argument that is not valid UTF-8 is a usage error, shown lossily, never a panic.
+#[test]
+fn an_argument_that_is_not_utf8_is_a_usage_error() {
+    #[cfg(unix)]
+    let arg = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(b"bad\xff\x1b[2J.ratio".to_vec())
+    };
+    #[cfg(windows)]
+    let arg = {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = "bad\u{1b}[2J".encode_utf16().collect();
+        wide.push(0xd800);
+        std::ffi::OsString::from_wide(&wide)
+    };
+    #[cfg(any(unix, windows))]
+    {
+        let o = Command::new(env!("CARGO_BIN_EXE_ratio"))
+            .arg("check")
+            .arg(&arg)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+        assert!(stderr(&o).contains("not valid UTF-8"), "{}", stderr(&o));
+        assert!(!hostile(&stderr(&o)), "{:?}", stderr(&o));
+    }
+}

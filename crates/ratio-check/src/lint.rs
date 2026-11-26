@@ -47,12 +47,15 @@ use crate::analysis::{Effects, Results};
 use crate::check::{Checker, FnKind, ItemSig};
 use crate::diag::Code;
 use crate::tables::{ArgSource, Key, LocalId, Origin, PatRes, Res};
-use crate::types::Ty;
+use crate::types::{Ty, TypeId};
 
 /// Why a generic declaration instantiated at a secret is refused.
 const SECRET_INSTANCE: &str = "a generic function that may reach a secrecy sink cannot be \
      instantiated at a type holding a secret: its body cannot see the label (`declassify` asks \
      the user)";
+
+/// How deep [`Checker::holds_fn`] looks into a type before it assumes a function is there.
+const MAX_FN_DEPTH: usize = 16;
 
 /// How many times an item is walked for its derived locals to settle.
 pub const MAX_ROUNDS: usize = 8;
@@ -627,50 +630,99 @@ impl Checker<'_> {
         }
     }
 
-    /// What calling the function value `e` may do: a closure's calls, a declaration's
-    /// summary, a local bound to one of those; anything for a harness value or a function
-    /// value whose origin is unknown (a parameter, a field); `None` for a value that is not a
-    /// function.
-    fn fn_value_effects(&self, st: &St<'_>, e: &Expr) -> Option<Effects> {
-        match &e.kind {
-            ExprKind::Paren(inner) => return self.fn_value_effects(st, inner),
-            ExprKind::Closure { .. } | ExprKind::FnExpr { .. } => {
-                return Some(
-                    st.closures
-                        .get(&(e.span.start, e.span.end))
-                        .copied()
-                        .unwrap_or(Effects::ALL),
-                );
-            }
-            _ => {}
+    /// Whether a value of type `t` may hold a function: a function or harness, or a list,
+    /// option, map, tuple, record, task or enum argument that holds one (`[fn() -> T]`,
+    /// `Check<T>`'s `run`, `Stop`'s `until`). Deeper than [`MAX_FN_DEPTH`], it may.
+    fn holds_fn(&self, t: TypeId, depth: usize) -> bool {
+        if depth > MAX_FN_DEPTH {
+            return true;
         }
+        match self.types.get(t) {
+            Ty::Fn(..) | Ty::Harness(..) => true,
+            Ty::Option(a) | Ty::List(a) | Ty::Task(a) | Ty::Untrusted(a) | Ty::Secret(a) => {
+                self.holds_fn(*a, depth + 1)
+            }
+            Ty::Map(k, v) => self.holds_fn(*k, depth + 1) || self.holds_fn(*v, depth + 1),
+            Ty::Tuple(items) => items.iter().any(|i| self.holds_fn(*i, depth + 1)),
+            Ty::Record(fields) => fields.iter().any(|f| self.holds_fn(f.ty, depth + 1)),
+            Ty::Enum(_, args) => args.iter().any(|a| self.holds_fn(*a, depth + 1)),
+            _ => false,
+        }
+    }
+
+    /// What calling the function values `e` holds may do, joined: a closure's calls (when
+    /// `closures`; a closure written as a call's argument is linted in place instead), a
+    /// declaration's summary, a built-in's effects, a local bound to such values; everything
+    /// for a harness, or for a function value whose origin is unknown (a parameter, a field, a
+    /// call's result). Lists, tuples and records written out are looked into. `None` when `e`
+    /// holds no function.
+    fn held_fn_effects(&self, st: &St<'_>, e: &Expr, closures: bool) -> Option<Effects> {
+        let join = |acc: Option<Effects>, more: Option<Effects>| match (acc, more) {
+            (Some(a), Some(b)) => Some(a.union(b)),
+            (a, b) => a.or(b),
+        };
+        match &e.kind {
+            ExprKind::Paren(inner) => self.held_fn_effects(st, inner, closures),
+            ExprKind::Closure { .. } | ExprKind::FnExpr { .. } => closures.then(|| {
+                st.closures
+                    .get(&(e.span.start, e.span.end))
+                    .copied()
+                    .unwrap_or(Effects::ALL)
+            }),
+            ExprKind::Tuple(items) => items.iter().fold(None, |acc, i| {
+                join(acc, self.held_fn_effects(st, i, closures))
+            }),
+            ExprKind::List(items) => items.iter().fold(None, |acc, i| {
+                join(acc, self.held_fn_effects(st, &i.expr, closures))
+            }),
+            ExprKind::Record(lit) | ExprKind::Variant { fields: lit, .. } => {
+                lit.fields.iter().fold(None, |acc, f| {
+                    let more = match f {
+                        FieldInit::Field { value, .. } | FieldInit::Spread(value) => {
+                            self.held_fn_effects(st, value, closures)
+                        }
+                        FieldInit::Shorthand(name) => self.value_fn_effects(st, name.span),
+                    };
+                    join(acc, more)
+                })
+            }
+            _ => self.value_fn_effects(st, e.span),
+        }
+    }
+
+    /// What calling the function values held by the value at `span` may do, from its type and
+    /// what it resolved to.
+    fn value_fn_effects(&self, st: &St<'_>, span: Span) -> Option<Effects> {
         let table = &self.tables[st.module.0];
-        let ty = table.types.get(&Key::from(e.span))?;
-        if !matches!(self.types.get(*ty), Ty::Fn(..) | Ty::Harness(..)) {
+        let ty = *table.types.get(&Key::from(span))?;
+        if !self.holds_fn(ty, 0) {
             return None;
         }
-        if matches!(self.types.get(*ty), Ty::Harness(..)) {
+        if matches!(self.types.get(ty), Ty::Harness(..)) {
             return Some(Effects::ALL);
         }
-        let known = match table.res.get(&Key::from(e.span)) {
+        let known = match table.res.get(&Key::from(span)) {
             Some(Res::Local(l)) => st.fn_locals.get(l).copied(),
-            Some(Res::Item(r)) => Some(match (r.origin, self.sig(*r)) {
-                (Origin::Std(_), ItemSig::Fn(sig)) => sig.traits.effects,
-                (Origin::Module(m), _) => st
-                    .results
-                    .summaries
-                    .get(&(m, r.index))
-                    .map_or(Effects::ALL, |s| s.effects),
-                _ => Effects::ALL,
-            }),
+            Some(Res::Item(r)) if matches!(self.types.get(ty), Ty::Fn(..)) => {
+                Some(match (r.origin, self.sig(*r)) {
+                    (Origin::Std(_), ItemSig::Fn(sig)) => sig.traits.effects,
+                    (Origin::Module(m), _) => st
+                        .results
+                        .summaries
+                        .get(&(m, r.index))
+                        .map_or(Effects::ALL, |s| s.effects),
+                    _ => Effects::ALL,
+                })
+            }
             _ => None,
         };
         Some(known.unwrap_or(Effects::ALL))
     }
 
-    /// The arguments a call may call: those given for a parameter of function or harness type
-    /// (`retry`'s `f`, not `meta.signature`'s `h: H`), or every argument of a call of a function
-    /// value, whose parameters are not known by name.
+    /// The arguments a call may call into: those given for a parameter whose type may hold a
+    /// function (`retry`'s `f`, `par`'s `fs`, `think.until`'s `stop`; not `meta.signature`'s
+    /// `h: H`), or every argument of a call of a function value, whose parameters are not
+    /// known by name.
     fn callback_args<'e>(
         &self,
         info: Option<&crate::tables::CallInfo>,
@@ -689,20 +741,14 @@ impl Checker<'_> {
                 let ArgSource::Arg(k) = source else {
                     return None;
                 };
-                let mut ty = param.ty;
-                if let Ty::Option(inner) = self.types.get(ty) {
-                    ty = *inner;
-                }
-                matches!(self.types.get(ty), Ty::Fn(..) | Ty::Harness(..))
-                    .then(|| args.get(*k))
-                    .flatten()
+                self.holds_fn(param.ty, 0).then(|| args.get(*k)).flatten()
             })
             .collect()
     }
 
     /// Records what a local bound by `let` to a function value may do when called.
     fn bind_fn_value(&self, st: &mut St<'_>, pattern: Span, value: &Expr) {
-        let Some(effects) = self.fn_value_effects(st, value) else {
+        let Some(effects) = self.held_fn_effects(st, value, true) else {
             return;
         };
         let from = st.binds.partition_point(|(s, _, _)| *s < pattern.start);
@@ -766,7 +812,7 @@ impl Checker<'_> {
             // A call of a function value: what the value is known to do (a closure or a
             // declaration bound to a local), else anything.
             let effects = callee
-                .and_then(|c| self.fn_value_effects(st, c))
+                .and_then(|c| self.held_fn_effects(st, c, true))
                 .unwrap_or(Effects::NONE);
             (effects, true)
         };
@@ -774,9 +820,7 @@ impl Checker<'_> {
         // do counts here. A closure written at the call is linted in place instead.
         let mut effects = effects;
         for a in self.callback_args(info, args) {
-            if !crate::body::is_closure(&a.value)
-                && let Some(more) = self.fn_value_effects(st, &a.value)
-            {
+            if let Some(more) = self.held_fn_effects(st, &a.value, false) {
                 effects = effects.union(more);
             }
         }

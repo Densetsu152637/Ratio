@@ -300,6 +300,8 @@ pub struct BuiltinRules {
     pub param_types: Vec<String>,
     /// The tools its `@tool(...)` attributes name.
     pub tools: Vec<String>,
+    /// The kinds of effect it makes ([`Effects::names`]), as its attributes give them.
+    pub effects: Vec<&'static str>,
     /// Why it may not be used as a function value, if it may not.
     pub refused_as_value: Option<&'static str>,
 }
@@ -353,6 +355,7 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
                     .collect(),
                 refused_as_value: traits.value_refusal(generic),
                 tools: traits.tools.clone(),
+                effects: traits.effects.names(),
             });
         }
     }

@@ -28,7 +28,7 @@ pub fn human(f: &Finding) -> String {
         "{} {}: {}",
         f.severity.word(),
         clean(&f.code),
-        clean(&f.message)
+        clean_text(&f.message)
     );
     if let (Some(span), Some(source)) = (f.span, &f.source) {
         out.push_str(&caret(span, source));
@@ -76,32 +76,64 @@ fn caret(span: ratio::Span, source: &str) -> String {
     let gutter = " ".repeat(line_no.len());
     format!(
         "{line_no} | {}\n{gutter} | {pad}{}\n",
-        clean(text),
+        clean_text(text),
         "^".repeat(width.max(1))
     )
 }
 
-/// Whether `c` would control the terminal or reorder the text around it: a C0 control other
-/// than tab, DEL, a C1 control, or a bidirectional embedding, override or isolate.
+/// Whether `c` would control the terminal or change how the text around it reads: a C0
+/// control other than tab, DEL, a C1 control, a bidirectional embedding, override, isolate or
+/// mark (U+200E, U+200F, U+061C), an invisible joiner or space (U+200B to U+200D, U+FEFF), a
+/// line or paragraph separator, an interlinear annotation mark, or a tag character.
 fn hostile(c: char) -> bool {
-    matches!(c, '\u{0}'..='\u{8}' | '\u{a}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
-        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{0}'..='\u{8}'
+            | '\u{a}'..='\u{1f}'
+            | '\u{7f}'..='\u{9f}'
+            | '\u{61c}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{e0000}'..='\u{e007f}'
+    )
 }
 
-/// How many columns `c` takes once cleaned.
+/// How many columns `c` takes once cleaned as text.
 fn shown_width(c: char) -> usize {
     if hostile(c) {
         escape(c).chars().count()
+    } else if c == '\\' {
+        2
     } else {
         1
     }
+}
+
+/// Text from a package (a message, a source line) for a terminal: as [`clean`], and each `\`
+/// doubled, so a `\u{1b}` written in the source cannot pass for an escaped character.
+pub fn clean_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if hostile(c) {
+            out.push_str(&escape(c));
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn escape(c: char) -> String {
     format!("\\u{{{:x}}}", u32::from(c))
 }
 
-/// `s` for a terminal: each [`hostile`] character written as `\u{..}`.
+/// `s` for a terminal: each [`hostile`] character written as `\u{..}`. File names, paths and
+/// arguments keep their `\` (a Windows path); a package's text goes through [`clean_text`].
 pub fn clean(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -221,6 +253,39 @@ mod tests {
             )
         );
         assert_eq!(clean("tab\tok"), "tab\tok");
+        // A literal escape in the source is not mistaken for one the tool wrote.
+        assert_eq!(clean_text(r"a\u{1b}b"), r"a\\u{1b}b");
+        assert_eq!(clean(r"C:\dir\a.ratio"), r"C:\dir\a.ratio");
+        for c in [
+            '\u{200e}',
+            '\u{200f}',
+            '\u{61c}',
+            '\u{200b}',
+            '\u{200d}',
+            '\u{feff}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{fff9}',
+            '\u{fffb}',
+            '\u{e0001}',
+            '\u{e007f}',
+        ] {
+            assert_eq!(
+                clean_text(&c.to_string()),
+                format!("\\u{{{:x}}}", u32::from(c))
+            );
+        }
+        // The caret stays under its character after a doubled `\`.
+        let mut g = finding(Some(ratio::Span {
+            start: 6,
+            end: 7,
+            line: 1,
+            col: 7,
+            end_line: 1,
+            end_col: 8,
+        }));
+        g.source = Some("\"a\\b\" x\n".to_owned());
+        assert_eq!(human(&g).lines().nth(2), Some("  |        ^"));
     }
 
     #[test]

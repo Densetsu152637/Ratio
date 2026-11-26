@@ -52,9 +52,14 @@ The first line is `file:line:col: severity CODE: message`; the source line and t
 the span are drawn as the syntax crate's `Diagnostic::render` draws them. Everything printed
 for a person (file names, messages, source lines, and the paths and reasons on standard error)
 comes from the package, so a character that could control the terminal or reorder text is
-written as an escape instead: C0 controls other than tab, DEL, C1 controls (U+0080 to U+009F)
-and the bidirectional embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069)
-appear as `\u{1b}`, `\u{202e}`, …, and the caret is placed under the escaped line. An OSC 52
+written as an escape instead: C0 controls other than tab, DEL, C1 controls (U+0080 to U+009F),
+the bidirectional embeddings, overrides, isolates and marks (U+202A to U+202E, U+2066 to
+U+2069, U+200E, U+200F, U+061C), the invisible joiners and spaces (U+200B to U+200D, U+FEFF),
+the line and paragraph separators (U+2028, U+2029), the interlinear annotation marks (U+FFF9
+to U+FFFB) and the tag characters (U+E0000 to U+E007F) appear as `\u{1b}`, `\u{202e}`, …, and
+in messages and source lines a `\` is doubled, so a `\u{1b}` written in the source cannot pass
+for one the tool escaped. The caret is placed under the escaped line. An argument that is not
+valid UTF-8 is a usage error (exit 2), shown lossily and escaped. An OSC 52
 clipboard write, a screen clear, a hyperlink or a Trojan Source reordering in a package
 therefore never reaches the terminal. JSON escapes control characters itself. A summary
 (`1 package: 1 error, 0 warnings`) goes to standard error. With `--json`, each diagnostic is one

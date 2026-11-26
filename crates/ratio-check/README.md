@@ -167,8 +167,12 @@ crate rather than a second one because its rules change which programs type (the
   function value counts as what the value may do: a closure's calls, a declaration's summary or
   a built-in's effects, carried through `let` bindings (`let go = || tools.install_extension(…)`,
   `let f = meta.author`), and anything at all for a value of unknown origin (a parameter, a
-  harness). So does a function value passed for a callback parameter (`retry(go)`); a closure
-  written at the call is linted in place. `declassify`
+  harness). So does every function value held by an argument whose parameter type may hold a
+  function: `retry(go)`, but also `par([go])`, `race`, `fallback`, `think.debate`'s `sides`,
+  `think.check`'s `Check.run`, `think.until`'s `Stop.until`, and a program's own
+  `fs: [fn() -> ()]` or `{ run: fn() -> () }`, looking into lists, tuples and records written
+  out and through locals bound to them (`let fs = [go]`); a closure written at the call is
+  linted in place. `declassify`
   is `@user` (the person approves it), so its result is as derived as its argument: the
   person approves removing the label, not where the value came from.
 - **Schemas and digests** ([`src/schema.rs`](src/schema.rs) documents the canonical forms).
@@ -395,7 +399,8 @@ refuses nesting beyond 12.
 - `tests/attributes.rs`: `@pure` exactly where the Needs column says `pure` (or a callback
   combinator's `as f`), `@tool(...)` exactly its `tool:` names (`mcp__*` for the MCP rows),
   every parameter type as chapter 06 writes it but for a listed set of documented differences,
-  and `@local` and `@secrecy_sink` exactly the reviewed lists pinned in the test.
+  and `@local`, `@secrecy_sink` and every built-in's kinds of effect (`EFFECTS`: what the lint
+  and `harnesses.check` see) exactly the reviewed lists pinned in the test.
 - `conformance/taint/ok-module-*.ratio` use each module of stage C as a harness would;
   `err-secret-stdlib-sinks`, `sink-stdlib-trusted-params` and `warn-model-guard-stdlib` refuse
   secrets at its sinks, untrusted text at its trusted parameters, and show its guarded effects;

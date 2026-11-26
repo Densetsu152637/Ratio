@@ -55,7 +55,20 @@ or a path that cannot be read.
 ";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        match arg.into_string() {
+            Ok(text) => args.push(text),
+            Err(raw) => {
+                // An argument the tool cannot name in its output: refused, shown as best it can.
+                eprintln!(
+                    "ratio: an argument is not valid UTF-8: {}",
+                    render::clean(&raw.to_string_lossy())
+                );
+                return ExitCode::from(USAGE);
+            }
+        }
+    }
     ExitCode::from(run(&args))
 }
 
