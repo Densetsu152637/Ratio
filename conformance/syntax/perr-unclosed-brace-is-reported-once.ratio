@@ -1,0 +1,3 @@
+// expect: parse-error L0014 at 3:8
+
+fn f() {

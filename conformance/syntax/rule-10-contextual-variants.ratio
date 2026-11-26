@@ -1,0 +1,17 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn contextual [] [] - (block [(expr (call (member (name model) generate) [] [(arg -
+// tree: (name p)) (arg effort (name high)) (arg context (name fresh)) (arg mode (name plan))])) (expr (call (member
+// tree: (name agent) spawn) [] [(arg tools (list [(name read_file) (name grep)])) (arg effort (member (name Effort)
+// tree: high))])) (let (pat-name e) - (member (name Effort) high)) (expr (record [(field effort (name high)) (field
+// tree: tools (list [(name read_file)]))])) (expr (with-override (call (name call) [] [(arg - (name x))]) (record
+// tree: [(field effort (name high)) (field context (name fresh))])))])))])
+
+// Rule 10: the parser reads a bare name; the checker resolves contextual variants and tool names.
+
+fn contextual() {
+  model.generate(p, effort: high, context: fresh, mode: plan)
+  agent.spawn(tools: [read_file, grep], effort: Effort.high)
+  let e = Effort.high
+  { effort: high, tools: [read_file] }
+  call(x) with { effort: high, context: fresh }
+}

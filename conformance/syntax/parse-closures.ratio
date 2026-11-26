@@ -1,0 +1,21 @@
+// expect: parse-ok
+
+fn closures() {
+  map(xs, |x| x + 1)
+  map(xs, |x: Int| x + 1)
+  map(xs, |(a, b)| a)
+  map(xs, |{ name }| name)
+  map(xs, |x, y| x + y)
+  map(xs, |x, y: Int| x)
+  map(xs, || 1)
+  map(xs, |x| { let y = x; y })
+  map(xs, |c| { steps: c.steps })
+  map(xs, |c| { x, })
+  map(xs, |c| { x })
+  par_map(xs, |x| x, limit: 4)
+  par_map(xs, f: |x| x, limit: 4)
+  let f = fn(x: Int) -> Int { x + 1 }
+  let g = fn() { 1 }
+  let h = |x| |y| x + y
+  let c = |a: [Int], b: (Int, Str)| a
+}

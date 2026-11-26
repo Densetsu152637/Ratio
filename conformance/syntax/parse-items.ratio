@@ -1,0 +1,50 @@
+// expect: parse-ok
+
+// Every item form of the grammar, one of each, with and without the optional parts.
+
+meta { name: "all-items", version: "0.1.0", description: "One of everything" }
+
+import "helpers.ratio"
+import "helpers.ratio" as h
+import "helpers.ratio" { one, two }
+import "helpers.ratio" as h { one }
+import std:debate
+import user:critics.strict as strict
+import plugin:acme/review @"^1" { review }
+import authored:session/vote
+
+type Id = Str
+type Pair<A, B> = (A, B)
+type Note = { path: Str, risky?: Bool "True when risky" }
+
+enum Effort { low, medium, high }
+enum Verdict<T> { Pass, Fail { reason: Str }, Other { value: T, } }
+enum Single { Only }
+
+const LIMIT = 20k
+const NAME: Str = "ratio"
+
+fn plain() { 1 }
+fn typed<T>(x: T, y: Int = 2) -> T { x }
+fn trailing(a: Int, b: Int,) -> Int { a + b }
+
+harness bare() { 1 }
+harness full(task: Str, n: Int = 3) -> Str
+  with { tools: [read_file], budget: { tokens: 200k } }
+{
+  task
+}
+
+prompt greet(name: Str) {
+  instruct "Say hello."
+  task "to {name}"
+}
+
+state: { count: Int } = { count: 0 }
+
+test "one plus one" {
+  assert(1 + 1 == 2)
+}
+
+pub fn exported() { 1 }
+pub const SHARED = 1

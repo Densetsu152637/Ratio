@@ -1,0 +1,15 @@
+// expect: parse-ok
+
+fn jumps() {
+  return
+  return 1
+  return a + b
+  break
+  break 1
+  continue
+  raise fail("tag", "message")
+  raise e
+  let x = if a { return 1 } else { 2 }
+  a ?? (return 0)
+  loop { if done { break result } }
+}

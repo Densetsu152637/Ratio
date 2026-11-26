@@ -1,0 +1,7 @@
+// expect: parse-error P0004 at 5:3
+// expect: parse-error P0004 at 6:3
+
+fn assign() {
+  f(x) = 1
+  1 + 2 += 3
+}

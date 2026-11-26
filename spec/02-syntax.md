@@ -139,7 +139,9 @@ The parser's token reader inserts one at a line end when **all** of these hold:
    type, an enum body, a `match` or `catch` arm list, or a declaration head from `fn`, `harness`
    or `prompt` up to the `{` of its body;
 2. the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or one of `break`,
-   `continue`, `return`, `none`, `true`, `false`;
+   `continue`, `return`, `none`, `true`, `false`; or it is a `>` that closes a generic argument
+   list, or a `??` that ends a type, when the statement is a type declaration (it began with
+   `type`) or a prompt's `format` section (see below);
 3. the next non-blank line does not start with `.` (including `..` and `..=`), `?.`, `|>`, `??`,
    `and`, `or`, `else` or `catch`. Lines holding only a `//` comment count as blank; a line
    holding a `///` documentation comment does not.
@@ -149,6 +151,22 @@ one or several) does not end a statement, although its last token is an identifi
 attribute belongs to the item on the lines below it. An attribute counts as such when its `@`
 starts a statement or item (at the start of the file, or after `;`, `{` or another attribute);
 it lasts through its name and, when present, its parenthesised arguments.
+
+A `>` is otherwise never the last token of a statement, because it is the comparison operator,
+and `??` because it is the coalescing operator. Inside a type declaration (`type T = List<Int>`,
+`type X = Int??`) and a prompt `format` section (`format Map<K, V>`), a `>` that closes a `<`
+opened in the same statement, or a `??` (the double option of a type), ends the statement at
+a line end, so the next item or section can start on the next line. The token reader does not
+tell a generic `<` from a comparison, so it pairs each `>` with the nearest open `<` of the same
+delimiter depth; in these two statements the grammar allows no comparison, so the pairing is
+exact. Condition 3 still applies.
+
+A `{` must start on the line of what opens it: the line end before it ends a statement as
+usual (after `if c`, `while c`, `for p in xs`, `repeat n`, `with timeout d`, `match x`, `enum E`,
+`loop`, `try`, `do`, and so on), and wherever the parser needs a `{` (a block, the branches of
+an `if` or `for`, a match or catch arm list, an enum body, a record, an import list, a prompt
+body) it reports a `{` that follows an inserted `;` once, as `P0008`, and reads it anyway. A `fn`, `harness` or `prompt` head, which has no expression to end a statement,
+may span lines up to its `{` (condition 1).
 
 So pipelines and `else` on the next line continue an expression; inside a `match`, `catch`, enum
 or record the line breaks are only whitespace and the entries are separated by commas; a
@@ -190,6 +208,19 @@ The grammar is EBNF (ISO 14977 style: `{ }` repetition, `[ ]` option, `|` choice
 grouping, terminals in double quotes). `IDENT`, `INT`, `QUANTITY`, `FLOAT`, `DURATION`, `MONEY`,
 `STRING` and `RAW_STRING` are lexical tokens defined above (`STRING` includes its
 interpolations); `;` includes inserted semicolons. `MEMBER` is an identifier or any keyword.
+
+The parser applies the grammar strictly. A trailing comma is accepted only where a production
+shows `[ "," ]`; a `return`, `break`, `continue` or `raise` (a `jump_expr`) is an `expr`, so it
+may be a statement, an argument or an arm body, but it is not an operand: `1 + return` and
+`not break` are errors; and `()` is the unit type only, never an expression.
+
+Parser nesting is the depth of the syntax tree: each nested expression, type or pattern counts
+one level, and so does each prefix operator (`not`, `-`) and each link of a postfix, binary or
+`|>` chain, so `a.b.c.d` is deeper than `a`. The limit is `max_nesting` (default 128, chapter
+07); exceeding it is `P0002` and parsing stops. A `defer` block and a
+prompt `if` or `for` section each count one level too. (If no thread with a large stack can be
+started for the parser, the limit, the token reader's included, is clamped to 12; see "Canonical
+form".)
 
 ```ebnf
 module          = [ meta_decl ] , { item } , EOF ;
@@ -312,7 +343,8 @@ alt_pattern     = "_" | literal | IDENT , [ "@" , alt_pattern ]
                 | "[" , [ list_pattern , { "," , list_pattern } ] , "]"
                 | record_pattern ;
 list_pattern    = pattern | ".." , [ IDENT ] ;
-record_pattern  = "{" , [ field_pattern , { "," , field_pattern } ] , [ "," , ".." ] , "}" ;
+record_pattern  = "{" , [ ( field_pattern , { "," , field_pattern } , [ "," , ".." ]
+                          | ".." ) , [ "," ] ] , "}" ;
 field_pattern   = IDENT , [ ":" , pattern ] ;
 
 (* Prompts, chapter 05 *)
@@ -340,7 +372,9 @@ section         = "system" , expr
      `loop`, `repeat`, `try`, `catch`, `defer`, `do`, `fn`, `harness`, `test`) and after the head
      expression of `if c`, `while c`, `for p in xs`, `repeat n` and `with timeout d`, `{` starts a
      block. Directly after `catch`, `{` starts the arm list; after `match x` and `enum E`, the
-     arm list and the enum body.
+     arm list and the enum body. After a `:`, `fn()` is a function expression, whose `{` starts a
+     block, when a `{` follows it or its result type (`{ run: fn() {} }`, `g(a: fn() -> T { x })`);
+     otherwise it is a function type (`let f: fn() -> T = h`).
    - **`with` and a record.** After a `with` that begins an expression (not `with timeout`, not a
      call override after `)`, not a harness's configuration in its declaration head), the first
      `{` is the configuration record and the next one the block. In a declaration head,
@@ -356,7 +390,9 @@ section         = "system" , expr
    A record or variant literal in an `if`, `while`, `for`, `match`, `repeat` or `with timeout`
    head must be parenthesised. The token reader needs these decisions for semicolon insertion
    before any parsing, so it approximates the parser with the keyword that led to the `{` plus
-   this rule, and the parser makes the same decisions.
+   this rule. The parser does not repeat the decision: it takes the brace kind the token reader
+   attached to each `{` and `}` (the reader's decision is the rule's decision), and reports
+   `P0003` when the kind does not fit the production being parsed.
 2. **Type arguments** use the turbofish: `json.decode::<Plan>(j)`, `model.generate_as::<Note>(p)`.
    Bare `<` is always the comparison operator in expressions.
 3. **Variant literals.** `Name { … }` in expression position (outside heads, rule 1) constructs
@@ -365,6 +401,8 @@ section         = "system" , expr
    otherwise `()` (Unit). Inserted semicolons do not change a block's value.
 5. `|` begins a closure in primary position and separates patterns in a pattern; there is no
    bitwise-or operator. A closure parameter is a single pattern without top-level `|`.
+   The commas of a closure's parameter list never end a `match` arm: in
+   `a => |x, y| match n { … }` the `{` still opens the inner `match`'s arms.
 6. **Patterns.** In a `match` or `catch` arm, an identifier that resolves to a variant of the
    scrutinee's enum (rule 10) or a qualified `type_name` naming a variant is a variant pattern;
    any other bare identifier binds.
@@ -390,6 +428,41 @@ constants, operators, and calls of **pure** functions and pure built-ins (`model
 `text.*`, `list.*`, …); the checker refuses calls that make effects (model calls, tools, the
 clock, randomness). `const CRITIC: ModelRef = model.route(tier: frontier)` is therefore valid: it
 builds a reference and resolves nothing until a call uses it.
+
+### Canonical form
+
+The canonical printer (`ratio_syntax::print`) writes a parsed module back as source. For every
+tree the parser builds without errors, whose printed text is **within the source limit**
+(chapter 07), that text reads back as the same tree and printing it again gives the same text.
+The limit matters because printing adds bytes: it indents by nesting depth, so the text of a deep
+tree can be larger than the source it came from (255 nested `if a {` print to about 264,000 bytes,
+over the 256 KiB limit, and the printed text is refused with `L0013`); the printer does not
+shorten it. Its choices are:
+
+- **Statement ends.** A statement ends with a line end. The printer also writes an explicit `;`
+  after a statement whose last token is a `>` or `??` closing a type, or that holds a `fn` or
+  `harness` type outside brackets with no `{` after it, although the reader would insert one at
+  a line end in a type declaration or `format` section; both spellings read as the same tree.
+  The last statement of a block needs none.
+- **Lists.** An `import` name list takes no trailing comma (`{ a, b }`). A record with one
+  shorthand field is written `{ x, }`, so that rule 1 does not take it for a block.
+- **Literals.** Integers in decimal. A quantity is written with `M` only for a whole number of
+  millions, otherwise with `k` and up to three decimals (`1.5k`, `1500k`). A duration is written in
+  the largest of `h`, `m`, `s`, `ms` that holds it whole (`120m` is `2h`, `90m` stays `90m`).
+  Money is `$12` when whole, otherwise with at least two decimals (`$0.50`). Ranges have no
+  spaces (`0..n`, `a..=b`).
+- **Long strings.** A long string is written on several lines, its closing `"""` on a line of
+  its own at the statement's indentation; `"`, `{`, `}`, `\` and tab are escaped, and a leading
+  space that the dedent would strip is written `\u{20}`. A raw long string is written with its
+  lines at column 0, because it has no escapes to tell indentation from text. A raw long string
+  whose non-blank lines all share indentation has no canonical form (the parser never builds one,
+  since its dedent removes that indentation; a hand-built tree can): the printer still writes it
+  at column 0, and it reads back dedented.
+
+`print` and the tree dump run on a thread with a large stack, like the parser. If no such thread
+can be started, they run on the caller's stack and refuse trees deeper than 12 levels (the printer
+writes `<too deep>` and the dump `(too-deep)` there), and the parser clamps `max_nesting` (the token reader's too) to 12,
+so a deeper source gets `P0002`.
 
 ## A complete small program
 

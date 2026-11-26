@@ -1,0 +1,32 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn override [] [(param x (named [Int] []) -)] - (block [(expr (with-override (call
+// tree: (name f) [] [(arg - (name x))]) (record [(field effort (name low))]))) (expr (with-override (call (name f) []
+// tree: [(arg - (name x))]) (record [(field effort (name low)) (field budget (record [(field tokens (quantity
+// tree: 10000))]))]))) (let (pat-name a) - (bin + (with-override (call (name f) [] [(arg - (name x))]) (record [(field
+// tree: effort (name low))])) (int 1))) (let (pat-name b) - (bin + (int 1) (with-override (call (name f) [] [(arg -
+// tree: (name x))]) (record [(field effort (name low))])))) (let (pat-name c) - (with-override (call (name reviewer)
+// tree: [] [(arg - (name diff)) (arg focus (str short ["style"]))]) (record [(field effort (name low))]))) (expr (bin
+// tree: |> (with-override (call (name f) [] [(arg - (name x))]) (record [(field a (int 1))])) (name g))) (expr (bin ??
+// tree: (with-override (call (name f) [] [(arg - (name x))]) (record [(field a (int 1))])) (none))) (expr
+// tree: (with-override (call (member (name x) y) [] [(arg - (int 1))]) (record [(field a (int 1))]))) (expr (call
+// tree: (name f) [] [(arg - (name x))])) (expr (with (record [(field effort (name low))]) (block [(expr (call (name
+// tree: work) [] []))]))) (expr (with-override (call (name f) [] [(arg - (name x))]) (record [(field effort (name
+// tree: low))])))])))])
+
+// Rule 7: `x with { … }` binds tighter than any binary operator and starts on the call's line.
+
+fn override(x: Int) {
+  f(x) with { effort: low }
+  f(x) with { effort: low, budget: { tokens: 10k } }
+  let a = f(x) with { effort: low } + 1
+  let b = 1 + f(x) with { effort: low }
+  let c = reviewer(diff, focus: "style") with { effort: low }
+  f(x) with { a: 1 } |> g
+  f(x) with { a: 1 } ?? none
+  x.y(1) with { a: 1 }
+  f(x)
+  with { effort: low } { work() }
+  f(x) with {
+    effort: low,
+  }
+}

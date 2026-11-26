@@ -1,0 +1,25 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn turbofish [] [] - (block [(expr (call (member (name json) decode) [(named [Plan]
+// tree: [])] [(arg - (name j))])) (expr (call (member (name model) generate_as) [(named [Note] [])] [(arg - (name
+// tree: p))])) (expr (call (name f) [(named [List] [(named [Int] [])])] [(arg - (name x))])) (expr (call (name f)
+// tree: [(named [Map] [(named [Str] []) (list (named [Int] []))]) (named [Str] [])] [(arg - (name x))])) (expr (call
+// tree: (name f) [(tuple [(named [Int] []) (named [Str] [])])] [(arg - (name x))])) (expr (call (name f) [(fn-type
+// tree: [(named [Int] [])] (named [Int] []))] [(arg - (name x))])) (expr (call (name f) [(option (named [Int] []))]
+// tree: [(arg - (name x))])) (expr (bin < (name a) (name b))) (expr (bin and (bin < (name a) (name b)) (bin > (name c)
+// tree: (name d)))) (expr (call (name f) [] [(arg - (bin < (name a) (name b))) (arg - (bin > (name c) (name
+// tree: d)))]))])))])
+
+// Rule 2: type arguments use the turbofish; a bare `<` is the comparison operator.
+
+fn turbofish() {
+  json.decode::<Plan>(j)
+  model.generate_as::<Note>(p)
+  f::<List<Int> >(x)
+  f::<Map<Str, [Int]>, Str>(x)
+  f::<(Int, Str)>(x)
+  f::<fn(Int) -> Int>(x)
+  f::<Int?>(x)
+  a < b
+  a < b and c > d
+  f(a < b, c > d)
+}

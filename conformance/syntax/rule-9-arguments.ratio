@@ -1,0 +1,25 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn arguments [] [] - (block [(expr (call (name f) [] [])) (expr (call (name f) []
+// tree: [(arg - (int 1))])) (expr (call (name f) [] [(arg - (int 1)) (arg - (int 2))])) (expr (call (name f) [] [(arg
+// tree: a (int 1))])) (expr (call (name f) [] [(arg - (int 1)) (arg a (int 2))])) (expr (call (name f) [] [(arg - (int
+// tree: 1)) (arg - (int 2)) (arg a (int 3)) (arg b (int 4))])) (expr (call (name f) [] [(arg - (int 1)) (arg a (int
+// tree: 2))])) (expr (call (name par_map) [] [(arg - (name xs)) (arg f (closure [(cparam (pat-name x) -)] (name x)))
+// tree: (arg limit (int 4))])) (expr (call (name par_map) [] [(arg - (name xs)) (arg - (closure [(cparam (pat-name x)
+// tree: -)] (name x))) (arg limit (int 4))])) (expr (call (name f) [] [(arg a (call (name g) [] [(arg b (int 1))]))
+// tree: (arg c (int 2))])) (expr (call (name f) [] [(arg x (bin ?? (name y) (name z)))]))])))])
+
+// Rule 9: positional arguments first, then named ones; a closure after named ones is named.
+
+fn arguments() {
+  f()
+  f(1)
+  f(1, 2)
+  f(a: 1)
+  f(1, a: 2)
+  f(1, 2, a: 3, b: 4)
+  f(1, a: 2,)
+  par_map(xs, f: |x| x, limit: 4)
+  par_map(xs, |x| x, limit: 4)
+  f(a: g(b: 1), c: 2)
+  f(x: y ?? z)
+}

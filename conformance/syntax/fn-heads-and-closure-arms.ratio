@@ -1,0 +1,25 @@
+// expect: parse-ok
+
+// Rule 1 for a `fn` after a `:` (a field type or a field value), a fn type that ends a line, and
+// a closure with several parameters as a `match` arm body.
+
+type F = fn(Int) -> Int
+type G = fn() -> { a: Int }
+type H = { run: fn() -> Int }
+
+prompt p(x: Str) {
+  format fn() -> Int
+  task x
+}
+
+fn f() {
+  let r = { a: fn() -> Int { 1 } }
+  let s = { a: fn() {} }
+  g(a: fn() {})
+  g(a: fn() -> { b: Int } { { b: 1 } })
+  let t: fn() -> Int = h
+  match n {
+    1 => |x, y| match x { _ => y },
+    _ => |x| x,
+  }
+}

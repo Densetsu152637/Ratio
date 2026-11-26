@@ -1,0 +1,98 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn head_keywords [] [(param c (named [Bool] []) -) (param xs (list (named [Int] []))
+// tree: -) (param n (named [Int] []) -) (param d (named [Duration] []) -)] - (block [(expr (if (name c) (block [(expr
+// tree: (int 1))]) (else (block [(expr (int 2))])))) (expr (for (pat-name x) (name xs) (block [(expr (name x))])))
+// tree: (expr (while (name c) (block [(expr (int 1))]))) (expr (loop (block [(expr (break -))]))) (expr (repeat (name
+// tree: n) (block [(expr (int 1))]))) (expr (try (block [(expr (int 1))]) (catch-bind e (block [(expr (int 2))]))))
+// tree: (defer (block [(expr (int 1))])) (expr (do (block [(expr (int 1))]))) (expr (with-timeout (name d) (block
+// tree: [(expr (int 1))]) -))]))) (item [] [] - (fn arm_lists [] [(param x (named [Int] []) -)] - (block [(expr (match
+// tree: (name x) [(arm (wild) - (int 1))])) (expr (try (block [(expr (int 1))]) (catch-arms [(arm (wild) - (int
+// tree: 2))])))]))) (item [] [] - (enum Body [] [(variant A -) (variant B [(field-type [] [] n - (named [Int] [])
+// tree: -)])])) (item [" `with` and a record: the first `{` is the configuration, the next the block."] [] - (fn
+// tree: with_and_a_record [] [] - (block [(expr (with (record [(field effort (name low))]) (block [(expr (call (name
+// tree: work) [] []))]))) (expr (with (record []) (block [(expr (call (name work) [] []))]))) (expr (with (record
+// tree: [(field tools (list [(name grep)]))]) (block [(expr (call (name work) [] []))]))) (expr (with-override (call
+// tree: (name call) [] [(arg - (name x))]) (record [(field budget (record [(field tokens (quantity 1000))]))])))])))
+// tree: (item [] [] - (harness h [] (named [Int] []) (record [(field effort (name high))]) (block [(expr (int 1))])))
+// tree: (item [" Variant literals in expression position, shorthand included."] [] - (fn variants [] [] - (block
+// tree: [(expr (variant [Denied] (record [(field by (name user))]))) (expr (variant [Denied] (record [(shorthand
+// tree: by)]))) (expr (variant [Verdict Fail] (record [(field reason (str short ["x"]))]))) (let (pat-name v) -
+// tree: (variant [Ok] (record [(field value (int 1))])))]))) (item [" Records: `}` or `..` first, or an identifier
+// tree: followed by `:` or `,`; otherwise a block."] [] - (fn records_and_blocks [] [] - (block [(let (pat-name a) -
+// tree: (record [])) (let (pat-name b) - (record [(spread (name base))])) (let (pat-name c) - (record [(field x (int
+// tree: 1))])) (let (pat-name d) - (record [(shorthand x)])) (let (pat-name e) - (record [(shorthand x) (shorthand
+// tree: y)])) (let (pat-name f) - (block [(expr (name x))])) (let (pat-name g) - (block [(let (pat-name y) - (int 1))
+// tree: (expr (name y))])) (expr (call (name map) [] [(arg - (name xs)) (arg - (closure [(cparam (pat-name c) -)]
+// tree: (record [(field steps (member (name c) steps))])))])) (expr (call (name map) [] [(arg - (name xs)) (arg -
+// tree: (closure [(cparam (pat-name c) -)] (block [(expr (name x))])))])) (expr (call (name map) [] [(arg - (name xs))
+// tree: (arg - (closure [(cparam (pat-name c) -)] (record [(shorthand x)])))])) (expr (call (name map) [] [(arg -
+// tree: (name xs)) (arg - (closure [(cparam (pat-name c) -)] (record [])))]))]))) (item [" A record in a head is
+// tree: parenthesised."] [] - (fn parenthesised_heads [] [(param xs (list (named [Int] [])) -)] - (block [(expr (if
+// tree: (bin == (member (paren (record [(field a (int 1))])) a) (int 1)) (block [(expr (int 1))]) -)) (expr (for
+// tree: (pat-name x) (member (paren (record [(field a (int 1))])) a) (block [(expr (name x))]))) (expr (match (paren
+// tree: (record [(field a (int 1))])) [(arm (wild) - (int 1))]))])))])
+
+// Rule 1: what a `{` opens.
+
+fn head_keywords(c: Bool, xs: [Int], n: Int, d: Duration) {
+  if c { 1 } else { 2 }
+  for x in xs { x }
+  while c { 1 }
+  loop { break }
+  repeat n { 1 }
+  try { 1 } catch e { 2 }
+  defer { 1 }
+  do { 1 }
+  with timeout d { 1 }
+}
+
+fn arm_lists(x: Int) {
+  match x { _ => 1 }
+  try { 1 } catch { _ => 2 }
+}
+
+enum Body { A, B { n: Int } }
+
+/// `with` and a record: the first `{` is the configuration, the next the block.
+fn with_and_a_record() {
+  with { effort: low } { work() }
+  with { } { work() }
+  with {
+    tools: [grep],
+  } {
+    work()
+  }
+  call(x) with { budget: { tokens: 1k } }
+}
+
+harness h() -> Int with { effort: high } { 1 }
+
+/// Variant literals in expression position, shorthand included.
+fn variants() {
+  Denied { by: user }
+  Denied { by }
+  Verdict.Fail { reason: "x" }
+  let v = Ok { value: 1 }
+}
+
+/// Records: `}` or `..` first, or an identifier followed by `:` or `,`; otherwise a block.
+fn records_and_blocks() {
+  let a = {}
+  let b = { ..base }
+  let c = { x: 1 }
+  let d = { x, }
+  let e = { x, y }
+  let f = { x }
+  let g = { let y = 1; y }
+  map(xs, |c| { steps: c.steps })
+  map(xs, |c| { x })
+  map(xs, |c| { x, })
+  map(xs, |c| {})
+}
+
+/// A record in a head is parenthesised.
+fn parenthesised_heads(xs: [Int]) {
+  if ({ a: 1 }).a == 1 { 1 }
+  for x in ({ a: 1 }).a { x }
+  match ({ a: 1 }) { _ => 1 }
+}

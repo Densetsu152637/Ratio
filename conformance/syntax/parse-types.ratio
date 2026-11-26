@@ -1,0 +1,24 @@
+// expect: parse-ok
+
+// A type may end a line with `>` or `??`: in a type declaration the reader inserts a `;` there.
+// Every type form: names, applications, lists, records, tuples, functions, harnesses, options.
+
+type A = Int
+type B = Verdict.Fail
+type C = Map<Str, List<Int>>
+type D = [Int]
+type E = [[Str]]
+type F = { a: Int, b?: Str "desc", c: [Int], }
+type G = (Int, Str)
+type H = (Int)
+type I = ()
+type J = fn(Int, Str) -> Bool
+type K = fn() -> ()
+type L = harness(Str) -> Untrusted<Str>
+type M = harness() -> Int
+type N = Int?
+type O = Int??
+type P = [Int?]?
+type Q = fn(fn(Int) -> Int) -> fn() -> Int
+type R = Result<{ ok: Int }, (Str, Int)>
+type S = {}

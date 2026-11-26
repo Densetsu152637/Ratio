@@ -92,7 +92,7 @@ pub trait Host: Send + Sync {
 
 Every value crossing the trait carries its secrecy labels (`Labelled<T>`: the arguments of tool calls, model requests, appends and agent operations). They are checked against the sinks of chapter 03 twice, once on each side of the boundary: in Ratio by a guard the interpreter wraps around every host (no host can opt out of it), and in Imperium by the engine's dispatch, from the per-call secrecy flag.
 
-`FrameCtx` carries the frame path, agent id, attenuated tool set, permission mode, extra rules,
+`FrameCtx` carries the frame path (the key by which a host finds its own record of the frame), agent id, attenuated tool set, permission mode, extra rules,
 paths, location, `sees`, attended flag, authored tier and budget ledger handle. The tape is a
 wrapper (`TapeHost<H>`) that records or replays every call by effect key; because keys depend on
 frame paths, frames are built before the tape (stage order below).
@@ -211,9 +211,10 @@ may change in any release.
 - Releases are tags `vX.Y.Z` on `main`, made only from a commit whose CI is green. The release
   workflow (`.github/workflows/release.yml`) runs on every pushed tag and fails, publishing
   nothing, unless the tagged commit is on `main`, its CI run succeeded, and the workspace version
-  equals the tag; otherwise it creates the GitHub release. A repository ruleset protects `v*`
-  tags: only the maintainer may create them, and nobody may move or delete them. The ruleset is
-  a repository setting the maintainer creates; it is not in the code.
+  equals the tag; otherwise it creates the GitHub release. Only that workflow creates a release:
+  the repository ruleset protects `v*` tags (only the maintainer may create them, and nobody may
+  move or delete them), so a release cannot be made for a tag by another route. The ruleset is a
+  repository setting the maintainer creates, not code (`CONTRIBUTING.md`, "Releases").
 - The first release, `v0.1.0`, is tagged after the workspace lands on `main`.
 - Imperium depends on a tag: `ratio-lang = { git = "https://github.com/Densetsu152637/Ratio",
   tag = "vX.Y.Z" }`, and its `Cargo.lock` records the commit. Publishing to crates.io, and
@@ -276,7 +277,7 @@ review.
 | Secrecy labels on values and their propagation | Owns, alone: no Imperium check can restore a dropped label (residual risk, stage 24 scope) | Labels conversations and engine state; journals labels |
 | Secrecy sinks | Enforces at the guard, from the labels | Enforces at dispatch from the per-call flag, which comes from the same labels: it catches a guard bug, not a propagation bug; owns redaction, the per-session HMAC key, and the declassify and `secrets: true` challenges |
 | Tape secrecy and replay trust | `TapeHost` records every value's labels and restores them on replay; replayed effect results are untrusted exactly as live ones are; effect keys carry no values | Redacts tape files (`--ratio-tape`) like events; journals `ratio_effect` and redacts it when streamed; redacts labelled values and the `harness` field's values in hook payloads |
-| Attenuation (tools, modes, rules, paths, location, budgets, `sees`, depth) | Computes every frame's scope as the meet of its caller's and its request | **The boundary**: `RatioHost::open_frame` verifies independently that the child scope is within the parent's in every dimension (tool set, mode meet, rules, paths, location, budgets, `sees`, depth) and refuses otherwise. It checks against **Imperium's own record** of the parent's scope, looked up by the parent's frame id, never against the scope in the `FrameCtx` that Ratio passes in, so a Ratio bug that widens a `FrameCtx` cannot widen a child. Dispatch enforces the scope (`CallScope`) before its own checks |
+| Attenuation (tools, modes, rules, paths, location, budgets, `sees`, depth) | Computes every frame's scope as the meet of its caller's and its request | **The boundary**: `RatioHost::open_frame` verifies independently that the child scope is within the parent's in every dimension (tool set, mode meet, rules, paths, location, budgets, `sees`, depth) and refuses otherwise. It checks against **Imperium's own record** of the parent's scope, looked up by the parent's frame path, never against the scope in the `FrameCtx` that Ratio passes in, so a Ratio bug that widens a `FrameCtx` cannot widen a child. Dispatch enforces the scope (`CallScope`) before its own checks |
 | Extension installs (`tools.install_extension`) | No other path: a program can install only through this built-in, and no frame, `with` override or `ratio_approval` can widen or pre-approve it | Owns: the dispatch floor (every install from a program is agent-origin and asks the user per install, in every mode, never remembered, not skipped by allow rules, auto mode or `ratio_approval`; refused in unattended sessions) and load-time withholding (an agent-origin extension stays off until the user approves it in the desktop app) |
 | Interpreter limits (steps, heap, call depth, nesting, interpolation, JSON, strings, collections, branches, tape size) | Owns | Sets configured values within the maxima |
 | Session budgets (tokens, cost, wall clock), approvals, unattended refusals, the permission broker | Debits frame ledgers through the host | Owns: `BudgetGate`, the broker, the unattended rules |
@@ -303,7 +304,7 @@ stages, 26 are committed; 27 is optional and 28 waits on Q9.
 | # | Stage | Repo | Delivers | Tests (all in CI) |
 | --- | --- | --- | --- | --- |
 | 1 | Token reader | Ratio | Lexer with the mode stack (code, strings, nested interpolations), quantity, duration and money literals, contextual keywords, semicolon insertion by innermost delimiter | Token corpus: every literal form, nested interpolations, insertion in every delimiter kind, line-start `with` and `else`, attribute-only lines (no insertion), variant literals across lines |
-| 2 | Parser | Ratio | The whole grammar; AST with spans; diagnostics with file, line, column and a caret; error recovery; nesting limits; a canonical printer | Parse corpus for every production and disambiguation rule; printer round trip as a property test; nesting-limit tests |
+| 2 | Parser | Ratio | The whole grammar; AST with spans; diagnostics with file, line, column and a caret; error recovery; nesting limits; a canonical printer | Parse corpus for every production and disambiguation rule; printer round trip (for printed text within the source limit) as a property test; nesting-limit tests |
 | 3 | Modules and names | Ratio | Source roots, imports by path (no escape, no links), source-qualified names with areas (`authored:session/x`) and trust order, the registry trait (Imperium's daemon registry implements it in stage 18), name resolution, prelude | Resolution corpus; shadowing refused across trust levels; import-trust rules per source |
 | 4 | Type checker | Ratio | Records, enums, options, tuples, generics on functions, subtyping (`Never`, `UserText`, `Brief`, `TrustedPrompt`), contextual variants, variant literals, exhaustiveness, turbofish, constant evaluation rules | `conformance/types/`: accepted and rejected programs with diagnostic codes |
 | 5 | Schemas and taint | Ratio | Schema derivation and type digests; `Untrusted` mapping, abstract generics, sinks, `Brief` and `TrustedPrompt` inference; monomorphic `trust` and `as_task`; transitive trust sites; guarded-effect lint; static `Secret<T>` where the label is known; `harnesses.check` as a library call | One rejected program per sink and one accepted per allowed flow; a property test that generated programs never produce a `TrustedPrompt` or `task` section from untrusted sources; schema and digest snapshots |
@@ -355,6 +356,20 @@ The token reader's expectations (stage 1) are:
 //                                                 max_interpolation_depth or max_diagnostics)
 ```
 
+The parser's expectations (stage 2), for a file without a `lex-` expectation:
+
+```ratio
+// expect: parse-ok                             (read and parsed without a diagnostic)
+// expect: parse-error P0001 at 3:5             (a parse diagnostic and position; one line each, in order)
+// tree: (module (item (fn f …)))               (the span-free tree dump; lines join)
+```
+
+`parse-ok` and `parse-error` take the same `option:` lines as the token reader. `tree:` is the
+span-free dump of the parsed tree (`ratio_syntax::dump`, one line, notation in that module's
+documentation); several `tree:` lines join with a space, and a file with `tree:` needs a
+`parse-ok` or `parse-error` line. The diagnostics a `parse-` expectation lists are all of the
+parse's, the token reader's included, in order.
+
 The header is every line at the top of the file that starts with `//` and a space; each must be one of these
 directives (a misspelt one fails the file), and the first other line starts the program. Line
 numbers count the header. In the `tokens:` notation a keyword is `kw:let`, a contextual keyword
@@ -385,10 +400,26 @@ The lexical diagnostic codes (chapter 02 defines the rules, chapter 07 the limit
 | `L0015` | More diagnostics than the limit (100); it marks where the next one was found, and reading stops |
 | `L0016` | A `{`, `}` or line break in a format spec |
 
-A single test runner runs every file with the scripted host. In stage 1 it is the token reader's
-runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`, `lex-error`,
-`tokens:` and `option:` lines and skips the later stages' expectations; every `L` code has at
-least one `lex-error` file.
+The parse diagnostic codes (chapter 02 defines the rules; the limit is chapter 07's):
+
+| Code | Diagnostic |
+| --- | --- |
+| `P0001` | A token the grammar does not allow where it is (unexpected token) |
+| `P0002` | Expressions, types and patterns nested deeper than `max_nesting`; parsing stops |
+| `P0003` | A `{` the token reader read as one kind (rule 1) where the grammar needs another (wrong brace) |
+| `P0004` | The left side of an assignment is not a place |
+| `P0005` | A second comparison or range operator in a row (`a < b < c`, `0..1..2`) |
+| `P0006` | Attributes, documentation or `pub` where they do not apply (misplaced modifier) |
+| `P0007` | More parse diagnostics than the limit (100); it marks where the next one was found, and parsing stops |
+| `P0008` | A block head whose `{` is on the next line (head split across lines) |
+| `P0009` | A positional argument after a named one |
+| `P0010` | Internal error: the parser could not run (no source triggers it; the module is empty) |
+
+A single test runner runs every file with the scripted host. In stages 1 and 2 it is the syntax
+crate's runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`,
+`lex-error`, `tokens:`, `parse-ok`, `parse-error`, `tree:` and `option:` lines and skips the later
+stages' expectations; every `L` code has at least one `lex-error` file and every `P` code at least
+one `parse-error` file.
 `conformance/spec-map.txt` names the chapters each directory tests (above). Three coverage checks
 keep the suite honest:
 

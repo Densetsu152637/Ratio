@@ -1,0 +1,12 @@
+// expect: parse-error P0001 at 8:14
+// expect: parse-error P0001 at 9:14
+// expect: parse-error P0001 at 10:14
+// expect: parse-error P0007 at 11:14
+// option: max_diagnostics 3
+
+fn many() {
+  let a = (1 2)
+  let b = (1 2)
+  let c = (1 2)
+  let d = (1 2)
+}

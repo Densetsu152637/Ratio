@@ -1,0 +1,20 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn membership [] [(param xs (list (named [Int] [])) -)] - (block [(expr (for
+// tree: (pat-name x) (name xs) (block [(expr (int 1))]))) (expr (for (pat-name x) (name ys) (block [(expr (bin in
+// tree: (name x) (name xs)))]))) (expr (if (bin in (name x) (name xs)) (block [(expr (int 1))]) -)) (let (pat-name b)
+// tree: - (bin in (name x) (name xs))) (expr (while (bin in (name x) (name xs)) (block [(expr (int 1))]))) (expr (for
+// tree: (pat-name x) (call (member (name xs) filter) [] [(arg - (closure [(cparam (pat-name y) -)] (bin in (name y)
+// tree: (name zs))))]) (block [(expr (int 1))]))) (expr (prompt-expr (prompt-body [(for-section (pat-name x) (name xs)
+// tree: (prompt-body [(data (name x) -)]))])))])))])
+
+// Rule 8: `in` inside `for … in` is the loop keyword, not the membership operator.
+
+fn membership(xs: [Int]) {
+  for x in xs { 1 }
+  for x in ys { x in xs }
+  if x in xs { 1 }
+  let b = x in xs
+  while x in xs { 1 }
+  for x in xs.filter(|y| y in zs) { 1 }
+  prompt { for x in xs { data x } }
+}

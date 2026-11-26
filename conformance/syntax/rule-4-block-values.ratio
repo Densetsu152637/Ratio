@@ -1,0 +1,25 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn block_values [] [] - (block [(let (pat-name a) - (block [(expr (int 1))])) (let
+// tree: (pat-name b) - (block [(let (pat-name x) - (int 1)) (expr (bin + (name x) (int 1)))])) (let (pat-name c) -
+// tree: (block [(let (pat-name x) - (int 1))])) (let (pat-name d) - (block [(expr (int 1)) (expr (int 2))])) (let
+// tree: (pat-name e) - (do (block [(let (pat-name x) - (int 1)) (expr (name x))]))) (let (pat-name f) - (if (name a)
+// tree: (block [(expr (int 1))]) -)) (let (pat-name g) - (block [(expr (bin |> (int 1) (name inc)))]))])))])
+
+// Rule 4: a block's value is its last statement when that is an expression.
+
+fn block_values() {
+  let a = { 1 }
+  let b = { let x = 1; x + 1 }
+  let c = { let x = 1 }
+  let d = { 1; 2; }
+  let e = do {
+    let x = 1
+    x
+  }
+  let f = if a { 1
+    }
+  let g = {
+    1
+    |> inc
+  }
+}

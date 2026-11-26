@@ -1,0 +1,22 @@
+// expect: parse-ok
+// tree: (module - [(item [] [] - (fn variant_literals [] [] - (block [(expr (variant [Denied] (record [(field by (name
+// tree: user))]))) (expr (variant [Denied] (record [(shorthand by)]))) (expr (variant [Ok] (record [(field value (name
+// tree: v))]))) (expr (variant [Verdict Fail] (record [(field reason (str short ["no"]))]))) (expr (variant [Q Deep
+// tree: Name] (record [(field a (int 1)) (field b (int 2))]))) (expr (variant [Empty] (record []))) (let (pat-name r)
+// tree: - (variant [Err] (record [(field error (name e))]))) (expr (list [(variant [Ok] (record [(field value (int
+// tree: 1))])) (variant [Ok] (record [(field value (int 2))]))])) (expr (call (name f) [] [(arg - (variant [Denied]
+// tree: (record [(field by (name user))]))) (arg label (variant [Ok] (record [(field value (int 1))])))]))])))])
+
+// Rule 3: `Name { … }` in expression position constructs a payload variant.
+
+fn variant_literals() {
+  Denied { by: user }
+  Denied { by }
+  Ok { value: v }
+  Verdict.Fail { reason: "no" }
+  Q.Deep.Name { a: 1, b: 2, }
+  Empty { }
+  let r = Err { error: e }
+  [Ok { value: 1 }, Ok { value: 2 }]
+  f(Denied { by: user }, label: Ok { value: 1 })
+}

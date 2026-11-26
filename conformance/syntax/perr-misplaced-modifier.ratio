@@ -1,0 +1,11 @@
+// expect: parse-error P0006 at 6:3
+// expect: parse-error P0006 at 10:1
+
+fn attributes() {
+  let a = 1
+  @turn
+  a
+}
+
+@x
+test "no attributes" { 1 }

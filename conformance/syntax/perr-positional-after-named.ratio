@@ -1,0 +1,5 @@
+// expect: parse-error P0009 at 4:11
+
+fn args() {
+  f(a: 1, 2)
+}

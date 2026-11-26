@@ -1,0 +1,6 @@
+// expect: parse-error P0002 at 5:17
+// option: max_nesting 4
+
+fn deep() {
+  let x = - - - - - 1
+}

@@ -1,2 +1,7 @@
 // expect: ok
-let x = 1 + 2
+const X = 1 + 2
+
+harness main() -> Int {
+  let x = X
+  x
+}

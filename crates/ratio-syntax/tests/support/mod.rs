@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use ratio_syntax::{BraceKind, Keyword, Lexed, TokenKind};
+use ratio_syntax::{BraceKind, Contextual, Keyword, Lexed, TokenKind};
 
 /// The conformance corpus. It belongs to the language, not to this crate, so it lives at the
 /// repository root (`conformance/`), next to the specification it tests.
@@ -292,10 +292,22 @@ fn can_end_a_statement(kind: &TokenKind) -> bool {
     )
 }
 
+/// An attribute being read: `At` after its `@`, `Named` once it has a name, `Args(depth)` inside
+/// its parenthesised arguments.
+#[derive(Clone, Copy, PartialEq)]
+enum Attr {
+    At,
+    Named,
+    Args(usize),
+}
+
 /// The insertion property: in a clean read, an inserted `;` appears only where the innermost
-/// open delimiter is a block, a prompt body or the top level of the file (condition 1), and only
-/// after a token that can end a statement (condition 2). Reads with diagnostics are not checked:
-/// recovery may close delimiters the token stream never shows as closed.
+/// open delimiter is a block, a prompt body or the top level of the file (condition 1), only
+/// after a token that can end a statement (condition 2) or a `>` or `??` ending a type declaration
+/// or a prompt `format` line, never before a continuation token (condition 3: `.`, `..`, `..=`, `?.`,
+/// `|>`, `??`, `and`, `or`, `else`, `catch`), and never after a line that holds only attributes.
+/// Reads with diagnostics are not checked: recovery may close delimiters the token stream never
+/// shows as closed.
 pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
     if !lexed.diagnostics.is_empty() {
         return Ok(());
@@ -303,7 +315,12 @@ pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
     // `None` stands for a bracket, a parenthesis or an interpolation.
     let mut open: Vec<Option<BraceKind>> = Vec::new();
     let mut prev: Option<&TokenKind> = None;
+    let mut attr: Option<Attr> = None;
+    // Whether the current statement holds `type` or the prompt section word `format`.
+    let mut type_or_format = false;
+    let mut at_start = true;
     for (index, token) in lexed.tokens.iter().enumerate() {
+        let doc = matches!(token.kind, TokenKind::DocComment(_));
         match &token.kind {
             TokenKind::LParen | TokenKind::LBracket | TokenKind::InterpStart => open.push(None),
             TokenKind::LBrace(kind) => open.push(Some(*kind)),
@@ -321,15 +338,62 @@ pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
                         open.last()
                     ));
                 }
-                if !prev.is_some_and(can_end_a_statement) {
+                let closes_generic = type_or_format
+                    && matches!(prev, Some(TokenKind::Gt | TokenKind::QuestionQuestion));
+                if !closes_generic && !prev.is_some_and(can_end_a_statement) {
                     return Err(format!(
                         "token {index}: a semicolon inserted after {prev:?}, which cannot end a statement"
+                    ));
+                }
+                if matches!(attr, Some(Attr::Named)) {
+                    return Err(format!(
+                        "token {index}: a semicolon inserted after a line holding only attributes"
+                    ));
+                }
+                if let Some(next) = lexed.tokens.get(index + 1)
+                    && matches!(
+                        next.kind,
+                        TokenKind::Dot
+                            | TokenKind::DotDot
+                            | TokenKind::DotDotEq
+                            | TokenKind::QuestionDot
+                            | TokenKind::QuestionQuestion
+                            | TokenKind::PipeGt
+                            | TokenKind::Keyword(
+                                Keyword::And | Keyword::Or | Keyword::Else | Keyword::Catch
+                            )
+                    )
+                {
+                    return Err(format!(
+                        "token {index}: a semicolon inserted before the continuation {:?}",
+                        next.kind
                     ));
                 }
             }
             _ => {}
         }
-        if !matches!(token.kind, TokenKind::DocComment(_)) {
+        if !doc {
+            let depth = open.len();
+            attr = match (attr, &token.kind) {
+                (Some(Attr::At), TokenKind::Ident(_) | TokenKind::Keyword(_)) => Some(Attr::Named),
+                (Some(Attr::Named), TokenKind::LParen) => Some(Attr::Args(depth - 1)),
+                (Some(Attr::Args(outer)), TokenKind::RParen) if depth == outer => Some(Attr::Named),
+                (Some(Attr::Args(outer)), _) => Some(Attr::Args(outer)),
+                (_, TokenKind::At) if at_start => Some(Attr::At),
+                _ => None,
+            };
+            if matches!(
+                token.kind,
+                TokenKind::Keyword(Keyword::Type) | TokenKind::Contextual(Contextual::Format)
+            ) {
+                type_or_format = true;
+            }
+            if matches!(token.kind, TokenKind::Semi { .. }) {
+                type_or_format = false;
+            }
+            at_start = matches!(token.kind, TokenKind::Semi { .. } | TokenKind::LBrace(_))
+                || (at_start && matches!(token.kind, TokenKind::At))
+                || attr == Some(Attr::Named);
             prev = Some(&token.kind);
         }
     }

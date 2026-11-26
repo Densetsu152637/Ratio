@@ -1,0 +1,20 @@
+// expect: parse-ok
+
+fn loops() {
+  for x in xs { use(x) }
+  for (a, b) in pairs { use(a) }
+  for { name, size } in files { use(name) }
+  for i in 0..10 { use(i) }
+  for x in xs.filter(|y| y > 1) { use(x) }
+  while running { step() }
+  while let Ok { value } = next() { use(value) }
+  loop { break }
+  loop { break 1 }
+  repeat 3 { step() }
+  repeat n * 2 { step() }
+  loop { continue }
+  for x in xs {
+    if x > 3 { break }
+    continue
+  }
+}
