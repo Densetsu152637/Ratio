@@ -364,7 +364,11 @@ The parser's expectations (stage 2), for a file without a `lex-` expectation:
 // tree: (module (item (fn f …)))               (the span-free tree dump; lines join)
 ```
 
-`parse-ok` and `parse-error` take the same `option:` lines as the token reader.
+`parse-ok` and `parse-error` take the same `option:` lines as the token reader. `tree:` is the
+span-free dump of the parsed tree (`ratio_syntax::dump`, one line, notation in that module's
+documentation); several `tree:` lines join with a space, and a file with `tree:` needs a
+`parse-ok` or `parse-error` line. The diagnostics a `parse-` expectation lists are all of the
+parse's, the token reader's included, in order.
 
 The header is every line at the top of the file that starts with `//` and a space; each must be one of these
 directives (a misspelt one fails the file), and the first other line starts the program. Line

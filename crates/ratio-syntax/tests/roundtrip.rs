@@ -864,10 +864,7 @@ impl Gen {
                 ex(ExprKind::Do(body))
             }
             27 | 28 => {
-                // At most one parameter: in a `match` arm `a => |x, y| match n { … }` the token reader
-                // takes the comma for the end of the arm and the next `{` for a record (a limit of
-                // the reader); the unit tests cover closures with several parameters.
-                let params = self.many(0, 1, |g| {
+                let params = self.many(0, 3, |g| {
                     let pattern = match g.rng.below(3) {
                         0 => pt(PatternKind::Wildcard),
                         1 => pt(PatternKind::Tuple(vec![
@@ -889,16 +886,9 @@ impl Gen {
             }
             29 => {
                 let params = self.params(d1);
-                // No result type: in `{ f: fn() -> T { … } }` the token reader takes the body's
-                // `{` for a record (a limit of the reader, not of the printer); the unit tests
-                // cover function expressions with a result type.
-                // A body that is not empty: in `f(a: fn() {})` the reader takes `{}` for a record.
-                let body = self.block(d1, 1, 2);
-                ex(ExprKind::FnExpr {
-                    params,
-                    ret: None,
-                    body,
-                })
+                let ret = self.opt(1, 2, |g| g.ty(1));
+                let body = self.block(d1, 0, 2);
+                ex(ExprKind::FnExpr { params, ret, body })
             }
             30 | 31 => {
                 let body = self.prompt_body(d1);
@@ -1079,16 +1069,9 @@ impl Gen {
         }
     }
 
-    /// A declared result type. The token reader takes a `fn` or `harness` type for the head of a
-    /// function, and a second head in the result type of a function leaves the first one
-    /// unresolved when the body's `{` comes (a limit of the reader, not of the printer).
+    /// A declared result type.
     fn ret_ty(&mut self, d: u32) -> Type {
-        loop {
-            let t = self.ty(d);
-            if !matches!(t.kind, TypeKind::Fn { .. } | TypeKind::Harness { .. }) {
-                return t;
-            }
-        }
+        self.ty(d)
     }
 
     fn doc(&mut self) -> Doc {

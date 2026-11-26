@@ -226,6 +226,7 @@ enum Attr {
 struct WordCtx {
     prev_rparen: bool,
     prev_type_position: bool,
+    prev_colon: bool,
     stmt_start: bool,
     after_prompt_body: bool,
 }
@@ -262,6 +263,9 @@ struct Lexer<'a> {
     /// A `<` is recorded whether it opens a generic argument list or is a comparison (the reader
     /// cannot tell), so an unmatched comparison `<` can leave an entry until the statement ends.
     angles: Vec<usize>,
+    /// The frame depth of the `|…|` parameter list of a closure being read: its commas do not
+    /// start a new match arm.
+    closure_params: Option<usize>,
     /// The index of the token that is a `>` which closed a recorded `<` (for the `>` statement
     /// end rule: only such a `>` can end a type declaration or a `format` line).
     closed_angle: Option<usize>,
@@ -316,6 +320,52 @@ fn named_param(s: &str) -> bool {
     let len = s.chars().take_while(|c| is_ident_continue(*c)).count();
     let after = skip_trivia(s.get(len..).unwrap_or(""));
     after.starts_with(':') && !after.starts_with("::")
+}
+
+/// After `fn()` that follows a `:`: whether it is a function expression (`a: fn() {}`,
+/// `a: fn() -> T { x }`) rather than a function type (`a: fn() -> T`). It is an expression when a
+/// `{` comes next, or after the result type. Looks ahead a bounded distance, on the same line.
+fn fn_expr_ahead(after_paren: &str) -> bool {
+    let s = skip_trivia(after_paren);
+    if s.starts_with('{') {
+        return true;
+    }
+    let Some(ty) = s.strip_prefix("->") else {
+        return false;
+    };
+    let bytes = ty.as_bytes();
+    let mut depth = 0usize;
+    // The last byte that was not a space; `~` stands for an arrow.
+    let mut prev = b'~';
+    let mut i = 0;
+    while i < bytes.len() && i < 512 {
+        let c = bytes[i];
+        match c {
+            b'-' if bytes.get(i + 1) == Some(&b'>') => {
+                i += 1;
+                prev = b'~';
+            }
+            b'{' if depth == 0 && (prev.is_ascii_alphanumeric() || b"_>])?}".contains(&prev)) => {
+                return true;
+            }
+            b'(' | b'[' | b'<' | b'{' => {
+                depth += 1;
+                prev = c;
+            }
+            b')' | b']' | b'}' | b'>' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                prev = c;
+            }
+            b',' | b'=' | b';' | b'\n' | b'/' if depth == 0 => return false,
+            b' ' | b'\t' | b'\r' => {}
+            _ => prev = c,
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Rule 1 of the disambiguation rules: a record starts with `}`, `..`, or a name followed by `:`
@@ -426,6 +476,7 @@ impl<'a> Lexer<'a> {
             last_sig: None,
             closed_prompt_body: false,
             type_decl: false,
+            closure_params: None,
             format_section: false,
             closed_angle: None,
             attr: None,
@@ -636,6 +687,9 @@ impl<'a> Lexer<'a> {
             Frame::Str(_) => {}
         }
         let len = self.stack.len();
+        if self.closure_params.is_some_and(|d| d > len) {
+            self.closure_params = None;
+        }
         while self.pendings.last().is_some_and(|p| p.depth > len) {
             self.pendings.pop();
         }
@@ -890,6 +944,7 @@ impl<'a> Lexer<'a> {
                 Some(TokenKind::Comma) => self.angles.last() == Some(&self.stack.len()),
                 _ => false,
             },
+            prev_colon: matches!(self.prev_kind(), Some(TokenKind::Colon)),
             stmt_start: self.at_stmt_start(),
             after_prompt_body: self.closed_prompt_body,
         };
@@ -1007,8 +1062,15 @@ impl<'a> Lexer<'a> {
                     true
                 } else if let Some(inner) = next.strip_prefix('(') {
                     let inner = skip_trivia(inner);
-                    if inner.starts_with(')') {
-                        !(ctx.prev_type_position || self.type_decl)
+                    if let Some(after) = inner.strip_prefix(')') {
+                        if self.type_decl || self.format_section {
+                            false
+                        } else if ctx.prev_colon {
+                            // After a `:` it is a field type or a field value (`a: fn() {}`).
+                            fn_expr_ahead(after)
+                        } else {
+                            !ctx.prev_type_position
+                        }
                     } else {
                         named_param(inner)
                     }
@@ -1203,14 +1265,32 @@ impl<'a> Lexer<'a> {
                     self.closed_angle = self.last_sig;
                 }
             }
+            TokenKind::Pipe => {
+                let depth = self.stack.len();
+                if self.closure_params == Some(depth) {
+                    self.closure_params = None;
+                } else {
+                    // A `|` that follows no operand opens a closure's parameters.
+                    let before = self
+                        .out
+                        .iter()
+                        .rev()
+                        .filter(|t| !matches!(t.kind, TokenKind::DocComment(_)))
+                        .nth(1);
+                    if !before.is_some_and(|t| ends_statement(&t.kind)) {
+                        self.closure_params = Some(depth);
+                    }
+                }
+            }
             TokenKind::Comma
-                if matches!(
-                    self.stack.last(),
-                    Some(Frame::Delim {
-                        delim: Delim::Brace(BraceKind::MatchBody),
-                        ..
-                    })
-                ) =>
+                if self.closure_params != Some(self.stack.len())
+                    && matches!(
+                        self.stack.last(),
+                        Some(Frame::Delim {
+                            delim: Delim::Brace(BraceKind::MatchBody),
+                            ..
+                        })
+                    ) =>
             {
                 self.clear_pats(PatEnd::Arrow);
                 self.add_pat(PatEnd::Arrow);

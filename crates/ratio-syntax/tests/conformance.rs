@@ -19,8 +19,12 @@
 //! //                                       diagnostics come first in the list when there are any)
 //! ```
 //!
-//! TODO(stage 2, dump): a `tree:` directive will compare the tree's span-free dump with the
-//! expected text; see `check_parse` for the hook.
+//! A file with a parse expectation may also have `tree:` lines: the span-free dump of the tree
+//! (`ratio_syntax::dump`, one line) split over any number of lines, which join with a space.
+//!
+//! ```text
+//! // tree: (module - [(item [] [] - (fn f [] [] - (block [(expr (bin + (int 1) (int 2)))])))])
+//! ```
 //!
 //! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error` or `fixture` belong
 //! to later stages; the runner skips their checks, but each must still parse without a diagnostic
@@ -34,7 +38,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ratio_syntax::{Code, LexOptions, lex_with, parse_with};
+use ratio_syntax::{Code, LexOptions, dump, lex_with, parse_with};
 
 #[derive(Default)]
 struct Case {
@@ -43,6 +47,7 @@ struct Case {
     parse_ok: bool,
     parse_errors: Vec<(String, u32, u32)>,
     tokens: Option<String>,
+    tree: Option<String>,
     options: LexOptions,
     other_stage: bool,
 }
@@ -77,6 +82,7 @@ fn position(path: &Path, position: &str) -> Result<(u32, u32), String> {
 fn parse(path: &Path, text: &str) -> Result<Case, String> {
     let mut case = Case::default();
     let mut token_lines: Vec<&str> = Vec::new();
+    let mut tree_lines: Vec<&str> = Vec::new();
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("// ") else {
             break;
@@ -104,6 +110,8 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             }
         } else if let Some(tokens) = rest.strip_prefix("tokens: ") {
             token_lines.push(tokens.trim());
+        } else if let Some(tree) = rest.strip_prefix("tree: ") {
+            tree_lines.push(tree.trim());
         } else if rest.starts_with("fixture: ") {
             case.other_stage = true;
         } else if let Some(option) = rest.strip_prefix("option: ") {
@@ -124,13 +132,16 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             }
         } else {
             return Err(format!(
-                "{}: unknown header directive `{line}` (expect:, tokens:, option: or fixture:)",
+                "{}: unknown header directive `{line}` (expect:, tokens:, tree:, option: or fixture:)",
                 path.display()
             ));
         }
     }
     if !token_lines.is_empty() {
         case.tokens = Some(token_lines.join(" "));
+    }
+    if !tree_lines.is_empty() {
+        case.tree = Some(tree_lines.join(" "));
     }
     Ok(case)
 }
@@ -159,8 +170,16 @@ fn check_parse(name: &str, text: &str, case: &Case, failures: &mut Vec<String>) 
                 .collect::<Vec<_>>()
         ));
     }
-    // TODO(stage 2, dump): when `Module::sexpr`/the dump lands, a `tree:` directive compares
-    // it with the tree here.
+    if let Some(expected) = &case.tree {
+        let got = dump(&parsed.module);
+        if got != *expected {
+            failures.push(format!(
+                "{name}: tree differs
+  expected {expected}
+  got      {got}"
+            ));
+        }
+    }
 }
 
 /// Runs the token reader on one file and compares it with the file's `lex-*` and `tokens:` lines.
@@ -231,6 +250,11 @@ fn the_conformance_files_pass() {
             }
         };
         let has_parse = case.parse_ok || !case.parse_errors.is_empty();
+        if case.tree.is_some() && !has_parse {
+            failures.push(format!(
+                "{name}: a `tree:` needs a parse-ok or parse-error expectation"
+            ));
+        }
         let has_lex = case.lex_ok || !case.errors.is_empty() || case.tokens.is_some();
         if has_parse {
             parse_run += 1;
