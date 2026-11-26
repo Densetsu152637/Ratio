@@ -16,7 +16,8 @@
 //! statically secret value may reach, `@schema(T)` type parameters that must be schema-able,
 //! `@user` built-ins whose result is the person's answer, `@secret_answers` `session.ask`,
 //! `@loads` `meta.harness`, and `@local` effectful built-ins that keep their arguments on the
-//! machine (not secrecy sinks). A name that is a keyword in Ratio (`harness`) is written with
+//! machine (not secrecy sinks; every `@local` entry is reviewed against the rule on
+//! `Traits::local`). A name that is a keyword in Ratio (`harness`) is written with
 //! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
 //! a keyword.
 //!
@@ -202,6 +203,12 @@ pub(crate) struct Traits {
     /// `@loads`: `meta.harness`, which loads a harness by name.
     pub(crate) loads: bool,
     /// `@local`: its effects keep its arguments on the machine, so it is no secrecy sink.
+    ///
+    /// Review every use of `@local` in the table against this: a `@local` built-in must not
+    /// hand any argument (or anything computed from one) to a model, the network, a command,
+    /// another agent, or persisted or published state (files, memory, events, the journal
+    /// beyond a digest). Marking such a built-in `@local` would let a statically secret value
+    /// reach it through a generic function unrefused.
     pub(crate) local: bool,
 }
 

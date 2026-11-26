@@ -620,3 +620,33 @@ fn regular_expressions_in_patterns_are_checked() {
         );
     }
 }
+
+#[test]
+fn a_load_whose_name_a_closure_computes_is_incomplete() {
+    let main = r#"
+type H = harness(Untrusted<Str>) -> Untrusted<Str>
+
+pub harness run(x: Untrusted<Str>) -> Untrusted<Str> {
+  let load = |name: Str| meta.harness::<H>(name)
+  let h = load("user:critics.strict")
+  h(x)
+}
+"#;
+    let critics = "pub harness strict(x: Untrusted<Str>) -> Untrusted<Str> {\n  let s = trust(x, because: \"rules\")\n  x\n}\n";
+    let registry = registry_with(&[
+        ("app", "main.ratio", main),
+        ("critics", "main.ratio", critics),
+    ]);
+    let builtin = MemoryRegistry::new();
+    let done = ratio_check::harnesses_check(
+        &registry,
+        &builtin,
+        &QualifiedName::parse("user:app").unwrap(),
+    );
+    assert!(done.summary.clean, "{:?}", done.checked.diagnostics);
+    assert_eq!(done.summary.loads, vec![None]);
+    assert!(
+        !done.complete,
+        "the load's name is computed, so its sites are unknown"
+    );
+}

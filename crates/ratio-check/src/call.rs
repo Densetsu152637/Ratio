@@ -653,11 +653,11 @@ impl Checker<'_> {
                     self.private(origin, name, r);
                     TypeId::ERROR
                 }
-                None if let ModRef::Std(s) = m => {
-                    let full = format!("{}.{}", self.std[s].name, name.name);
-                    self.no_signature(origin, span, &full)
-                }
                 None => {
+                    if let ModRef::Std(s) = m {
+                        let full = format!("{}.{}", self.std[s].name, name.name);
+                        return self.no_signature(origin, span, &full);
+                    }
                     self.report(
                         origin,
                         Code::NoMember,
