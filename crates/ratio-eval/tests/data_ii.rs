@@ -531,7 +531,7 @@ fn pooled_runs_of_the_data_corpus_match_inline_runs() {
             ["json.", "list.", "map."]
                 .iter()
                 .any(|m| name.starts_with(m))
-                && name.ends_with(".ratio")
+                && p.extension().is_some_and(|e| e == "ratio")
         })
         .collect();
     paths.sort();
