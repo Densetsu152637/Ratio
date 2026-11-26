@@ -1,7 +1,7 @@
 # `data`: values and text
 
-The data modules are pure unless a row says otherwise: they cost interpreter steps (proportional
-to input size, about one step per 64 characters or elements) and nothing else. They are in scope
+The data modules are pure unless a row says otherwise: they cost interpreter steps, by the cost
+class below, and nothing else. They are in scope
 by their short names (`text.trim(s)`, `list.map(xs, f)`), and every function whose first
 parameter is a value of the module's type can be called as a method (`s.trim()`, `xs.map(f)`).
 
@@ -30,6 +30,51 @@ rejects, say, `Money * Money`).
 | [`path`](#path) | Path strings | 8 |
 | [`url`](#url) | URLs | 5 |
 | [`codec`](#codec) | Base64, hex, CSV | 6 |
+
+## Cost classes and representations
+
+Each pure built-in has a **cost class** and is charged `1 + ⌈w / 64⌉` steps, where `w` is the
+class's work over the size n of its inputs (characters of text, elements of lists, entries of
+maps, nodes of JSON) and the size m of its output. Callbacks charge their own steps as any code
+does.
+
+| Class | Work `w` | Built-ins |
+| --- | --- | --- |
+| `const` | 1 | `text.len`, `text.is_empty`, `list.len`, `list.is_empty`, `list.first`, `list.last`, `map.len`, `map.is_empty`, `json.type_of`; every `math` built-in on scalars (`abs`, `sign`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `trunc`, `to_float`, `sqrt`, `pow`, `exp`, `ln`, `log2`, `log10`, `is_nan`); `time.add`, `time.diff`, `time.date`, `time.duration`, `time.seconds`, `time.show` |
+| `log` | ⌈log2(n + 1)⌉ | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
+| `nlogn` | n · ⌈log2(n + 1)⌉ | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
+| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff` |
+| `output` | m | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
+| `linear` | n + m | Every other pure built-in of this page (for example `list.map`, `list.filter`, `text.split`, `text.contains`, `text.replace`, `json.parse`, `hash.stable`, `template.render`) |
+
+**Charged before running.** The part of a charge that follows from the arguments (the class's
+work over the input sizes, and for `output` built-ins the output size the arguments fix) is debited
+before the built-in runs; when it exceeds the steps left, the built-in raises
+`Budget { which: steps }` without running, so a `product` built-in over large inputs never runs
+unpaid. A `linear` built-in's output part is debited when it returns.
+
+Text concatenation and string interpolation are charged `linear` in the result; build long text
+with `text.join` or a prompt rather than by repeated concatenation.
+
+**Charges never depend on representation state.** An implementation may update a uniquely owned
+value in place, but uniqueness depends on how long sibling branches hold references, which is
+timing; charges depend only on sizes, so they are deterministic (chapter 07).
+
+**Representations.** The charges rest on these, which every implementation must provide, with its
+work per built-in within a constant factor of the built-in's class:
+
+- lists are persistent vectors with O(log n) push, get, set, slice and concatenation (a relaxed
+  radix-balanced tree);
+- maps are persistent ordered maps with O(log n) get, set and remove and in-order iteration;
+- records have a fixed layout with O(1) field access (their types are static);
+- `Str` is immutable UTF-8 that caches its character count and an all-ASCII flag, so `text.len`
+  is O(1) and character-indexed slicing of ASCII text needs no scan;
+- every container keeps a **label summary**: a bit set whenever any leaf inside it may carry a
+  secrecy label, maintained on construction. The bit may be set when no leaf is labelled (after the
+  labelled part was sliced away, say) but is never clear when one is, so a clear bit lets the sink
+  guard and the `sees` check skip the value in O(1), and a set bit falls back to scanning the
+  leaves. Debug builds also scan at every sink and assert that the scan agrees with the bit. Leaf
+  labels (chapter 03) keep their meaning; the summary is representation only.
 
 ## `text`
 
@@ -230,8 +275,11 @@ IEEE 754 binary64 throughout, no fused operations, so results are identical on e
 
 ## `rand`
 
-Every `rand` built-in is an **effect**: it draws from the frame's seeded generator (ChaCha20,
-seeded from the turn's recorded seed and the frame path), so a replayed run draws the same values.
+Every `rand` built-in is an **effect**: it draws from its branch's own generator (ChaCha20, seeded
+with `H(turn seed, frame path, branch path)`, chapter 01). Draws are a function of the turn's
+recorded seed and the drawing branch's position alone, so they need no tape entries, a replayed run
+draws the same values, and two live runs with the same model answers draw the same values whatever
+the order in which concurrent branches run. Sequential code has one branch path and is unaffected.
 
 | Built-in | Signature | Semantics | Fails with |
 | --- | --- | --- | --- |

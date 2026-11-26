@@ -133,7 +133,7 @@ pub(crate) enum Primitive {
     Untrusted,
     /// `Secret<T>`.
     Secret,
-    /// `Task<T>` (the handle; `Task` without arguments is the shared record type).
+    /// `Task<T>`, the handle (the shared record is `TaskInput`).
     Task,
 }
 

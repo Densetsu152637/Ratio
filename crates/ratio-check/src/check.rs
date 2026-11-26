@@ -720,9 +720,7 @@ impl<'a> Checker<'a> {
             Some(Err(())) => return TypeId::ERROR,
             None => {}
         }
-        if let Some(prim) = builtins::primitive(name)
-            && !(matches!(prim, Primitive::Task) && args.is_empty())
-        {
+        if let Some(prim) = builtins::primitive(name) {
             return self.primitive_type(origin, prim, name, &args, span);
         }
         if let Some(&index) = self.std[0].scope.get(name) {

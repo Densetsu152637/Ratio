@@ -12,7 +12,7 @@
 | Lists | `[T]` | Persistent vectors; indexing out of range raises `Invalid` (use `list.get` for `T?`) |
 | Tuples | `(A, B, …)` | Fixed arity, at most 8 |
 | Records | `{ a: A, b?: B }` | Structural; a field declared with `?` may be absent, and reads as `B?` |
-| Maps | `Map<K, V>` | Ordered by key; `K` is `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum. Where a `Map<Str, V>` is expected, a record literal (`{ attempt: "2" }`) builds one |
+| Maps | `Map<K, V>` | Ordered by key; persistent, with O(log n) lookup, update and removal (chapter 06, `data`); `K` is `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum. Where a `Map<Str, V>` is expected, a record literal (`{ attempt: "2" }`) builds one |
 | Enums | `enum E { A, B { x: Int } }` | Nominal tagged unions; variant payloads are records |
 | Functions | `fn(A, B) -> C` | Named functions and closures; harnesses are functions of a special kind (chapter 04) |
 | Prompts | `Prompt`, `TrustedPrompt` | Built from sections (chapter 05); `TrustedPrompt` holds trusted text only |
@@ -20,7 +20,7 @@
 | Handles | `Conversation`, `Task<T>`, `Process`, `Scratchpad`, `Mark`, `Pin`, `Artefact`, `Checkpoint` | References to things the engine owns; see below |
 
 All values are **immutable**. "Updating" a record makes a new one (`{ ..r, x: 1 }`); `list.push`
-returns a new list. Persistent structures make this cheap.
+returns a new list. Persistent structures make this cheap; chapter 06 (`data`) gives the complexities they must have.
 
 **Handles** are the only references. A handle names something the engine owns and keeps (a
 conversation, a subagent task, a background process, a stored artefact). Operations on a handle
@@ -36,11 +36,13 @@ Every binding, parameter, field and return has a type known before the program r
 and harness signatures are written out; local `let` and `var` bindings and closure parameters are
 inferred (bidirectional checking: the expected type flows into closures and literals). Generic
 type parameters are allowed on functions and type aliases; harnesses are monomorphic, because a
-harness signature is a contract recorded in the registry and used to derive schemas.
+harness signature is a contract recorded in the registry and used to derive schemas. Enums a
+program declares are not generic; `Result<T>` (chapter 06) is the built-in generic enum.
 
 Records are structural: two record types with the same fields are the same type. A record value
-must have exactly the declared fields (no width subtyping); spread builds narrower records
-explicitly. Enums are nominal.
+must have exactly the declared fields (no width subtyping), and a required field may stand
+where the same field is declared optional; spread against a declared record type takes only the
+fields it declares, so it builds narrower records explicitly. Enums are nominal.
 
 **Subtyping** is deliberately small:
 
@@ -52,7 +54,8 @@ explicitly. Enums are nominal.
   `Untrusted<Str>`.
 - `TrustedPrompt` is a subtype of `Prompt`.
 - Lists, options, tuples, maps (in values) and records are covariant in their element types.
-  This is sound because values are immutable.
+  This is sound because values are immutable. An enum's type arguments relate by how its
+  payloads use each parameter (`Result<T>` is covariant).
 - A function type is contravariant in parameters and covariant in result.
 
 `Json` is the one dynamic type. It comes from `json.parse`, from `tools.call_tool` and MCP
@@ -121,7 +124,7 @@ built-in's declared return type against it (chapter 10).
 | --- | --- | --- |
 | `Str` | Written in the program, or converted with `trust` | Anywhere |
 | `UserText` | The user's own message (`Turn.message`): typed by the user, or the configured starting prompt of an unattended session | Anywhere a `Str` may |
-| `Brief` | A task given to this agent: its brief from the dispatching agent (`Task.brief`), or text converted with `as_task(x, because:)`; trusted `Str` is a `Brief` too | `task` prompt sections, and anywhere untrusted text may; never instruction positions |
+| `Brief` | A task given to this agent: its brief from the dispatching agent (`TaskInput.brief`), or text converted with `as_task(x, because:)`; trusted `Str` is a `Brief` too | `task` prompt sections, and anywhere untrusted text may; never instruction positions |
 | `Untrusted<Str>` | Everything else from effects | Anywhere except instruction positions and `task` sections |
 
 `Turn.payloads` holds text that arrived with a turn but was not written by the user: CI logs,
@@ -345,7 +348,7 @@ recognised within a session without the digest revealing a low-entropy secret.
 
 **Tapes.** Effects whose responses carry labels are recorded in the session journal (which stays
 on the machine) with their labels, but redacted from tape files written by headless runs;
-replaying such a run needs `--ratio-tape-mode lenient` for those effects.
+replaying such a run needs `--ratio-tape-mode lenient` for those effects. Replay never removes a label (chapter 01).
 
 **Parity.** With the default configuration no source is configured, so no value or conversation
 is ever labelled and the sink rules never fire; `std:default` under defaults therefore behaves
@@ -385,7 +388,9 @@ Bindings are in scope in the first block only.
 
 - `if` without `else` has type `()`. With `else`, both branches must have a common supertype.
 - `match` must be exhaustive; the checker names the missing variants or literal cases. Guards
-  (`if …`) do not count towards exhaustiveness.
+  (`if …`) do not count towards exhaustiveness. A pattern other than a binding, `_` or `none`
+  matched against `T?` matches a present value and is checked against `T`; a binding matches
+  the option itself.
 - `for p in xs { … }` iterates lists, ranges and maps (as `(key, value)` tuples, in key order); its
   value is `()`. `while cond { … }` and `loop { … }` run until `break`; `break v` gives `loop` its
   value. `repeat n { … }` runs the block `n` times.
@@ -420,7 +425,7 @@ type Error = {
 | `SchemaMismatch` | Structured output or `json.decode` did not match the schema after repairs (`data`: violations) | Yes |
 | `Budget { which }` | `tokens`, `cost`, `steps`, `wall`, `model_calls`, `tool_calls`, `depth`, `call_depth`, `heap`, `width` ran out | Only outside the scope whose budget ran out |
 | `Timeout` | A `with timeout` or a `timeout:` argument elapsed | Yes |
-| `Cancelled` | The session was stopped for good, a `race` sibling won, or a `par` sibling failed | No (observed by `defer`) |
+| `Cancelled` | The session was stopped for good, a `race` sibling won, a `par` sibling failed, or a `par_fold` stopped | No (observed by `defer`) |
 | `Assertion` | `assert` failed | Yes |
 | `NotFound` | A named thing does not exist (file, memory, agent, harness, model) | Yes |
 | `Invalid` | A bad argument, an out-of-range index, an integer overflow, a malformed regex | Yes |
@@ -450,7 +455,9 @@ scope, only by the code that opened it.
 **Cancellation cannot be swallowed.** `Cancelled` passes through `catch`. `defer { … }` blocks run
 on every exit from their scope (normal, error, cancellation) in reverse order; a `defer` block may
 make effects that release resources (`command_stop`), and those effects are exempt from
-cancellation but bounded by a 10-second grace period.
+cancellation but bounded by a 10-second grace period. They are also exempt from the drain fence
+(below), so a write made in a `defer` block may run concurrently with an outstanding drain:
+`defer` blocks are for releasing resources, not for writing.
 
 ## Concurrency
 
@@ -465,37 +472,102 @@ independent tool calls. Ratio offers it only in forms whose lifetimes nest in th
 | `par_map(xs, f, limit: n)` | `[B]` | Applies `f` to each element with at most `n` running at once (default 4); results by index; fail-fast like `par` |
 | `par_map_settled(xs, f, limit: n)` | `[Result<B>]` | As `par_map` but never fails fast; every element gets a result |
 | `race { a; b }` | common supertype | Returns the first to finish successfully; cancels the rest; if all fail, raises the failure of the **first branch in written order** |
+| `par_fold(xs, f, init: a, step: s)` | `Folded<A>` | Runs `f` over `xs` as `par_map` does and delivers each outcome, with its index, to `step` one at a time; stops early, cancelling the rest, when `step` returns `Stop` (chapter 06, `control`) |
 | `with timeout d { … } else { … }` | block's type | Cancels the block after `d`; runs `else` instead, or raises `Timeout` without one |
 | `agents.spawn(…)` | `Task<T>` | An engine subagent; the only thing that can outlive its creating scope (chapter 06, `agents`) |
 
-**Branch restrictions.** Inside a branch of `par`, `race`, `par_map` or `par_map_settled` (and
-any function or harness such a branch calls), the checker forbids, and the interpreter refuses
-with `Invalid`:
+**Branch restrictions.** Inside a branch of `par`, `race`, `par_map`, `par_map_settled` or
+`par_fold`, inside `par_fold`'s `step` (which runs in the caller while branches are live), and in
+any function or harness these call, the checker forbids, and the interpreter refuses with
+`Invalid`:
 
 - assigning to any `var` declared outside the branch (closures already capture by value; this
   rule also covers `par { … }` blocks, which are not closures);
 - `state.set`, `state.update` and `state.reset`;
-- appending to, or running a model on, a conversation that was not created inside the branch.
+- appending to, or running a model on, a conversation that was not created inside the branch (for
+  `step`, inside that `step` call).
 
 **Implementation model.** All branches of a frame tree run on the agent's own task as futures; the
-interpreter has no threads. Pure evaluation is cooperative; effects are where branches interleave,
-and the host runs them concurrently (chapter 10: `Host` takes `&self`).
+interpreter has no threads. Pure evaluation is cooperative, yielding at every 1,000-step
+checkpoint (chapter 01); effects are where branches interleave, and the host runs them
+concurrently (chapter 10: `Host` takes `&self`).
 
 **Determinism.** Results are combined in program order. The outcomes that depend on timing are
-**scheduling choices**, and each is recorded on the tape: which `race` branch won and the effect
-index at which each loser was cancelled; which `par` branch failed first; whether a `timeout`
-fired, and after which effect of its block; timer readings (`time.now`, `time.since`,
-`eval.timer`); and cache hits (`cached`, `memo`, `once`), which depend on what ran before. In
-replay, losers and timed-out blocks replay their recorded effects and are cancelled at the
-recorded point, so the same effects are consumed in the same order.
+**scheduling choices**, and each is an event on the tape's turn sequence (chapter 01): which
+`race` branch won; which `par` branch failed first; whether a `timeout` fired; the cancellation
+point of every cancelled branch, whatever cancelled it (a `race` loss, a failing `par` sibling, a
+`par_fold` stop, a fired timeout, a steps exhaustion in a sibling), recorded as
+`(effect index, step count)` within the branch; how each cancelled call ended (below); timer
+readings (`time.now`, `time.since`, `eval.timer`); cache events (`cached`, `memo`, `once`,
+chapter 06); `par_fold`'s deliveries in completion order; and budget admissions, refusals and
+readings (chapter 04). In replay, cancelled branches replay their recorded effects and are
+cancelled at the recorded point, so the same effects are consumed in the same order, and replay
+checks every event against the tape alone.
 
-**Limits.** At most `limits.width` branches run at once per frame tree (default 16); excess
-branches wait. Every branch draws on the same budgets as its frame.
+**Width and admission.** At most `limits.width` branches **run** at once per frame tree
+(default 16). A branch runs while it is evaluating or awaiting a host effect (a model or tool call,
+`agents.await`, `time.sleep`, `rate_limit`). A branch that waits for anything else, its own child
+branches or a single-flight cache producer (chapter 06, `control`), is **parked** and releases its
+slot; when its wait ends it takes a slot back ahead of other waiters. Every slot holder therefore
+awaits only evaluation or host effects, which complete without any other branch's help, so nested
+fan-out never deadlocks on the width. Branches waiting for a slot start in lexicographic order of
+their branch paths (chapter 01): program order, depth first. The `limit:` of `par([…])`,
+`par_map`, `par_map_settled` and `par_fold` is a per-construct cap inside the width, and the
+parallel built-ins (`model.generate_n`, `think.self_consistency`, `think.best_of`, `think.debate`,
+`think.beam_search`) count against the width the same way. Admission changes only when branches
+start, never keys or results, and is not recorded. Every branch draws on the same budgets as its
+frame; a scoped budget block inside each branch gives each its own share (chapter 06, `control`).
 
 **Cancellation** reaches a branch at its next effect boundary or at its next 1,000 steps,
-whichever is first. A model request in flight is aborted; a tool call in flight is allowed to
-finish (as the engine does on stop) and its result discarded; a background process it started is
-stopped unless it was handed out of the scope.
+whichever is first. A model request in flight is aborted. A background process the branch started
+is stopped unless it was handed out of the scope. A tool call in flight ends by its tool's
+**cancellation class** (chapter 06, `tools`):
+
+- an `abort`-class call is stopped at once and the host acknowledges it; a call that had already
+  reached a remote server (`web_*`, MCP) is recorded `abandoned` rather than `aborted`, because the
+  remote side may still act on it;
+- a `drain`-class call runs to completion (or to its deadline) and its result is discarded;
+- a call still waiting for an approval or a `tool.before` hook is **withdrawn**, whatever its
+  class. The host resolves a withdrawal racing the user's answer atomically: either the answer is
+  taken first (the call is approved, starts, and is then cancelled by its class) or the withdrawal
+  is (the call never runs). An answer that arrives for a withdrawn prompt is discarded entirely,
+  including any "allow for this session" choice in it, and is never remembered as a denial.
+
+None of these outcomes is returned to the program; each is an event on the turn sequence with the
+call's key (and, for a drained call, the digest of its discarded response), and replay verifies
+that the same calls end the same way.
+
+**Deadlines.** Every host effect carries a deadline: the earliest of the enclosing `with timeout`
+deadlines and the end of the frame's `wall` budget. The host bounds the call by it (request
+timeouts for models and MCP calls; `run_command`'s effective timeout is the smaller of its
+argument and the time left), so a command is killed when an enclosing timeout fires, exactly as
+its own timeout would kill it. A response caused by a deadline (`Timeout`, or `timed_out: true`
+from `run_command`) is recorded like any other. Replay ignores deadlines.
+
+**The drain fence.** An **outstanding drain** is a `drain`-class call that was running when its
+scope was cancelled and that the cancelled scope left running; a `drain`-class call in flight in a
+live scope is an ordinary call. A cancelled scope completes as soon as its `abort` calls have
+acknowledged; it does not wait for its outstanding drains. They are **re-parented** to the nearest
+enclosing frame that is not itself being cancelled (or to the turn, when every frame is), an event
+on the turn sequence; their reservations already sit on that frame's ledgers and its ancestors',
+so only ownership moves, and harness frames inside the cancelled scope close at once. The owning
+frame's **drain fence** then holds back, until its outstanding drains have finished:
+
+- the frame's own close (its harness call cannot return);
+- every later `drain`-class call anywhere in the same frame tree, which waits before it starts, so
+  a new write never races a stale one;
+- the completion of the turn.
+
+Each outstanding drain keeps its reservation until it finishes and is then debited its actual
+charge, so cancellation never yields free or unbounded spend. Effects in `defer` blocks and
+`tools.command_stop` never wait behind the fence: they release resources, and stopping a stuck
+process must not queue behind the call it would end. The fence cannot deadlock: every outstanding
+drain is already running in the host (a call waiting for approval was withdrawn, not drained) and
+finishes within its finite bound (chapter 10, host contract) without any action by the program,
+and the calls the fence holds back have not started.
+
+**Session stop** is not cancellation: `session.control stop` drains every in-flight tool call
+whatever its class and holds the interpreter future (chapter 01).
 
 Rejected: unstructured `spawn`/`await` of local tasks. Lifetimes escape the code, cancellation
 and budgets become guesswork, and a forgotten task keeps spending after the turn ends.
@@ -507,21 +579,29 @@ and budgets become guesswork, and a forgotten task keeps spending after the turn
 - `import "./lib/critics.ratio" as critics` imports a file by path, relative to the importing
   file. The path must stay inside the package's **source root** (the folder its entry file was
   found in); `..` that leaves it, absolute paths, and symbolic links are refused.
+- An import binds its alias; without an alias or a list, the last word of its name or its file
+  name; `{ a, b }` binds those public items, and the module only with an alias. `pub` does not
+  apply to imports. A path's components hold only ASCII letters, digits, `_`, `-` and `.`, none
+  ending in a dot or naming a device (`con`); paths differing only in case are refused. A package
+  name is ASCII identifiers (letters, digits and `_`; not keywords) joined by `.`, so every
+  package can be named in an import, and a plugin name one such identifier; each is at most 128 bytes and never
+  a device name.
 - `import std:debate`, `import user:critics.strict`, `import plugin:acme/review` import a
-  registered package by **source-qualified name**; `@"^1.2"` pins a semver range. A bare name
-  (`import debate`) resolves to the highest-trust source that has the name, in the order `std`,
-  `user`, `plugin`, `project`, `authored` (chapter 08). A lower-trust package never shadows a
-  higher-trust one; reaching it needs its qualified name.
+  registered package by **source-qualified name**; `@"^1.2"` pins a semver range (`^`, `~` or
+  `=` with one to three numbers, `=` needing three), checked against the package's `meta`
+  `version`. A bare name (`import debate`) resolves to `std`, then `user`: a lower-trust package
+  never shadows a higher-trust one, and a plugin, project or authored package is reached only by
+  its qualified name.
 - The standard library modules (`model`, `think`, `tools`, `agents`, `memory`, `context`,
   `session`, `state`, `data` and its submodules, `control`, `eval`, `meta`) are in scope in every
   file without an import. The `data` submodules (`text`, `list`, `map`, `json`, …) are also in
   scope by their short names. Method syntax `x.f(a)` resolves to the module of `x`'s type first,
   then to a function `f` in scope whose first parameter accepts `x`.
 - Import cycles are errors. Name resolution is lexical: a local binding shadows an import, which
-  shadows the prelude; the checker warns on shadowing a standard module.
+  shadows the prelude; the checker warns on shadowing a standard module or `trust`, `as_task`
+  or `declassify`.
 - **Trust follows source.** A package may import only the standard library, built-in (`std`)
-  packages, files in its own source root, and registered packages of a source at least as
-  trusted as its own: a user package may import user, plugin and project packages by qualified
+  packages, files in its own source root, and registered packages as follows: a user package may import user, plugin and project packages by qualified
   name; a plugin package only `std` and its own plugin's; a project package only `std` and its own
   project's; an authored package only `std` and authored packages of the same area.
 
@@ -549,6 +629,10 @@ state: { rejections: Map<Str, Int>, plan: Untrusted<Plan>? } = { rejections: {},
 
 The same digest rule keys caches: `cached` and `once` entries are keyed by `(package, key, type
 digest)`, so a value cached as `Untrusted<Str>` is never returned where a `Str` is expected.
+Caches keep secrecy labels too: a session-scoped entry (`ratio_cache`) stores the labels of every
+leaf with the value and a hit restores them, so a value cached while labelled comes back labelled
+in a later turn or a resumed session; and a hit that would deliver a labelled value to a frame
+whose `sees` lacks `secrets` raises `Denied { by: sees }` (chapter 04).
 
 ## Tests
 

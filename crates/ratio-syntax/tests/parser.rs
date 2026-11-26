@@ -66,7 +66,7 @@ fn ratio_blocks() -> Vec<(String, usize, String)> {
 /// Blocks that are statements, not a whole file: they are parsed inside `fn fragment() { … }`.
 /// Listed so that a block that stops being a fragment is noticed rather than silently wrapped.
 const FRAGMENTS: &[(&str, usize)] = &[
-    ("03-semantics.md", 432),
+    ("03-semantics.md", 437),
     ("04-harnesses.md", 80),
     ("05-thinking.md", 71),
 ];
