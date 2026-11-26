@@ -10,11 +10,11 @@
 //! steps as any code does.
 //!
 //! Stage 6 carried the framework and one or more built-ins of each class; stage 7 adds every
-//! `text` built-in ([`text`]) and the `re` built-ins ([`regex`]) over a linear-time engine
-//! ([`crate::re`]). Stages 8 and 9 add the rest of chapter 06 to this table.
+//! `text` built-in (`text`) and the `re` built-ins (`regex`) over a linear-time engine
+//! (`crate::re`). Stages 8 and 9 add the rest of chapter 06 to this table.
 //!
 //! A built-in's working memory (a regex VM's thread lists, `text.similarity`'s rows) is part
-//! of its [`Sizes`] and charged to the heap before it runs, with its steps; a pure built-in
+//! of its sizes and charged to the heap before it runs, with its steps; a pure built-in
 //! without callbacks whose input is large may run on the pool ([`crate::Pool`]) instead of
 //! inline, with the same result, labels and charges.
 

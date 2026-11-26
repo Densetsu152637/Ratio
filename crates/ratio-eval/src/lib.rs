@@ -10,6 +10,10 @@
 //! chapter 03 (`Budget` and `Cancelled` cannot be caught; `defer` runs on every exit). Effects
 //! are explicit suspensions of the [`Machine`] ([`Suspend::Effect`]), which stage 11's host
 //! answers.
+//!
+//! Stage 7 adds the `text` and `re` built-ins (the latter over a linear-time regex engine) and
+//! the bounded [`Pool`] large pure built-ins run on, with at most [`JOBS_IN_FLIGHT`] jobs per
+//! session, while the machine waits ([`Suspend::Wait`]).
 
 #![allow(
     clippy::many_single_char_names,

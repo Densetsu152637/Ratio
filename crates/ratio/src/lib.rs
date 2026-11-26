@@ -56,5 +56,5 @@ pub use ratio_eval::{
 /// constant matches the version line of `spec/README.md`.
 pub const SPEC_DRAFT: &str = "0.13";
 
-/// The implementation stage reached (chapter 10's table): the IR and the core interpreter.
+/// The implementation stage reached (chapter 10's table): Data I (`text`, `re`, the pool).
 pub const STAGE: u32 = 7;

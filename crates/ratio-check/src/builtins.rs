@@ -21,8 +21,9 @@
 //! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
 //! a keyword.
 //!
-//! The table holds what the conformance programs need. Later stages (7 to 12) extend it module
-//! by module, and stage 7's `builtins.txt` check compares it with chapter 06.
+//! The table holds what the conformance programs need: from stage 7, every `text` and `re`
+//! built-in. Later stages (8 to 12) extend it module by module; `conformance/builtins.txt`
+//! (generated from chapter 06) is the list they work towards.
 
 use crate::analysis::Effects;
 use crate::types::{Bound, Handle, TypeId};
