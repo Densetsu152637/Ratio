@@ -486,8 +486,8 @@ and `N0021` are warnings):
 | `N0020` | Warning: a name that shadows a standard module |
 | `N0021` | Warning: a name that shadows `trust`, `as_task` or `declassify` |
 
-The checker's diagnostic codes (stage 4; chapters 02 and 03 define the rules, chapter 07 the
-limits; `C0031` and `C0032` are warnings):
+The checker's diagnostic codes (stages 4 and 5; chapters 02 and 03 define the rules, chapter 07
+the limits; `C0031`, `C0032` and `C0039` are warnings):
 
 | Code | Diagnostic |
 | --- | --- |
@@ -525,6 +525,11 @@ limits; `C0031` and `C0032` are warnings):
 | `C0032` | Warning: a local binding that shadows a standard module |
 | `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
 | `C0034` | A standard built-in the checker has no signature for yet (its module's stage adds it) |
+| `C0035` | Untrusted text, a `Brief` or an untrusted prompt where trusted text is required: an instruction position, a `task` section (a `Brief` only), any trusted type (a value that would fit but for its trust labels) |
+| `C0036` | `trust`, `as_task` or `declassify` at a type that is or holds a type parameter, or a built-in that may only be called, used as a function value |
+| `C0037` | A statically secret value (`Secret<T>`) where an unlabelled value is required, at a secrecy sink, or reaching a generic function that may reach a secrecy sink |
+| `C0038` | A type that must be schema-able and is not, or a schema attribute that does not fit its field (including a `@pattern` outside the common regular-expression syntax) |
+| `C0039` | Warning: a condition derived from model or tool output is the only guard on an effect that writes, runs a command, delegates, reaches the network or runs a model-chosen tool (lint `model_guard`) |
 
 A single test runner runs every file with the scripted host. In stages 1 and 2 it is the syntax
 crate's runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`,
@@ -542,8 +547,10 @@ From stage 4, the types runner, `crates/ratio-check/tests/conformance.rs`, check
 `conformance/types/`: each file is a package of one file, and each folder a package whose
 `main.ratio` imports the others by path. The entry says `// expect: check-ok`, or lists
 `// expect: check-error C0004 at 7:13 [in <file>]` and `// expect: check-warning …` lines (all of
-the checker's diagnostics, in any order); the package must load cleanly. Every `C` code has at
-least one file.
+the checker's diagnostics, in any order); the package must load cleanly. From stage 5 the same
+runner also checks `conformance/taint/`: one refused program per sink, one accepted program per
+allowed flow, trust sites, static secrets, schema-ability and the guarded-effect lint. Every `C`
+code has at least one file in the two directories.
 `conformance/spec-map.txt` names the chapters each directory tests (above). Three coverage checks
 keep the suite honest:
 

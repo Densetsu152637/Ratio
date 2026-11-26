@@ -252,6 +252,39 @@ pub struct ParamDef {
 const HAS_VAR: u8 = 1;
 const HAS_PARAM: u8 = 2;
 const TAINTED: u8 = 4;
+const SECRET: u8 = 8;
+
+/// What a record field's declaration adds to its type's schema (chapter 03, "Types are
+/// schemas"): the description (the trailing string or the `///` comment) and the refinements
+/// written as attributes before the field. Numbers and examples are kept as JSON text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FieldMeta {
+    pub description: Option<String>,
+    /// `@len(min, max)`: `minItems` and `maxItems`.
+    pub len: Option<(u64, u64)>,
+    /// `@range(min, max)`: `minimum` and `maximum`, as JSON numbers.
+    pub range: Option<(String, String)>,
+    /// `@pattern(r"…")`.
+    pub pattern: Option<String>,
+    /// `@example(value)`, as JSON.
+    pub example: Option<String>,
+}
+
+impl FieldMeta {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == FieldMeta::default()
+    }
+}
+
+/// Which labels an erasure removes (for classifying a mismatch).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Erase {
+    /// `Untrusted<_>`, `Brief` (to `Str`) and `Prompt` (to `TrustedPrompt`).
+    Trust,
+    /// `Secret<_>`.
+    Secret,
+}
 
 #[derive(Clone, Debug)]
 struct Node {
@@ -279,6 +312,11 @@ pub struct Types {
     pub(crate) trail: Vec<(VarId, Option<TypeId>)>,
     pub(crate) quiet: u32,
     untrusted_memo: HashMap<TypeId, TypeId>,
+    erase_memo: HashMap<(TypeId, Erase), TypeId>,
+    /// The schema descriptions and refinements of record types, by the record's id, aligned
+    /// with its fields. Records are structural, so equal records share the metadata of the
+    /// first declaration lowered (in module order, then source order).
+    field_meta: HashMap<TypeId, std::sync::Arc<[FieldMeta]>>,
     /// Set when a constructor refused a type deeper than [`MAX_TYPE_DEPTH`]; the checker takes
     /// it and reports where.
     pub(crate) too_deep: bool,
@@ -341,6 +379,8 @@ impl Types {
             trail: Vec::new(),
             quiet: 0,
             untrusted_memo: HashMap::new(),
+            erase_memo: HashMap::new(),
+            field_meta: HashMap::new(),
             too_deep: false,
             fuel: FUEL,
         };
@@ -372,6 +412,47 @@ impl Types {
     #[must_use]
     pub fn tainted(&self, id: TypeId) -> bool {
         self.nodes[id.0 as usize].flags & TAINTED != 0
+    }
+
+    /// Whether a value of type `id` holds a value whose secrecy label is known statically
+    /// (`Secret<_>` anywhere inside it).
+    #[must_use]
+    pub fn secret_inside(&self, id: TypeId) -> bool {
+        self.nodes[id.0 as usize].flags & SECRET != 0
+    }
+
+    /// Whether `id` is or contains a type parameter.
+    #[must_use]
+    pub fn has_params(&self, id: TypeId) -> bool {
+        self.nodes[id.0 as usize].flags & HAS_PARAM != 0
+    }
+
+    /// The schema metadata of the record type `id`'s fields, if its declaration had any.
+    #[must_use]
+    pub fn field_meta(&self, id: TypeId) -> Option<&[FieldMeta]> {
+        self.field_meta.get(&id).map(|m| &**m)
+    }
+
+    /// Records the metadata of a declared record type, unless an equal record has some already.
+    pub(crate) fn set_field_meta(&mut self, id: TypeId, meta: Vec<FieldMeta>) {
+        if matches!(self.get(id), Ty::Record(fields) if fields.len() == meta.len())
+            && meta.iter().any(|m| !m.is_empty())
+        {
+            self.field_meta.entry(id).or_insert_with(|| meta.into());
+        }
+    }
+
+    /// Gives `to` (a record rebuilt from `from`) the metadata `from` has.
+    fn inherit_meta(&mut self, from: TypeId, to: TypeId) {
+        if from == to {
+            return;
+        }
+        let Some(meta) = self.field_meta.get(&from).cloned() else {
+            return;
+        };
+        if matches!(self.get(to), Ty::Record(fields) if fields.len() == meta.len()) {
+            self.field_meta.entry(to).or_insert(meta);
+        }
     }
 
     /// The enum `id` names.
@@ -535,7 +616,11 @@ impl Types {
             flags |= node.flags;
         };
         match &ty {
-            Ty::Task(t) | Ty::Option(t) | Ty::List(t) | Ty::Secret(t) => child(*t),
+            Ty::Task(t) | Ty::Option(t) | Ty::List(t) => child(*t),
+            Ty::Secret(t) => {
+                child(*t);
+                flags |= SECRET;
+            }
             Ty::Untrusted(t) => {
                 child(*t);
                 flags |= TAINTED;
@@ -695,7 +780,9 @@ impl Types {
                         optional: f.optional,
                     })
                     .collect();
-                self.record(fields)
+                let mapped = self.record(fields);
+                self.inherit_meta(t, mapped);
+                mapped
             }
             Ty::Enum(id, _) if self.enum_def(id).unit_only() => t,
             Ty::Enum(..) | Ty::Param(_) | Ty::Var(_) => self.intern(Ty::Untrusted(t)),
@@ -766,7 +853,9 @@ impl Types {
                         optional: f.optional,
                     })
                     .collect();
-                self.record(fields)
+                let rebuilt = self.record(fields);
+                self.inherit_meta(t, rebuilt);
+                rebuilt
             }
             Ty::Enum(id, args) => {
                 let args = args.iter().map(|t| go(self, *t)).collect();
@@ -810,6 +899,122 @@ impl Types {
             _ => None,
         };
         self.rebuild(t, &mut leaf, &mut HashMap::new())
+    }
+
+    /// `t` with the labels `what` names removed, by structure: for [`Erase::Trust`],
+    /// `Untrusted<T>` becomes `T`, `Untrusted<Str>` and `Brief` become `Str` and `Prompt`
+    /// becomes `TrustedPrompt`; for [`Erase::Secret`], `Secret<T>` becomes `T`. Memoised;
+    /// out of budget, the error type.
+    pub(crate) fn erase(&mut self, t: TypeId, what: Erase) -> TypeId {
+        if what == Erase::Secret && !self.secret_inside(t) {
+            return t;
+        }
+        if let Some(&done) = self.erase_memo.get(&(t, what)) {
+            return done;
+        }
+        if !self.burn() {
+            return TypeId::ERROR;
+        }
+        let go = |types: &mut Types, x: TypeId| types.erase(x, what);
+        let done = match self.get(t).clone() {
+            Ty::UntrustedStr | Ty::Brief if what == Erase::Trust => TypeId::STR,
+            Ty::Prompt if what == Erase::Trust => TypeId::TRUSTED_PROMPT,
+            Ty::Untrusted(a) if what == Erase::Trust => go(self, a),
+            Ty::Secret(a) if what == Erase::Secret => go(self, a),
+            Ty::Untrusted(a) => {
+                let a = go(self, a);
+                self.untrusted(a)
+            }
+            Ty::Secret(a) => {
+                let a = go(self, a);
+                self.secret(a)
+            }
+            Ty::Task(a) => {
+                let a = go(self, a);
+                self.task(a)
+            }
+            Ty::Option(a) => {
+                let a = go(self, a);
+                self.option(a)
+            }
+            Ty::List(a) => {
+                let a = go(self, a);
+                self.list(a)
+            }
+            Ty::Map(k, v) => {
+                let (k, v) = (go(self, k), go(self, v));
+                self.map(k, v)
+            }
+            Ty::Tuple(ts) => {
+                let ts = ts.iter().map(|t| go(self, *t)).collect();
+                self.tuple(ts)
+            }
+            Ty::Record(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|f| Field {
+                        name: f.name.clone(),
+                        ty: go(self, f.ty),
+                        optional: f.optional,
+                    })
+                    .collect();
+                self.record(fields)
+            }
+            Ty::Enum(id, args) => {
+                let args = args.iter().map(|t| go(self, *t)).collect();
+                self.enum_type(id, args)
+            }
+            Ty::Fn(ps, r) => {
+                let ps = ps.iter().map(|t| go(self, *t)).collect();
+                let r = go(self, r);
+                self.function(ps, r)
+            }
+            Ty::Harness(ps, r) => {
+                let ps = ps.iter().map(|t| go(self, *t)).collect();
+                let r = go(self, r);
+                self.harness(ps, r)
+            }
+            _ => t,
+        };
+        self.erase_memo.insert((t, what), done);
+        done
+    }
+
+    /// Whether a value of type `t` may hold trusted text (`Str`, `UserText`, `Brief` or a
+    /// `TrustedPrompt`) anywhere, inside records, lists, options, maps, tuples and enum
+    /// payloads included (chapter 07: a harness with such a parameter is not offerable to
+    /// models). Out of budget, `true`.
+    pub fn holds_trusted_text(&mut self, t: TypeId) -> bool {
+        let mut seen: HashSet<TypeId> = HashSet::new();
+        let mut work = vec![t];
+        while let Some(x) = work.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            if !self.burn() {
+                return true;
+            }
+            match self.get(x).clone() {
+                Ty::Str | Ty::UserText | Ty::Brief | Ty::TrustedPrompt => return true,
+                Ty::Enum(id, _) => {
+                    for i in 0..self.enum_def(id).variants.len() {
+                        if let Some(p) = self.payload(x, i) {
+                            work.push(p);
+                        }
+                    }
+                }
+                Ty::Untrusted(inner) if matches!(self.get(inner), Ty::Enum(..)) => {
+                    let id = self.as_enum(x).unwrap_or(EnumId(0));
+                    for i in 0..self.enum_def(id).variants.len() {
+                        if let Some(p) = self.payload(x, i) {
+                            work.push(p);
+                        }
+                    }
+                }
+                _ => work.extend(self.parts(x).into_iter().map(|(p, _)| p)),
+            }
+        }
+        false
     }
 
     /// The payload record of variant `index` of the enum type `t` (an `Enum` or an

@@ -1,6 +1,8 @@
-//! The type-checking corpus: `conformance/types/` (chapter 10, "The conformance suite").
+//! The checker's corpora (chapter 10, "The conformance suite"): `conformance/types/` (stage 4)
+//! and `conformance/taint/` (stage 5: one rejected program per sink, one accepted per allowed
+//! flow, trust sites, static secrets, schema-ability and the guarded-effect lint).
 //!
-//! Each `.ratio` file directly in `conformance/types/` is a package of one file. Each folder
+//! Each `.ratio` file directly in a corpus directory is a package of one file. Each folder
 //! is a package of several files: its `main.ratio` is the entry and the others are imported by
 //! path. The entry's header says what the checker must report:
 //!
@@ -13,7 +15,8 @@
 //!
 //! The diagnostics listed are all of the checker's, in any order. The package must load and
 //! resolve without an error (stage 3), and the checker's own built-in declarations must check
-//! cleanly. Every code of [`ratio_check::Code`] has at least one file that expects it.
+//! cleanly. Every code of [`ratio_check::Code`] has at least one file (in either corpus) that
+//! expects it.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -24,8 +27,10 @@ use ratio_names::{Loader, MemoryRegistry, PackageId, PackageName, QualifiedName,
 
 type Expected = (String, String, u32, u32);
 
-fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/types")
+fn corpus(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance")
+        .join(name)
 }
 
 fn entries(dir: &Path) -> Vec<PathBuf> {
@@ -160,24 +165,26 @@ fn run(path: &Path, failures: &mut Vec<String>) -> Vec<String> {
 }
 
 #[test]
-fn the_type_corpus_checks_as_expected() {
+fn the_type_and_taint_corpora_check_as_expected() {
     let mut failures = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut count = 0;
-    for path in entries(&corpus()) {
-        let is_ratio = path.extension().is_some_and(|e| e == "ratio");
-        if !(path.is_dir() || is_ratio) {
-            continue;
+    for dir in ["types", "taint"] {
+        let mut count = 0;
+        for path in entries(&corpus(dir)) {
+            let is_ratio = path.extension().is_some_and(|e| e == "ratio");
+            if !(path.is_dir() || is_ratio) {
+                continue;
+            }
+            count += 1;
+            seen.extend(run(&path, &mut failures));
         }
-        count += 1;
-        seen.extend(run(&path, &mut failures));
+        assert!(count > 0, "no files in conformance/{dir}");
     }
     for code in Code::ALL {
         if !seen.contains(code.as_str()) {
             failures.push(format!("no file expects {code}"));
         }
     }
-    assert!(count > 0, "no files in conformance/types");
     assert!(
         failures.is_empty(),
         "{} problem(s):\n{}",

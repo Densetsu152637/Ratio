@@ -17,7 +17,7 @@ use crate::diag::Code;
 use crate::exhaust::Outcome;
 use crate::pattern::{Binder, PatCx, quote};
 use crate::tables::{Coercion, Key};
-use crate::types::{Field, Ty, TypeId};
+use crate::types::{Erase, Field, Ty, TypeId};
 
 impl Checker<'_> {
     /// Checks `e`, with the type expected where it stands if there is one, and records its
@@ -44,18 +44,69 @@ impl Checker<'_> {
 
     /// Reports `got` where `want` was expected, unless `got` is a subtype of it.
     pub(crate) fn mismatch(&mut self, b: &Body, span: Span, got: TypeId, want: TypeId) -> bool {
+        self.mismatch_at(b, span, got, want, None)
+    }
+
+    /// [`Checker::mismatch`] for a position the message names ("the `system` section").
+    /// A value that would fit but for its trust labels is a taint error (`C0035`), and one
+    /// that would fit but for a secrecy label a secrecy error (`C0037`): the sinks of chapter
+    /// 03 are trusted (or unlabelled) positions, so this is where they are refused.
+    pub(crate) fn mismatch_at(
+        &mut self,
+        b: &Body,
+        span: Span,
+        got: TypeId,
+        want: TypeId,
+        position: Option<&str>,
+    ) -> bool {
         if self.types.subtype(&mut self.memo, got, want) {
             return true;
         }
         let want = self.types.resolve(want);
-        let (got, want) = (self.types.display(got), self.types.display(want));
-        self.report(
-            b.origin(),
-            Code::Mismatch,
-            span,
-            format!("expected `{want}`, found `{got}`"),
-        );
+        let got = self.types.resolve(got);
+        let code = self.classify(got, want);
+        let (shown_got, shown_want) = (self.types.display(got), self.types.display(want));
+        let at = position.map_or_else(String::new, |p| format!(" in {p}"));
+        let message = match code {
+            Code::Untrusted => format!(
+                "expected `{shown_want}`{at}, found `{shown_got}`: untrusted text cannot reach a \
+                 trusted position (convert it with an audited `trust` or `as_task`, or frame it \
+                 in a `data` section)"
+            ),
+            Code::Secret => format!(
+                "expected `{shown_want}`{at}, found `{shown_got}`: a secret cannot reach a \
+                 position that is not labelled secret (`declassify` asks the user)"
+            ),
+            _ => format!("expected `{shown_want}`{at}, found `{shown_got}`"),
+        };
+        self.report(b.origin(), code, span, message);
         false
+    }
+
+    /// Why `got` does not fit `want`: only its trust labels (`C0035`), only its secrecy
+    /// labels (`C0037`), or its shape (`C0004`).
+    fn classify(&mut self, got: TypeId, want: TypeId) -> Code {
+        if self.types.has_vars(got) || self.types.has_vars(want) {
+            return Code::Mismatch;
+        }
+        let (g, w) = (
+            self.types.erase(got, Erase::Trust),
+            self.types.erase(want, Erase::Trust),
+        );
+        let untrusted = (g != got || w != want) && self.types.subtype_quiet(&mut self.memo, g, w);
+        if untrusted {
+            return Code::Untrusted;
+        }
+        if self.types.secret_inside(got) {
+            let (g, w) = (
+                self.types.erase(g, Erase::Secret),
+                self.types.erase(w, Erase::Secret),
+            );
+            if self.types.subtype_quiet(&mut self.memo, g, w) {
+                return Code::Secret;
+            }
+        }
+        Code::Mismatch
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per kind of expression")]
@@ -227,14 +278,38 @@ impl Checker<'_> {
                 self.types.option(TypeId::NEVER)
             }
             Lit::Str(s) => {
+                // The literal is as trusted as the least trusted value it interpolates: any
+                // value that may hold untrusted text (a type parameter included) makes it
+                // `Untrusted<Str>`; a `Brief`, with only trusted text otherwise, a `Brief`
+                // (a task the harness words around a task it was given); a statically secret
+                // value makes it secret.
                 let mut tainted = false;
+                let mut brief = false;
+                let mut secret = false;
                 let mut plain = true;
                 for part in &s.parts {
                     if let StrPart::Interp { expr, .. } = part {
                         plain = false;
                         let t = self.expr(b, expr, None);
-                        tainted |= self.types.tainted(t);
+                        let t = self.types.resolve(t);
+                        secret |= self.types.secret_inside(t);
+                        let t = self.types.erase(t, Erase::Secret);
+                        if t == TypeId::BRIEF {
+                            brief = true;
+                        } else {
+                            tainted |= self.types.tainted(t);
+                        }
                     }
+                }
+                let text = if tainted {
+                    TypeId::UNTRUSTED_STR
+                } else if brief {
+                    TypeId::BRIEF
+                } else {
+                    TypeId::STR
+                };
+                if secret {
+                    return self.types.secret(text);
                 }
                 let target = expected.map(|t| self.strip_option(t));
                 if plain && let Some(target) = target {
@@ -251,11 +326,7 @@ impl Checker<'_> {
                         return TypeId::TOOL_NAME;
                     }
                 }
-                if tainted {
-                    TypeId::UNTRUSTED_STR
-                } else {
-                    TypeId::STR
-                }
+                text
             }
         }
     }
@@ -858,7 +929,15 @@ impl Checker<'_> {
     fn condition(&mut self, b: &mut Body, cond: &Condition) {
         match cond {
             Condition::Expr(e) => {
-                self.expect(b, e, TypeId::BOOL);
+                let t = self.expr(b, e, Some(TypeId::BOOL));
+                let t = self.types.resolve(t);
+                // Branching on a secret `Bool` is allowed (chapter 03): that implicit flow is
+                // outside the guarantee, as for taint.
+                let t = match self.types.get(t) {
+                    Ty::Secret(inner) if *inner == TypeId::BOOL => TypeId::BOOL,
+                    _ => t,
+                };
+                self.mismatch(b, e.span, t, TypeId::BOOL);
             }
             Condition::Let { pattern, value } => {
                 let t = self.expr(b, value, None);
@@ -1214,8 +1293,10 @@ impl Checker<'_> {
     // ---- prompts ----
 
     /// A prompt body: `TrustedPrompt` when every section holds trusted content only (no
-    /// `data`, `image` or `context` section, no text that may be untrusted, no included
-    /// untrusted prompt), else `Prompt` (chapter 05). Stage 5 checks what may go where.
+    /// `data`, `image` or `context` section, no `Brief` task, no included untrusted prompt),
+    /// else `Prompt` (chapter 05). The instruction positions (`system`, `instruct`, `note`,
+    /// `example`, `steps`) take trusted text only and `task` takes a `Brief`, so untrusted
+    /// text there is refused (`C0035`); the sections that frame it (`data`) take anything.
     pub(crate) fn prompt_body(&mut self, b: &mut Body, body: &ast::PromptBody) -> TypeId {
         let mut trusted = true;
         for section in &body.sections {
@@ -1234,21 +1315,27 @@ impl Checker<'_> {
         match &section.kind {
             S::System(e) => {
                 let t = self.expr(b, e, None);
-                let text = self.types.subtype(&mut self.memo, t, TypeId::UNTRUSTED_STR);
-                if !text && !self.types.subtype(&mut self.memo, t, TypeId::PROMPT) {
-                    self.mismatch(b, e.span, t, TypeId::STR);
-                }
-                !self.types.tainted(t) && t != TypeId::PROMPT
+                let t = self.types.resolve(t);
+                let prompt = self.types.subtype(&mut self.memo, t, TypeId::PROMPT)
+                    && !self.types.subtype(&mut self.memo, t, TypeId::UNTRUSTED_STR);
+                let want = if prompt {
+                    TypeId::TRUSTED_PROMPT
+                } else {
+                    TypeId::STR
+                };
+                self.mismatch_at(b, e.span, t, want, Some("the `system` section"))
             }
-            S::Instruct(e) | S::Task(e) | S::Note(e) => self.text_section(b, e),
+            S::Instruct(e) => self.text_section(b, e, TypeId::STR, "the `instruct` section"),
+            S::Note(e) => self.text_section(b, e, TypeId::STR, "the `note` section"),
+            S::Task(e) => self.text_section(b, e, TypeId::BRIEF, "the `task` section"),
             S::Example { input, output } => {
-                let a = self.text_section(b, input);
-                self.text_section(b, output) && a
+                let a = self.text_section(b, input, TypeId::STR, "an `example` section");
+                self.text_section(b, output, TypeId::STR, "an `example` section") && a
             }
             S::Steps(e) => {
-                let list = self.types.list(TypeId::UNTRUSTED_STR);
-                let t = self.expect(b, e, list);
-                !self.types.tainted(t)
+                let list = self.types.list(TypeId::STR);
+                let t = self.expr(b, e, Some(list));
+                self.mismatch_at(b, e.span, t, list, Some("the `steps` section"))
             }
             S::Data { value, label } => {
                 self.expr(b, value, None);
@@ -1266,7 +1353,8 @@ impl Checker<'_> {
             }
             S::Format(t) => {
                 let tparams = b.tparams.clone();
-                self.lower_type(b.origin(), &tparams, t);
+                let ty = self.lower_type(b.origin(), &tparams, t);
+                self.require_schema(b, ty, t.span, "a `format` section's type");
                 true
             }
             S::Context(e) => {
@@ -1306,9 +1394,34 @@ impl Checker<'_> {
         }
     }
 
-    fn text_section(&mut self, b: &mut Body, e: &Expr) -> bool {
-        let t = self.expect(b, e, TypeId::UNTRUSTED_STR);
-        !self.types.tainted(t)
+    /// A section of text that must fit `want` (`Str`, or `Brief` for `task`); whether the
+    /// prompt stays trusted (a `Brief` task makes it a `Prompt`).
+    ///
+    /// The expression is checked expecting `Str` even for `task`: an expected `Brief` would
+    /// instantiate a generic call at `Brief` (`apply(|s| s, trusted)`) and make the prompt
+    /// untrusted needlessly; whether it fits is then decided against `want`.
+    fn text_section(&mut self, b: &mut Body, e: &Expr, want: TypeId, position: &str) -> bool {
+        let t = self.expr(b, e, Some(TypeId::STR));
+        let fits = self.mismatch_at(b, e.span, t, want, Some(position));
+        let t = self.types.resolve(t);
+        fits && !self.types.tainted(t)
+    }
+
+    /// Reports `ty` unless it is schema-able (`C0038`); `what` says what must be.
+    pub(crate) fn require_schema(&mut self, b: &Body, ty: TypeId, span: Span, what: &str) {
+        let ty = self.types.resolve(ty);
+        if ty == TypeId::ERROR || self.types.has_vars(ty) {
+            return;
+        }
+        if let Err(why) = crate::schema::schema_able(&mut self.types, ty) {
+            let shown = self.types.display(ty);
+            self.report(
+                b.origin(),
+                Code::NotSchemaable,
+                span,
+                format!("{what} must be schema-able, and `{shown}` is not: {why}"),
+            );
+        }
     }
 
     // ---- variants ----

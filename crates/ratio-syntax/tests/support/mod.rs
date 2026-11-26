@@ -391,8 +391,10 @@ pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
             if matches!(token.kind, TokenKind::Semi { .. }) {
                 type_or_format = false;
             }
+            // As the lexer and chapter 02: an attribute starts after `;`, `{` or another
+            // attribute, and a bare `@` with no name is not one, so a `@` after it starts
+            // nothing (`@@allow(x)` is not a line of attributes).
             at_start = matches!(token.kind, TokenKind::Semi { .. } | TokenKind::LBrace(_))
-                || (at_start && matches!(token.kind, TokenKind::At))
                 || attr == Some(Attr::Named);
             prev = Some(&token.kind);
         }

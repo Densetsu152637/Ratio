@@ -1,11 +1,11 @@
 // expect: check-error C0004 at 11:3
 // expect: check-error C0004 at 19:5
-// expect: check-error C0004 at 23:3
-// expect: check-error C0004 at 27:3
-// expect: check-error C0004 at 31:3
+// expect: check-error C0035 at 23:3
+// expect: check-error C0035 at 27:3
+// expect: check-error C0035 at 31:3
 // expect: check-error C0004 at 35:3
 // expect: check-error C0004 at 39:3
-// expect: check-error C0004 at 47:38
+// expect: check-error C0035 at 47:38
 
 fn f() -> Int {
   "a"

@@ -74,6 +74,17 @@ type FileText = {
   path: Untrusted<Str>, text: Untrusted<Str>, first_line: Int, last_line: Int,
   total_lines: Int, more: Bool, next_offset?: Int,
 }
+type Written = { path: Untrusted<Str>, bytes: Int, created: Bool }
+type CommandResult = { exit_code: Int, stdout: Untrusted<Str>, stderr: Untrusted<Str>, timed_out: Bool }
+type SearchHit = { title: Untrusted<Str>, url: Untrusted<Str>, snippet: Untrusted<Str> }
+type Page = {
+  url: Untrusted<Str>, final_url: Untrusted<Str>, title: Untrusted<Str>, text: Untrusted<Str>,
+  more: Bool, next_offset?: Int,
+}
+type McpResult = { text: Untrusted<Str>, content: [Json], is_error: Bool }
+
+// The session (chapter 06, session). A question with `secret: true` has a Secret answer.
+type Question = { question: Str, options: [Str], recommended: Str, secret?: Bool }
 
 // Budgets and limits
 type Budget = { tokens?: Int, cost?: Money, wall?: Duration, steps?: Int, model_calls?: Int, tool_calls?: Int }

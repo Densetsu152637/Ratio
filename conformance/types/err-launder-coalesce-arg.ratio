@@ -1,4 +1,4 @@
-// expect: check-error C0004 at 12:9
+// expect: check-error C0035 at 12:9
 
 fn apply<T>(f: fn(T) -> Str, x: T) -> Str {
   f(x)

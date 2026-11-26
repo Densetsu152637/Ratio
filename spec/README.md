@@ -1,10 +1,50 @@
 # The Ratio specification
 
-Version: draft 0.11 (2026-11-26). Status: design; stages 1 to 4 of the implementation (the
-token reader, the parser, modules and names, and the type checker) are built in this
-repository.
+Version: draft 0.12 (2026-11-27). Status: design; stages 1 to 5 of the implementation (the
+token reader, the parser, modules and names, the type checker, and schemas and taint) are built
+in this repository.
 
-**Changes in draft 0.11.** Errata from stage 4, the type checker. One grammar change.
+**Changes in draft 0.12.** Errata from stage 5, schemas and taint. No grammar change.
+
+- Concatenating or interpolating a `Brief` with trusted text only gives a `Brief` (chapter 03).
+- `steps` sections are instruction positions, with `system`, `instruct`, `note` and `example`
+  (chapter 03).
+- `trust`'s `T`, unless a turbofish gives it, is the argument's type with its trust labels
+  removed (chapter 03).
+- `trust`, `as_task`, `declassify`, `session.ask` and `meta.harness` may only be called, never
+  used as function values: every rule a built-in imposes must hold for values too (chapters 03,
+  06).
+- The guarded-effect lint is silenced with `@allow(model_guard)` on the enclosing item, since
+  statements take no attributes (chapter 03).
+- The schema table gives `()` (`null`), map keys other than text (`propertyNames`), the `kind`
+  constant's spelling (`snake_case`), that an optional field does not take `null`, and `$defs`
+  for an enum that contains itself; schema attributes are checked against their fields,
+  `@pattern` is the regular-expression syntax ECMAScript and `re` share, `@range` keeps its
+  decimal literals, and the schema is canonical JSON (chapter 03).
+- Type digests key the structure of values: their canonical form is given, keeps the labels and
+  leaves out descriptions and refinements (chapter 03).
+- `agents.spawn`, `agents.delegate` and `agents.map` name the package by `package:` (a keyword
+  cannot name an argument, so `harness:` could not be written) (chapters 03, 06, 08).
+- `session.ask`'s questions are the shared `Question` record, whose `secret?: Bool` is `false`
+  when absent (chapter 06).
+- A `meta.harness` name is the longest prefix that names a registered package, then the harness
+  (chapters 04, 06).
+- Chapter 10 adds the codes `C0035` to `C0039` and the `conformance/taint/` directory.
+- `session.start` names the package by `package:` too, and a parameter whose name is a reserved
+  keyword (`prompt`, `type`) is passed only by position (chapter 06).
+- The guarded-effect lint (`C0039`) also covers running a tool a model chose (chapter 03).
+- The checker refuses instantiating a generic function that may reach a secrecy sink at a type
+  holding a `Secret` (`C0037`, chapter 03).
+- The call-only rule states its criterion (trust sites, sinks whose rule depends on the call's
+  written arguments, generic secrecy sinks); the five built-ins are its current members
+  (chapter 06).
+- Canonical JSON's key order is given (fixed order for schema keywords, field names by UTF-8
+  bytes), and digest enums are numbered from 0 (chapter 03).
+- A `meta.harness` name's source is chosen before its longest package prefix; an ambiguous name
+  makes the `harnesses.check` listing incomplete (chapters 04, 06).
+- Wording: chapter 10's `C0036` row.
+
+**Changes in draft 0.11** (kept for reference). Errata from stage 4, the type checker. One grammar change.
 
 - Enums a program declares take no type parameters: `enum_decl` loses `[ type_params ]`, and
   only built-in enums (`Result<T>`, `Fold<A>`) may be generic (chapters 02, 03). An enum's type arguments relate by

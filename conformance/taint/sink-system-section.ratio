@@ -1,0 +1,31 @@
+// expect: check-error C0035 at 10:12
+// expect: check-error C0035 at 17:12
+// expect: check-error C0035 at 28:12
+
+// Untrusted text, a Brief or an untrusted prompt in a `system` section (an instruction
+// position, chapter 03 "Sinks").
+
+fn from_web(page: Untrusted<Str>) -> Prompt {
+  prompt {
+    system page
+    instruct "Summarise."
+  }
+}
+
+fn from_brief(task: TaskInput) -> Prompt {
+  prompt {
+    system task.brief
+    instruct "Do it."
+  }
+}
+
+fn from_untrusted_prompt(page: Untrusted<Str>) -> Prompt {
+  let inner = prompt {
+    instruct "Rules."
+    data page as "page"
+  }
+  prompt {
+    system inner
+    instruct "Go."
+  }
+}

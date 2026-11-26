@@ -1,0 +1,18 @@
+// expect: check-error C0035 at 7:3
+// expect: check-error C0035 at 17:3
+
+// A prompt with data, or with a `Brief` task, is not a `TrustedPrompt`.
+
+fn rules(page: Untrusted<Str>) -> TrustedPrompt {
+  prompt {
+    system "Rules."
+    data page as "page"
+  }
+}
+
+fn delegated(t: TaskInput) -> TrustedPrompt {
+  let p = prompt {
+    task t.brief
+  }
+  p
+}

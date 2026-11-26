@@ -1,6 +1,6 @@
 # Plan: Ratio-side implementation roadmap
 
-Revision: 2026-11-26 (stage 2 merged as 0794aba; stage 2S and stage 3 in progress)
+Revision: 2026-11-27 (stage 4 merged as c834361; stage 5 in review; stage L added)
 
 Goals (each verified by the named check):
 
@@ -148,7 +148,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 
 - Depends on: 3. Owned paths: a new checker crate, `conformance/types/**`.
 - Acceptance checks: accepted and rejected programs with diagnostic codes in `conformance/types/`.
-- Status: in review (branch feat/wt-s4-types; spec draft 0.11)
+- Status: done (PR #6, c834361; spec draft 0.11)
 
 ## Stage 5: Schemas and taint (security review)
 
@@ -156,7 +156,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Acceptance checks: one rejected program per sink and one accepted per allowed flow; property that
   generated programs never produce a `TrustedPrompt` or `task` section from untrusted sources; schema
   and digest snapshots; static `Secret<T>` labels where known.
-- Status: in progress (branch feat/wt-s5-taint)
+- Status: in review (branch feat/wt-s5-taint; spec draft 0.12)
 
 ## Stage 6: IR and core interpreter (security review)
 
@@ -226,3 +226,15 @@ PC-4 and PC-9 in 11b).
 - 24 (security review and hardening): blocked until Imperium stages 13–23 exist. Parser and checker
   robustness properties, fuzzing schedule, limit tests.
 - 27 (optional, resume by replay): depends on 11.
+
+## Stage L: `.ratio` text linter
+
+- Placement: after the Ratio-side language stages (1–12 and Ratio's parts of 21 and 23). Stages 24
+  and 27 are not blocked by it, and it does not gate the language-ready notification.
+- Entry criterion: starts only after the **language-ready** notification has been sent to the
+  "Imperium Implementation" and "Imperium Harnesses" sessions (language-ready = stages 1–12 and
+  Ratio's parts of 21 and 23 on `main`), recorded in this plan's outcome for that stage.
+- Goal: a `ratio lint` checker for style and suspicious-pattern rules over `.ratio` source, with
+  its own conformance directory (mapped in `conformance/spec-map.txt`) and stable lint codes.
+- Scope: to be detailed when the stage starts.
+- Status: pending

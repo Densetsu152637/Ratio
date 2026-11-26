@@ -81,24 +81,45 @@ structured generation constrains the model to (chapter 05).
 | `Bool`, `Int`, `Float`, `Str` (and every text type) | `boolean`, `integer`, `number`, `string` |
 | `Duration` | `string`, pattern `^[0-9]+(ms\|s\|m\|h)$` |
 | `Money` | `string`, pattern `^\$[0-9]+(\.[0-9]{1,6})?$` |
-| `T?` (field) | the field is not `required` |
+| `()` | `null` |
+| `T?` (field), and a field `b?: T` | the field is not `required`, and has `T`'s schema (`null` is not a value of it) |
 | `T?` (elsewhere) | `anyOf: [T, null]` |
 | `[T]` | `array`, `items: T`; `@len(min, max)` on the field adds `minItems`/`maxItems` |
 | `(A, B)` | `array`, `prefixItems: [A, B]`, `items: false` |
 | `{ a: A }` | `object`, `properties`, `required`, `additionalProperties: false` |
-| `Map<Str, V>` | `object`, `additionalProperties: V` |
+| `Map<K, V>` | `object`, `additionalProperties: V`; a key type other than text adds `propertyNames` (`^-?[0-9]+$` for `Int`, `false` and `true` for `Bool`, the variant names in `snake_case` for a unit-only enum) |
 | unit-only `enum` | `string`, `enum` of the variant names in `snake_case` |
-| other `enum` | `oneOf` of objects with a `kind` constant and the payload's fields |
+| other `enum` | `oneOf` of objects with a `kind` constant (the variant's name in `snake_case`) and the payload's fields; an enum that contains itself is defined once under `$defs` and referred to by `$ref` |
 | `Json` | `{}` |
 | `Untrusted<T>`, `Secret<T>` | the schema of `T` (labels are not part of the generated schema) |
 
 Field descriptions come from the trailing string or `///` comment. Attributes written before a
-field refine the schema: `@len(min, max)`, `@range(min, max)`, `@pattern(r"…")`,
-`@example(value)`. The derived schema is part of the IR hash.
+field refine the schema: `@len(min, max)` (whole numbers, on a list), `@range(min, max)` (number
+literals, on a number, kept as the decimal literals written), `@pattern(r"…")` (on text) and
+`@example(value)` (a literal); one that does not fit its field is a checker error. A
+`@pattern` must be in the regular-expression syntax both JSON Schema validators (ECMAScript) and
+`re` read: alternation, groups and `(?:…)`, classes, the quantifiers `*`, `+`, `?` and `{m,n}`,
+anchors, and `\`-escapes of punctuation and `d`, `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`,
+`t`; look-around, back-references and named groups are refused. The derived schema is written as
+canonical JSON and is part of the IR hash: no whitespace; a schema object's keys in the fixed
+order `$ref`, `type`, `const`, `enum`, `anyOf`, `oneOf`, `properties`, `required`,
+`additionalProperties`, `propertyNames`, `prefixItems`, `items`, `pattern`, then a field's
+`description`, `minItems`, `maxItems`, `minimum`, `maximum`, `pattern`, `examples`, and `$defs`
+last at the root; `properties` and `required` in field-name order (by UTF-8 bytes); `enum`
+values, `oneOf` cases and `$defs` in declaration and first-met order.
 
 **Type digests.** Every schema-able type also has a **type digest**: `sha256` over its canonical
 form *including* trust and secrecy labels (`Str` and `Untrusted<Str>` digest differently). Digests
-key persisted state and caches (below).
+key persisted state and caches (below), so they key the **structure** of values: the canonical
+form leaves out field descriptions and refinements, which change the schema but not which values
+the type has. The canonical form is `ratio-type-1;` followed by the type's form, then the
+definition of each enum met, numbered from 0 in the order first met (depth first, left to
+right):
+`bool`, `int`, `float`, `duration`, `money`, `str`, `user_text`, `brief`, `json`, `unit`,
+`untrusted(T)`, `secret(T)`, `opt(T)`, `list(T)`, `map(K,V)`, `tuple(A,B,…)`,
+`record("a":A,"b"?:B)` (fields in name order by UTF-8 bytes, names as JSON strings), and `#n` for the n-th enum
+(with its type arguments substituted), defined as `;#n="Name"{"v1","v2":record(…),…}` with the
+variants in declaration order.
 
 ## Taint: `Untrusted<T>`
 
@@ -157,7 +178,9 @@ guarantee covers" below.
 
 **Propagation.** Operations on untrusted text give untrusted text: concatenation, interpolation,
 `text.*`, `re.*` captures, `json.stringify`, template rendering. Operations that return scalars
-return trusted scalars (`text.len`, `re.is_match`, `text.contains`).
+return trusted scalars (`text.len`, `re.is_match`, `text.contains`). Concatenating or
+interpolating a `Brief` with trusted text only gives a `Brief` (a task the harness words around
+the task it was given), so `task "Fix this: {t.brief}"` is a `task` section.
 
 **Generic code is checked abstractly.** Inside a generic function, a value of type parameter `T`
 counts as possibly untrusted: `text.show`, interpolation, `json.stringify` and `template.render`
@@ -166,12 +189,12 @@ never launder untrusted text into a `Str`, whatever it is instantiated with.
 
 **Sinks.** Untrusted text, including `Brief`, may not reach **instruction positions**:
 
-- the `system`, `instruct`, `note` and `example` sections of a prompt, and therefore any
-  `TrustedPrompt` (chapter 05);
+- the `system`, `instruct`, `note`, `example` and `steps` sections of a prompt, and therefore
+  any `TrustedPrompt` (chapter 05);
 - the `system` field of a harness or call configuration (type `TrustedPrompt`);
 - `model.complete`'s text;
 - the `summary` of `session.request_approval` and the text of `context.notice`;
-- harness and package names given to `meta.harness`, `agents.spawn(harness: …)` and imports;
+- harness and package names given to `meta.harness`, `agents.spawn(package: …)` and imports;
 - the `because` of `trust`, `as_task` and `declassify`.
 
 `task` sections accept `Brief` (and its subtypes `Str` and `UserText`) only. Everywhere else
@@ -185,7 +208,11 @@ approves by default), `state` fields, and harness arguments whose parameter type
   because: Str) -> Brief` converts to task text only (for example, a step of a plan the harness's
   own planner wrote).
 - Both are allowed only at **monomorphic** types: `T` may not be or contain a type parameter, so
-  a generic helper cannot become a general-purpose launderer.
+  a generic helper cannot become a general-purpose launderer. Unless a turbofish gives it,
+  `trust`'s `T` is `x`'s type with its trust labels removed (`Untrusted<Verdict>` gives
+  `Verdict`), never what the expected type would bind.
+- `trust`, `as_task`, `declassify`, `session.ask` and `meta.harness` may only be called, never
+  used as function values (chapter 06, "Naming and argument conventions").
 - Both are effects that emit a `ratio_trust` event: package, version, call site, kind (`trust` or
   `as_task`), reason, and the value's `hash.stable` digest. The journal records the digest, never
   an excerpt of the text.
@@ -201,10 +228,11 @@ approves by default), `state` fields, and harness arguments whose parameter type
 from untrusted text is untrusted. They do not track **implicit flows** through control flow:
 `if model_says_yes { tools.write_file(p, "fixed") }` writes trusted text chosen by an untrusted
 branch. That is inherent in letting programs branch on model output, which is their purpose. The
-checker's **guarded-effect lint** warns when a condition derived from an untrusted value (a
-model-derived scalar) is the only guard on an effect that writes, runs a command, delegates or
-reaches the network, so a reviewer sees each such decision; the lint is silenced per site with
-`@allow(model_guard)`.
+checker's **guarded-effect lint** (`C0039`) warns when a condition derived from an untrusted
+value (a model-derived scalar) is the only guard on an effect that writes, runs a command,
+delegates, reaches the network or runs a tool a model chose (`tools.call_tool`,
+`tools.dispatch`, `model.loop`), so a reviewer sees each such decision; the lint is silenced with
+`@allow(model_guard)` on the enclosing item (statements take no attributes, chapter 02).
 
 Rejected: dynamic taint tracking at run time only. It finds the mistake after a turn has spent
 tokens, and cannot be listed for review before a package is enabled. Rejected: no taint, framing
@@ -224,8 +252,12 @@ set by sources and propagated by every operation. The interpreter passes values 
 `Labelled<T>`, and the host and the engine's dispatch enforce the sinks below from the labels, so
 the enforcement does not depend on the checker. The static type `Secret<T>` is used only where the
 label is known at check time (a `session.ask` question declared `secret: true`, the argument of
-`declassify`); there, and only there, the checker also refuses a sink at load time. Everywhere
-else a sink violation is a run-time `Denied { by: secrecy }`.
+`declassify`); there, and only there, the checker also refuses a sink at load time. It also
+refuses (`C0037`) instantiating a generic function at a type holding a `Secret` when the callee
+may reach a secrecy sink (any effect not kept on the machine), whether it is called, named as a
+function value or given by a turbofish: inside the callee the type parameter carries no label,
+so the sink there could not be refused. Everywhere else a sink violation is a run-time
+`Denied { by: secrecy }`.
 
 **Opt-in sources.** Nothing is secret by default: `ratio.secrets.enabled` is `false` and
 `ratio.secret_paths` is empty. When enabled, labels come from `tools.read_file`, `tools.grep` and

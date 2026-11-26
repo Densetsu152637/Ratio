@@ -1,0 +1,14 @@
+// expect: check-error C0035 at 8:14
+// expect: check-error C0035 at 13:3
+
+// A `Brief` is never an instruction: it reaches `task` sections only.
+
+fn ask(t: TaskInput) -> Prompt {
+  prompt {
+    instruct t.brief
+  }
+}
+
+fn as_str(t: TaskInput) -> Str {
+  "Do: {t.brief}"
+}

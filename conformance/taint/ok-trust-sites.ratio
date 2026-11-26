@@ -1,0 +1,58 @@
+// expect: check-ok
+
+// Audited conversions at monomorphic types: `trust` (its `T` is the argument's type without
+// its trust labels), `as_task` into a `task` section, and `declassify` of a static secret;
+// generic code may call a helper that trusts at a known type.
+
+type Verdict = { pass: Bool, reasons: [Str] }
+
+fn rules_from(page: Untrusted<Str>) -> TrustedPrompt {
+  let guide = trust(page, because: "the page is our own published style guide")
+  prompt {
+    system guide
+    instruct "Apply the guide."
+  }
+}
+
+fn verdict(v: Untrusted<Verdict>) -> Verdict {
+  trust(v, because: "the critic is our own model")
+}
+
+fn reasons(v: Untrusted<Verdict>) -> [Str] {
+  let checked: Verdict = trust(v, because: "the critic is our own model")
+  checked.reasons
+}
+
+fn turbofish(v: Untrusted<Verdict>) -> Verdict {
+  trust::<Verdict>(v, because: "explicit")
+}
+
+fn piped(page: Untrusted<Str>) -> Str {
+  page |> trust(because: "piped")
+}
+
+fn step_prompt(step: Untrusted<Str>) -> Prompt {
+  prompt {
+    task as_task(step, because: "a step of the plan this harness's planner wrote")
+  }
+}
+
+fn helper(x: Untrusted<Str>) -> Str {
+  trust(x, because: "a monomorphic helper")
+}
+
+fn generic_caller<T>(items: [T], x: Untrusted<Str>) -> Str {
+  helper(x)
+}
+
+fn branch_on_secret(qs: [Question]) -> Str {
+  let answers = session.ask(qs)
+  let token = answers[0]
+  let plain = declassify(token, because: "the user typed it for this call")
+  if text.len(plain) > 0 { "given" } else { "empty" }
+}
+
+fn plain_questions() -> UserText {
+  let answers = session.ask([{ question: "Which branch?", options: ["main"], recommended: "main" }])
+  answers[0]
+}

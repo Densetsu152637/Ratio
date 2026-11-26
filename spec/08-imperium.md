@@ -75,7 +75,7 @@ the journal last recorded. A package's `state` belongs to the package: switching
 finds it again.
 
 **Subagents.** A subagent's harness is, in order: `spawn_agent`'s new `harness` argument (or
-`agents.spawn(harness:)`); the agent file's `harness` field (restricted for plugin and project
+`agents.spawn(package:)`); the agent file's `harness` field (restricted for plugin and project
 agent files, chapter 07); the spawning agent's package's `@task` entry, if it has one; otherwise
 `native`. Item 58's other per-subagent fields map onto Ratio as follows:
 
