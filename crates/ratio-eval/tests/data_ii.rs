@@ -459,3 +459,114 @@ fn the_data_corpus_runs_as_expected() {
         failures.join("\n")
     );
 }
+
+// ---- pooled runs ----
+
+/// What a run gives: the value as JSON with each element's labels, or the error kind; the
+/// steps; the heap peak; and, per pure built-in call, its name, steps and counted work.
+type Observed = (String, Vec<Labels>, u64, u64, Vec<(String, u64, u64)>);
+
+fn run_on(
+    p: &std::sync::Arc<ratio_eval::Prepared>,
+    name: &str,
+    args: Vec<Value>,
+    pool: Option<&ratio_eval::PoolSession>,
+) -> (Observed, usize) {
+    let entry = p.find("main.ratio", name).expect("a function");
+    let mut eval = ratio_eval::evaluate(
+        std::sync::Arc::clone(p),
+        entry,
+        args,
+        ratio_eval::Limits::default(),
+        ratio_eval::CancelToken::new(),
+    )
+    .unwrap();
+    if let Some(session) = pool {
+        eval = eval.offload_to(session.clone());
+    }
+    let f = ratio_eval::block_on(&mut eval);
+    #[cfg(debug_assertions)]
+    let log = eval.machine().work_log().to_vec();
+    #[cfg(not(debug_assertions))]
+    let log: Vec<ratio_eval::BuiltinWork> = Vec::new();
+    let offloaded = log.iter().filter(|w| w.offloaded).count();
+    let (text, labels) = match &f.outcome {
+        Outcome::Returned(v) => (
+            to_json_text(p, v),
+            v.elements()
+                .map_or_else(|| vec![v.scan()], |es| es.iter().map(Value::scan).collect()),
+        ),
+        Outcome::Raised(e) => (e.kind(p), vec![e.value().scan()]),
+    };
+    let calls = log
+        .iter()
+        .map(|w| (w.name.to_owned(), w.steps, w.work))
+        .collect();
+    ((text, labels, f.steps, f.heap_peak, calls), offloaded)
+}
+
+/// Every built-in of stage 8 that can go to the pool does so at a threshold of 0, and gives the
+/// same value, the same labels (per element), the same steps, the same heap peak and the same
+/// counted work as inline: for every case of the corpus, and for each labelled argument.
+#[test]
+fn pooled_runs_of_the_data_corpus_match_inline_runs() {
+    let pool = ratio_eval::Pool::with_thresholds(
+        2,
+        ratio_eval::Thresholds {
+            text_bytes: 0,
+            elements: 0,
+            steps: 0,
+        },
+    );
+    let session = pool.session();
+    let mut failures = Vec::new();
+    let mut offloaded = 0;
+    let mut validated = false;
+    let mut paths: Vec<PathBuf> = fs::read_dir(corpus())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            ["json.", "list.", "map."]
+                .iter()
+                .any(|m| name.starts_with(m))
+                && name.ends_with(".ratio")
+        })
+        .collect();
+    paths.sort();
+    for path in &paths {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Some((spec, p)) = load(path, &name, &mut failures) else {
+            continue;
+        };
+        let mut runs: Vec<(String, Vec<Value>)> =
+            spec.cases.keys().map(|f| (f.clone(), Vec::new())).collect();
+        for (f, lc) in &spec.labels {
+            let base: Vec<Value> = lc.args.iter().map(|a| argument(a)).collect();
+            runs.push((f.clone(), base.clone()));
+            for i in 0..base.len() {
+                let mut args = base.clone();
+                args[i] = base[i].clone().with_labels(SECRET);
+                runs.push((f.clone(), args));
+            }
+        }
+        for (f, args) in runs {
+            let (inline, _) = run_on(&p, &f, args.clone(), None);
+            let (pooled, n) = run_on(&p, &f, args, Some(&session));
+            offloaded += n;
+            validated |= pooled.4.iter().any(|c| c.0 == "json.validate");
+            if inline != pooled {
+                failures.push(format!(
+                    "{name}/{f}: inline and pooled runs differ\n  inline {inline:?}\n  pooled {pooled:?}"
+                ));
+            }
+        }
+    }
+    if cfg!(debug_assertions) {
+        assert!(offloaded > 100, "only {offloaded} calls ran on the pool");
+        assert!(validated, "json.validate never ran");
+    }
+    assert_eq!(session.in_flight(), 0);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
