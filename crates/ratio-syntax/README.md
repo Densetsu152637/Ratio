@@ -38,7 +38,8 @@ at both ends) and diagnostics. It implements chapter 02's lexical structure:
   format (`// expect:` lines). It understands `lex-ok`, `lex-error CODE at LINE:COL`, `tokens:`
   (the expected tokens in `TokenKind::render` notation) and `option:` (a `LexOptions` field), and
   skips files whose expectations belong to later stages (`ok`, `value`, `check-error`,
-  `runtime-error`, `fixture`). Every diagnostic code must have a `lex-error` file, and an unknown
+  `runtime-error`, `fixture`, and stage 3's `resolve-ok`, `resolve-error` and `resolve-warning`,
+  which `ratio-names` runs); such files must still parse cleanly. Every diagnostic code must have a `lex-error` file, and an unknown
   header directive (a misspelt `// token:`) fails its file.
 - `tests/properties.rs` reads fixed-seed random inputs, mutated conformance programs and hostile
   shapes: the reader never panics, is deterministic, and its spans round-trip (ordered, in

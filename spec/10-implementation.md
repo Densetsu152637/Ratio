@@ -16,7 +16,7 @@ and Imperium uses the engine it provides to run harnesses.
 | `ratio-syntax` | `ratio_syntax` | The token reader (stage 1) and, from stage 2, the parser, AST and canonical printer |
 | Later stages | | More crates as the stages land (for example a checker, the IR and interpreter, the standard library); each is an implementation detail behind the facade |
 
-The built-in packages' sources (`std:default`, `std:consul-escalation` and the rest) live in
+The built-in packages' sources (`std:default`, `std:consul_escalation` and the rest) live in
 `std/` at the root of this repository, one folder per package, and the facade embeds them in the
 library at build time, so a host gets exactly the `std` of the release it depends on. The folder
 arrives with stage 23.
@@ -186,7 +186,7 @@ that release is the one it implements.
 | The `Host` trait and every type that crosses it | The desktop: approval dialogs, harness picker, Agents panel rows, live harness view |
 | The test hosts, `ScriptedHost` and `TapeHost`, and the host contract tests | Headless evaluation (`imperium run --harness`) and the parity suite |
 | The conformance suite, `builtins.txt` and its drift check, the framing test vectors | Engine tests with the scripted OpenAI-compatible endpoint |
-| The built-in packages' source (`std:default`, `std:consul-escalation`, and the rest), in `std/` and embedded in the library | Selecting them, and the parity run that decides the default switch |
+| The built-in packages' source (`std:default`, `std:consul_escalation`, and the rest), in `std/` and embedded in the library | Selecting them, and the parity run that decides the default switch |
 | The specification | Imperium's own documentation of the integration (`docs/2x-ratio.md`) |
 
 ### The public API
@@ -366,7 +366,7 @@ are committed; 27 is optional and 28 waits on Q9.
 | 20 | Floor and plugin gates | Imperium | Safety floor on file-tool paths for harness folders and authored areas; plugin-with-harnesses withheld and hash-pinned; agent-file source restriction; `ratio.trusted_projects` | A write to a harness folder asks every time in every mode; an unapproved plugin's harnesses do not load; an update is withheld again |
 | 21 | Authored and offered harnesses | Both | Ratio (the checker): the authored rules (no trust sites, untrusted parameters for `run_harness`, results forced untrusted), the not-offerable rule for harnesses with trusted parameters, closure hashes, `meta.author`. Imperium: `write_harness`, `run_harness` (deep-untrusted arguments for every source), authored areas and their qualified names, the contained tier with the pinned model and provider-side tools off, caller-tier approvals keyed by closure hash and scoped to authority, journal events | A contained harness cannot write, run commands, reach the network, use provider-side tools or see secrets; a route that cannot disable provider tools is refused; a new closure hash or a wider authority asks again; self-use never exceeds the caller |
 | 22 | Security-relevant clients | Imperium | The desktop's approval dialogs (authored caller tier with the whole closure, diffs and summary, untrusted rendering; persistence; plugin-harness approval), the clients' handling of redacted values (the daemon side is stage 18), the labelled-conversation banner with its three recovery paths, and the **live harness view** (`harnesses.source`, `harness_site` subscription and throttling, replay stepping) | Client tests against recorded event streams: authored source never rendered as markdown or links; redacted values stay redacted; throttle tests |
-| 23 | Built-in packages and parity | Both | Ratio: the packages' source in `std/`, embedded by the facade, and the examples as conformance programs. Imperium: the parity suite. The packages: `std:default`, `std:consul-escalation`, `std:plan-execute-verify`, `std:self-consistency`, `std:tdd-fix`; the examples as conformance programs; the **parity suite** as defined in chapter 08, run with the default configuration | The parity suite; item 64 scenarios (each kind of rejection, per task, within a turn; takeover continues the conversation; independent critic after takeover; plan critique before execution when `update_plan` is alone; a question reaches the dispatcher) |
+| 23 | Built-in packages and parity | Both | Ratio: the packages' source in `std/`, embedded by the facade, and the examples as conformance programs. Imperium: the parity suite. The packages: `std:default`, `std:consul_escalation`, `std:plan_execute_verify`, `std:self_consistency`, `std:tdd_fix`; the examples as conformance programs; the **parity suite** as defined in chapter 08, run with the default configuration | The parity suite; item 64 scenarios (each kind of rejection, per task, within a turn; takeover continues the conversation; independent critic after takeover; plan critique before execution when `update_plan` is alone; a question reaches the dispatcher) |
 | 24 | Security review and hardening | Both | One review across both repositories (the ownership table above says which side fixes what). The independent review (chapter 07's gate), **after** stages 13 to 23, so it covers the engine bindings, the gates, authored harnesses, the dialogs, the live view and redaction; fixes; limit tests; parser and checker robustness properties in normal CI, `cargo fuzz` on the nightly schedule; default limits set from measurements of the examples; `ratio.enabled` may default to true only after this stage | The review's regression tests, limit tests, robustness properties |
 | 25 | Remaining clients | Imperium | The harness picker, Agents panel rows for harness agents, the authored list | Client tests against recorded event streams |
 | 26 | Default switch | Imperium | After one release cycle of opt-in use with the parity suite green, `harness.select` defaults to `std:default` (the user's decision, Q1); the native loop stays selectable for one more release | The parity suite on every pull request |
@@ -375,7 +375,7 @@ are committed; 27 is optional and 28 waits on Q9.
 
 ## The conformance suite
 
-`conformance/` at the root of this repository holds `.ratio` files grouped by chapter (`syntax`, `types`,
+`conformance/` at the root of this repository holds `.ratio` files grouped by chapter (`syntax`, `names`, `types`,
 `taint`, `secrecy`, `eval`, `stdlib/<module>`, `frames`, `replay`, `authored`, `examples`). Each
 file starts with expectation lines:
 
@@ -457,11 +457,45 @@ The parse diagnostic codes (chapter 02 defines the rules; the limit is chapter 0
 | `P0009` | A positional argument after a named one |
 | `P0010` | Internal error: the parser could not run (no source triggers it; the module is empty) |
 
+The name diagnostic codes (stage 3; chapter 03 defines the rules, chapter 07 the limits; `N0020`
+and `N0021` are warnings):
+
+| Code | Diagnostic |
+| --- | --- |
+| `N0001` | An import path that is not a plain relative path to a `.ratio` file |
+| `N0002` | An import path whose `..` leaves the package's source root |
+| `N0003` | An import path that is, or passes through, a link |
+| `N0004` | No file at an import path |
+| `N0005` | No package by that name (a bare name looks in `std` and `user` only) |
+| `N0006` | A malformed source-qualified name or version range |
+| `N0007` | An import the trust rules refuse |
+| `N0008` | A package whose `meta` version is missing or outside the import's range |
+| `N0009` | An import cycle |
+| `N0010` | A file or package over its size limit |
+| `N0011` | More files, packages or registry calls, or a longer import chain, than the limits |
+| `N0012` | A second definition of a name in a module |
+| `N0013` | An import list naming something the module does not define |
+| `N0014` | An import list naming an item that is not `pub` |
+| `N0015` | Two paths of a package that differ only in letter case |
+| `N0016` | A file the registry could not read, or that is not UTF-8 |
+| `N0017` | An imported module with syntax errors |
+| `N0018` | An import that binds no name (the file name is not an identifier); `as` is needed |
+| `N0019` | `pub` on an import (imports are not re-exported) |
+| `N0020` | Warning: a name that shadows a standard module |
+| `N0021` | Warning: a name that shadows `trust`, `as_task` or `declassify` |
+
 A single test runner runs every file with the scripted host. In stages 1 and 2 it is the syntax
 crate's runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`,
 `lex-error`, `tokens:`, `parse-ok`, `parse-error`, `tree:` and `option:` lines and skips the later
 stages' expectations; every `L` code has at least one `lex-error` file and every `P` code at least
-one `parse-error` file.
+one `parse-error` file. From stage 3, `conformance/names/` holds **worlds**: one folder per world,
+then one per source root (`std/`, `user/`, `project/`, `plugin/<plugin>/`, `authored/session/`,
+`authored/env/`), then one per package with its entry file `main.ratio`. The names runner,
+`crates/ratio-names/tests/conformance.rs`, loads the one entry file of each world that says
+`// expect: resolve-ok`, or lists `// expect: resolve-error N0007 at 3:8 [in <file>]` and
+`// expect: resolve-warning …` lines (all of the load's diagnostics, in any order); the syntax
+runner treats these as later-stage expectations. Every `N` code has a world, except those only a
+host or a limit can trigger (`N0003`, `N0010`, `N0011`, `N0016`), which the crate's tests cover.
 `conformance/spec-map.txt` names the chapters each directory tests (above). Three coverage checks
 keep the suite honest:
 
@@ -499,7 +533,7 @@ keep the suite honest:
    yet (`ratio.enabled = false`, no switch).
 2. Stages 13 to 23 make Ratio selectable in headless runs and, with `ratio.enabled = true`, in
    sessions; documentation marks it experimental. Stage 23 ships the built-in packages, so item 64
-   becomes usable by selecting `std:consul-escalation`.
+   becomes usable by selecting `std:consul_escalation`.
 3. Stage 24's review decides whether `ratio.enabled` defaults to true.
 4. Stage 26 switches the default harness to `std:default` after a release cycle of parity.
 

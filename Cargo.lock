@@ -6,6 +6,14 @@ version = 4
 name = "ratio-lang"
 version = "0.1.0"
 dependencies = [
+ "ratio-names",
+ "ratio-syntax",
+]
+
+[[package]]
+name = "ratio-names"
+version = "0.1.0"
+dependencies = [
  "ratio-syntax",
 ]
 

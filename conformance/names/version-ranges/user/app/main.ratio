@@ -1,0 +1,10 @@
+// expect: resolve-error N0008 at 8:8
+// expect: resolve-error N0008 at 9:8
+// expect: resolve-error N0008 at 10:8
+
+import std:debate @"^1.2" as d1
+import std:debate @"~1.4" as d2
+import std:debate @"=1.4.0" as d3
+import std:debate @"^2" as d4
+import std:debate @"=1.4.1" as d5
+import std:plain @"^1" as p

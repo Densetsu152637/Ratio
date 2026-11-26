@@ -1,0 +1,5 @@
+// expect: parse-ok
+
+meta { name: "debate", version: "1.4.0" }
+
+pub fn judge() -> Int { 1 }

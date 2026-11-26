@@ -1,0 +1,13 @@
+// expect: resolve-error N0006 at 8:8
+// expect: resolve-error N0006 at 9:8
+// expect: resolve-error N0006 at 10:8
+// expect: resolve-error N0006 at 11:8
+// expect: resolve-error N0006 at 12:8
+// expect: resolve-error N0006 at 13:8
+
+import foo:bar
+import plugin:acme
+import authored:team/x
+import user:a/b
+import std:debate @"1.2" as d1
+import acme/review

@@ -1,0 +1,5 @@
+// expect: resolve-warning N0020 at 4:4
+// expect: resolve-warning N0020 at 5:8
+
+fn text() -> Int { 1 }
+import "json.ratio"

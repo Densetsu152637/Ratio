@@ -4,7 +4,8 @@
 //! library `ratio`) and reach the language through it, not through the crates behind it. It is
 //! built in stages (chapter 10 of the specification). Stage 1, the token reader, and stage 2, the
 //! parser (the [`ast`] module, [`Parsed`], [`parse`] and [`parse_with`]), both of
-//! [`ratio_syntax`], are re-exported here; nothing else exists yet.
+//! [`ratio_syntax`], are re-exported here, and so is stage 3, modules and names ([`names`]): a
+//! host implements [`Registry`] over its package sources and loads a package with a [`Loader`].
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -12,12 +13,20 @@ pub use ratio_syntax::{
     lex, lex_with, parse, parse_with,
 };
 
+/// Stage 3: sources, imports, source-qualified names, the registry trait and name resolution.
+/// Its diagnostic codes are [`names::Code`] (`N`), apart from the syntax crate's [`Code`].
+pub use ratio_names as names;
+pub use ratio_names::{
+    Loaded, Loader, MemoryRegistry, PackageId, PackageName, PluginName, QualifiedName, Registry,
+    RegistryError, RelPath, Source,
+};
+
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.9";
+pub const SPEC_DRAFT: &str = "0.10";
 
-/// The implementation stage reached (chapter 10's table): the parser.
-pub const STAGE: u32 = 2;
+/// The implementation stage reached (chapter 10's table): modules and names.
+pub const STAGE: u32 = 3;

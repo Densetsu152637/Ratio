@@ -13,6 +13,7 @@ name = "ratio"
 
 [dependencies]
 ratio-syntax.workspace = true
+ratio-names.workspace = true
 
 [lints]
 workspace = true

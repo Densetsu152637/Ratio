@@ -1,0 +1,8 @@
+// expect: resolve-ok
+
+import std:debate
+import user:critics.strict
+import plugin:acme/review
+import project:kit
+
+pub fn all() -> Int { debate.helper() + strict.helper() + review.helper() + kit.helper() }

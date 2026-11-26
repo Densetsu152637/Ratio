@@ -120,7 +120,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: stage 2 merged, stage 2R decided.
 - Owned paths: `spec/**`, `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: G4; docs CI job green; each accepted proposal names its implementing stage.
-- Status: in progress (branch feat/wt-s2s-spec)
+- Status: done (PR #4, squash-merged as 21ab549)
 - Handoff notes:
   - Stage 2R converged after 4 security-critic rounds (23 findings accepted, 0 rejected); the review is
     `docs/design/performance-concurrency-review.md` (sha256 prefix 5908123c). Accepted PC-1..PC-9,
@@ -138,17 +138,17 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 ## Stage 3: Modules and names
 
 - Depends on: 2, 2S.
-- Owned paths: `crates/ratio-syntax` or a new `crates/ratio-names` (decided at stage start),
-  `conformance/names/**`.
+- Owned paths: a new `crates/ratio-names` (decided at stage start), `crates/ratio/**`,
+  `conformance/names/**`, and the draft 0.10 errata in `spec/**`.
 - Acceptance checks: resolution corpus; shadowing refused across trust levels; import-trust rules per
   source; imports cannot escape the root or follow links.
-- Status: in progress (branch feat/wt-s3-names)
+- Status: in review (branch feat/wt-s3-names; spec draft 0.10)
 
 ## Stage 4: Type checker
 
 - Depends on: 3. Owned paths: a new checker crate, `conformance/types/**`.
 - Acceptance checks: accepted and rejected programs with diagnostic codes in `conformance/types/`.
-- Status: pending
+- Status: in progress (branch feat/wt-s4-types)
 
 ## Stage 5: Schemas and taint (security review)
 

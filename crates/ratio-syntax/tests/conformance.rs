@@ -26,8 +26,9 @@
 //! // tree: (module - [(item [] [] - (fn f [] [] - (block [(expr (bin + (int 1) (int 2)))])))])
 //! ```
 //!
-//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error` or `fixture` belong
-//! to later stages; the runner skips their checks, but each must still parse without a diagnostic
+//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `fixture` or, from
+//! stage 3, `resolve-ok`, `resolve-error` and `resolve-warning` (run by `ratio-names`'s own
+//! runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
 //! (except `check-error` and `runtime-error` files that say otherwise with a parse expectation). The header ends at the first line that
 //! does not start with `// `; every header line must be one of these directives, so a misspelt
 //! one (`// token: …`) fails the file instead of being ignored.
@@ -100,7 +101,11 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
                     let (l, c) = position(path, at)?;
                     case.parse_errors.push(((*code).to_owned(), l, c));
                 }
-                ["ok" | "value" | "check-error" | "runtime-error", ..] => case.other_stage = true,
+                [
+                    "ok" | "value" | "check-error" | "runtime-error" | "resolve-ok"
+                    | "resolve-error" | "resolve-warning",
+                    ..,
+                ] => case.other_stage = true,
                 _ => {
                     return Err(format!(
                         "{}: unknown expectation `{expect}`",

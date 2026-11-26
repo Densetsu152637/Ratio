@@ -1,0 +1,17 @@
+// expect: resolve-error N0001 at 10:8
+// expect: resolve-error N0001 at 11:8
+// expect: resolve-error N0001 at 12:8
+// expect: resolve-error N0001 at 13:8
+// expect: resolve-error N0001 at 14:8
+// expect: resolve-error N0001 at 15:8
+// expect: resolve-error N0001 at 16:8
+// expect: resolve-error N0001 at 17:8
+
+import "/abs.ratio" as a
+import "C:/x.ratio" as b
+import "lib\\a.ratio" as c
+import "lib//a.ratio" as d
+import "notes.txt" as e
+import "con.ratio" as f
+import "lib/{x}.ratio" as g
+import "a.ratio." as h

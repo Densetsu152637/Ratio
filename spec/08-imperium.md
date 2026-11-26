@@ -13,14 +13,14 @@ agent loop) or a Ratio package. Packages come from five sources (chapter 07 give
 | Project | `project:<name>` | `.imperium/harnesses/` of a project folder | The project is in `ratio.trusted_projects`; otherwise one notice per folder |
 | Authored | `authored:session/<name>`, `authored:env/<name>` | The session's authored area, or the environment's once the user persists a package | Written by `write_harness` (chapter 07) |
 
-A bare name resolves to the highest-trust source that has it, in the table's order, so a lower
-source never shadows a higher one. A package is a `.ratio` entry file with a `meta` declaration
+A bare name resolves to `std`, then `user`; a plugin, project or authored package is reached
+only by its qualified name, so a lower source never shadows a higher one. A package is a `.ratio` entry file with a `meta` declaration
 (size limits in chapter 07), found up to three folders deep; symbolic links are skipped.
 Packages are parsed and checked when first needed and cached by content hash; a package with
 errors is listed with its diagnostics and cannot be selected.
 
-Built-in packages: `std:default` (the native loop in Ratio, below), `std:consul-escalation`
-(item 64), `std:plan-execute-verify`, `std:self-consistency` and `std:tdd-fix` (chapter 09).
+Built-in packages: `std:default` (the native loop in Ratio, below), `std:consul_escalation`
+(item 64), `std:plan_execute_verify`, `std:self_consistency` and `std:tdd_fix` (chapter 09).
 
 ## Settings
 
@@ -81,7 +81,7 @@ agent files, chapter 07); the spawning agent's package's `@task` entry, if it ha
 
 | Item 58 field | Agent file front matter | `spawn_agent` argument | In a Ratio `@task` entry |
 | --- | --- | --- | --- |
-| Harness | `harness: std:tdd-fix` | `harness` (offered packages only) | The package that runs |
+| Harness | `harness: std:tdd_fix` | `harness` (offered packages only) | The package that runs |
 | System prompt | `prompt:` (inline text or a file next to the agent file) | `prompt` | `task.profile.file_instructions` (trusted, from the file) or `task.profile.spawn_prompt` (untrusted, from the dispatching model); both are also placed by the engine in `context.system_default(subagent)`, the spawn prompt framed |
 | Workflow | `workflow:` (a workflow companion reference) | `workflow` | `task.profile.workflow`, loadable with `context.load` |
 
@@ -180,10 +180,10 @@ release, then removed with the research session's agreement.
 ## The Consul escalation workflow (roadmap item 64)
 
 Item 64 asks for a workflow in which Consul takes over a subagent that keeps being rejected.
-Ratio expresses it as the built-in package `std:consul-escalation`, whose full source is
+Ratio expresses it as the built-in package `std:consul_escalation`, whose full source is
 [example 7](09-examples.md#7-consul-escalation-roadmap-item-64).
 
-| Item 64 requirement | In `std:consul-escalation` |
+| Item 64 requirement | In `std:consul_escalation` |
 | --- | --- |
 | A workflow, not a setting; no per-environment threshold; no off switch | A package with the threshold as a constant (`TAKEOVER_AFTER = 2`, a user decision, chapter 11); users opt in by selecting it for subagents, or replace it with their own package |
 | Rejections: the user declines an approval; a critic or judge refuses a result; a tool or command fails | `tools.dispatch` results with `outcome: Denied { by: user }`; a critique that does not pass; results with `outcome: failed` (tool errors and non-zero command exits) |
@@ -402,7 +402,7 @@ of it (chapter 10, the repository split). For this chapter's subjects:
 | Subject | Ratio repository | Imperium repository |
 | --- | --- | --- |
 | Harness sources | The package format, `meta`, imports and their limits, qualified-name syntax and the shadowing rule, the source registry trait | The five sources' folders, which are loaded and with what trust, plugin and project gates |
-| Built-in packages | Their source (`std:default`, `std:consul-escalation`, `std:plan-execute-verify`, `std:self-consistency`, `std:tdd-fix`) in `std/`, embedded in the library | Offering and selecting them, and the notice and re-selection after a pin miss (chapter 10, versions) |
+| Built-in packages | Their source (`std:default`, `std:consul_escalation`, `std:plan_execute_verify`, `std:self_consistency`, `std:tdd_fix`) in `std/`, embedded in the library | Offering and selecting them, and the notice and re-selection after a pin miss (chapter 10, versions) |
 | Settings | The limits' defaults and maxima (chapter 07) | `[harness]` and `[ratio]`, and that projects cannot set them |
 | Selection, pinning, switching, subagents | IR hashes, closure hashes, `IR_VERSION` and the library version, which pins record | The precedence rules, `harness_changed`, turn-boundary switching, `spawn_agent`'s fields and agent files |
 | The default loop and parity | `std:default` | The parity suite and the default switch (R14) |

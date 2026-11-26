@@ -574,21 +574,29 @@ and budgets become guesswork, and a forgotten task keeps spending after the turn
 - `import "./lib/critics.ratio" as critics` imports a file by path, relative to the importing
   file. The path must stay inside the package's **source root** (the folder its entry file was
   found in); `..` that leaves it, absolute paths, and symbolic links are refused.
+- An import binds its alias; without an alias or a list, the last word of its name or its file
+  name; `{ a, b }` binds those public items, and the module only with an alias. `pub` does not
+  apply to imports. A path's components hold only ASCII letters, digits, `_`, `-` and `.`, none
+  ending in a dot or naming a device (`con`); paths differing only in case are refused. A package
+  name is ASCII identifiers (letters, digits and `_`; not keywords) joined by `.`, so every
+  package can be named in an import, and a plugin name one such identifier; each is at most 128 bytes and never
+  a device name.
 - `import std:debate`, `import user:critics.strict`, `import plugin:acme/review` import a
-  registered package by **source-qualified name**; `@"^1.2"` pins a semver range. A bare name
-  (`import debate`) resolves to the highest-trust source that has the name, in the order `std`,
-  `user`, `plugin`, `project`, `authored` (chapter 08). A lower-trust package never shadows a
-  higher-trust one; reaching it needs its qualified name.
+  registered package by **source-qualified name**; `@"^1.2"` pins a semver range (`^`, `~` or
+  `=` with one to three numbers, `=` needing three), checked against the package's `meta`
+  `version`. A bare name (`import debate`) resolves to `std`, then `user`: a lower-trust package
+  never shadows a higher-trust one, and a plugin, project or authored package is reached only by
+  its qualified name.
 - The standard library modules (`model`, `think`, `tools`, `agents`, `memory`, `context`,
   `session`, `state`, `data` and its submodules, `control`, `eval`, `meta`) are in scope in every
   file without an import. The `data` submodules (`text`, `list`, `map`, `json`, …) are also in
   scope by their short names. Method syntax `x.f(a)` resolves to the module of `x`'s type first,
   then to a function `f` in scope whose first parameter accepts `x`.
 - Import cycles are errors. Name resolution is lexical: a local binding shadows an import, which
-  shadows the prelude; the checker warns on shadowing a standard module.
+  shadows the prelude; the checker warns on shadowing a standard module or `trust`, `as_task`
+  or `declassify`.
 - **Trust follows source.** A package may import only the standard library, built-in (`std`)
-  packages, files in its own source root, and registered packages of a source at least as
-  trusted as its own: a user package may import user, plugin and project packages by qualified
+  packages, files in its own source root, and registered packages as follows: a user package may import user, plugin and project packages by qualified
   name; a plugin package only `std` and its own plugin's; a project package only `std` and its own
   project's; an authored package only `std` and authored packages of the same area.
 

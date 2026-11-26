@@ -1,0 +1,7 @@
+// expect: resolve-error N0005 at 5:8
+// expect: resolve-error N0005 at 6:8
+// expect: resolve-error N0005 at 7:8
+
+import review
+import kit
+import vote

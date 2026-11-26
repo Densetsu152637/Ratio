@@ -17,13 +17,13 @@ they are callable from Ratio code but not offerable to models, and `harnesses.ch
 | # | Package | Shows |
 | --- | --- | --- |
 | 1 | `std:default` | The native agent loop |
-| 2 | `std:plan-execute-verify` | Planning, step execution with acceptance checks, re-planning, verification |
-| 3 | `std:self-consistency` | Sampling and voting, escalation on low agreement |
+| 2 | `std:plan_execute_verify` | Planning, step execution with acceptance checks, re-planning, verification |
+| 3 | `std:self_consistency` | Sampling and voting, escalation on low agreement |
 | 4 | `user:debate` | Two harnesses on different models argue; a third judges |
-| 5 | `user:tree-of-thought` | Search over partial solutions with memoised evaluation |
+| 5 | `user:tree_of_thought` | Search over partial solutions with memoised evaluation |
 | 6 | `user:research` | Retrieval over memory, earlier sessions and the web, reranking, cited answers, verification |
-| 7 | `std:consul-escalation` | Roadmap item 64 |
-| 8 | `std:tdd-fix` | A test-driven code-fix subagent |
+| 7 | `std:consul_escalation` | Roadmap item 64 |
+| 8 | `std:tdd_fix` | A test-driven code-fix subagent |
 | 9 | `user:digest` | Map-reduce over an input too large for one context |
 
 ## 1. The default agent loop
@@ -41,7 +41,7 @@ step fails, and verifies the whole plan before answering.
 
 ```ratio
 meta {
-  name: "std:plan-execute-verify",
+  name: "std:plan_execute_verify",
   version: "1.0.0",
   description: "Plan with read-only tools, execute step by step, check each step, verify, answer",
 }
@@ -150,7 +150,7 @@ low asks a frontier model to adjudicate between the distinct answers.
 
 ```ratio
 meta {
-  name: "std:self-consistency",
+  name: "std:self_consistency",
   version: "1.0.0",
   description: "Sample several solutions, vote on the answer, adjudicate when they disagree",
 }
@@ -275,7 +275,7 @@ Best-first search over partial solutions. A model proposes next steps, another c
 partial solution, and evaluations are memoised so a node is never rated twice.
 
 ```ratio
-meta { name: "tree-of-thought", version: "1.0.0", description: "Best-first search over partial solutions" }
+meta { name: "tree_of_thought", version: "1.0.0", description: "Best-first search over partial solutions" }
 
 type Node = { steps: [Str], state: Str "What has been established so far" }
 type Proposals = { @len(1, 4) next: [Node] }
@@ -459,7 +459,7 @@ item 64 to this code.
 
 ```ratio
 meta {
-  name: "std:consul-escalation",
+  name: "std:consul_escalation",
   version: "1.0.0",
   description: "Consul takes over a subagent's task after two rejections in one turn, and critiques the root's plans",
 }
@@ -591,7 +591,7 @@ A subagent harness that will not report success until the project's tests pass, 
 them pass by editing the tests, and records a checkpoint before it changes anything.
 
 ```ratio
-meta { name: "std:tdd-fix", version: "1.0.0", description: "Fix code until the tests pass, without touching the tests" }
+meta { name: "std:tdd_fix", version: "1.0.0", description: "Fix code until the tests pass, without touching the tests" }
 
 const ATTEMPTS = 3
 const EDIT_TOOLS: ToolSet = [read_file, grep, glob, list_dir, edit_file, write_file]
@@ -609,7 +609,7 @@ pub harness fix(task: Task) -> Report
   if before.ok {
     return { text: "All {before.passed} tests already pass; nothing to fix.", ok: true }
   }
-  session.checkpoint("before std:tdd-fix")
+  session.checkpoint("before std:tdd_fix")
 
   context.append_user(conv, prompt {
     instruct "Make the failing tests pass by changing the code under test. Do not edit, delete or skip tests. Change as little as possible, and stop when you believe the fix is complete."

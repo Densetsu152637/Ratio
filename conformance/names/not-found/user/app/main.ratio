@@ -1,0 +1,9 @@
+// expect: resolve-error N0004 at 6:8
+// expect: resolve-error N0005 at 7:8
+// expect: resolve-error N0005 at 8:8
+// expect: resolve-error N0005 at 9:8
+
+import "missing.ratio"
+import std:nothing as a
+import plugin:acme/nothing as b
+import authored:nothing as c

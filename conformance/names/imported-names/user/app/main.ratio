@@ -1,0 +1,5 @@
+// expect: resolve-error N0014 at 5:28
+// expect: resolve-error N0013 at 5:36
+// expect: resolve-error N0013 at 5:45
+
+import "lib.ratio" { open, hidden, missing, other }

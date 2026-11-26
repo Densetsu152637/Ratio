@@ -1,0 +1,3 @@
+// expect: resolve-ok
+
+import critics { helper }

@@ -1,0 +1,6 @@
+// expect: parse-ok
+
+import "other.ratio"
+
+pub fn open() -> Int { 1 }
+fn hidden() -> Int { 2 }

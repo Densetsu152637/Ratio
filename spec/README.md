@@ -1,9 +1,30 @@
 # The Ratio specification
 
-Version: draft 0.9 (2026-11-26). Status: design; stages 1 and 2 of the implementation (the
-token reader and the parser) are built in this repository.
+Version: draft 0.10 (2026-11-26). Status: design; stages 1 to 3 of the implementation (the
+token reader, the parser, and modules and names) are built in this repository.
 
-**Changes in draft 0.9.** The accepted proposals of the performance, parallelism and concurrency
+**Changes in draft 0.10.** Errata from stage 3, modules and names. No grammar change.
+
+- Bare names resolve to `std`, then `user` only; plugin, project and authored packages need their
+  qualified name (chapters 03, 08).
+- Trust follows source: the rule is stated as the list it always was, without "at least as
+  trusted" (chapter 03).
+- Import bindings, `pub` on imports, path characters, case conflicts, and package and plugin
+  names (ASCII identifiers that are not keywords, at most 128 bytes, no device names) are
+  specified (chapter 03).
+- Version ranges are `^`, `~` or `=` with one to three numbers, checked against `meta.version`
+  (chapter 03).
+- Package names are importable identifiers, so the built-in packages are renamed with
+  underscores: `std:consul_escalation`, `std:plan_execute_verify`, `std:self_consistency`,
+  `std:tdd_fix` (chapters 08, 09, 10).
+- Inside an authored package's import, `authored:<name>` means the importer's own area only
+  (chapter 07).
+- A warning (`N0021`) for shadowing `trust`, `as_task` or `declassify` (chapter 03).
+- Chapter 07 adds the package-loading limits (1024 files, 64 packages, 4096 registry calls per
+  load, 64 modules per import chain, 128-byte names); chapter 10 adds the `N` codes and the
+  `conformance/names/` worlds.
+
+**Changes in draft 0.9** (kept for reference). The accepted proposals of the performance, parallelism and concurrency
 review (`docs/design/performance-concurrency-review.md`, proposals PC-1 to PC-9; PC-10 to PC-15
 deferred). No grammar change.
 

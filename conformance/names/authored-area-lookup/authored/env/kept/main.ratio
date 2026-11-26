@@ -1,0 +1,5 @@
+// expect: resolve-error N0007 at 5:8
+
+import authored:helper as first
+import authored:env/helper as second
+import authored:session/helper as third
