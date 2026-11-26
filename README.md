@@ -23,8 +23,8 @@ harness answer(question: Str) -> Str {
 
 ## Status
 
-Specification draft 0.7. Stage 1 of the [implementation plan](spec/10-implementation.md), the token
-reader, is built. Ratio is a language in its own right: this repository holds its specification,
+Specification draft 0.8. Stages 1 and 2 of the [implementation plan](spec/10-implementation.md),
+the token reader and the parser, are built. Ratio is a language in its own right: this repository holds its specification,
 its implementation, its conformance suite and its releases. Imperium is a host: it depends on a
 release of the `ratio` library and implements its `Host` trait against the agent engine
 ([chapter 10](spec/10-implementation.md#the-repository-split-and-the-boundary) says which stages

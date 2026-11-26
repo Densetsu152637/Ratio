@@ -45,7 +45,8 @@ at both ends) and diagnostics. It implements chapter 02's lexical structure:
   bounds, on character boundaries, correct line and column, only trivia between tokens in a clean
   read, a number or punctuation token read alone from its slice is the same token), and an
   inserted `;` appears only inside a block, a prompt body or at the top level, after a token that
-  can end a statement. Hostile shapes must each read within a generous time bound. The crate has
+  can end a statement (or a `>` closing a generic list in a type declaration or `format` line),
+  never before a continuation line, and never after a line holding only attributes. Hostile shapes must each read within a generous time bound. The crate has
   no dependencies, so the generator is a small xorshift rather than `proptest`.
 - `tests/lexer.rs` covers single behaviours the corpus does not express well.
 - `conformance/builtins.txt` is a stub: chapter 10 generates it from chapter 06, and the

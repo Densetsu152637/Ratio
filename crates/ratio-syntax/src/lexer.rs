@@ -254,10 +254,17 @@ struct Lexer<'a> {
     last_sig: Option<usize>,
     closed_prompt_body: bool,
     type_decl: bool,
+    /// Inside a prompt body's `format` section, up to its statement end.
+    format_section: bool,
     attr: Option<Attr>,
     /// The frame depths of the `<` read since the last statement end that no `>` has closed yet
     /// (most recent last). A `,` while one is open at the current depth is in type position.
+    /// A `<` is recorded whether it opens a generic argument list or is a comparison (the reader
+    /// cannot tell), so an unmatched comparison `<` can leave an entry until the statement ends.
     angles: Vec<usize>,
+    /// The index of the token that is a `>` which closed a recorded `<` (for the `>` statement
+    /// end rule: only such a `>` can end a type declaration or a `format` line).
+    closed_angle: Option<usize>,
     halted: bool,
     interp_depth: usize,
     nesting: usize,
@@ -419,6 +426,8 @@ impl<'a> Lexer<'a> {
             last_sig: None,
             closed_prompt_body: false,
             type_decl: false,
+            format_section: false,
+            closed_angle: None,
             attr: None,
             angles: Vec::new(),
             halted: false,
@@ -779,6 +788,7 @@ impl<'a> Lexer<'a> {
     fn on_semi(&mut self) {
         let depth = self.stack.len();
         self.type_decl = false;
+        self.format_section = false;
         while self.angles.last().is_some_and(|d| *d >= depth) {
             self.angles.pop();
         }
@@ -802,7 +812,10 @@ impl<'a> Lexer<'a> {
         if !innermost_is_block || self.head_pending_here() || self.attr.is_some() {
             return false;
         }
-        let ends = self.prev_kind().is_some_and(ends_statement);
+        let closes_generic = (self.type_decl || self.format_section)
+            && self.last_sig.is_some()
+            && self.last_sig == self.closed_angle;
+        let ends = closes_generic || self.prev_kind().is_some_and(ends_statement);
         ends && !self.continuation_follows()
     }
 
@@ -900,6 +913,7 @@ impl<'a> Lexer<'a> {
                 self.add_pending(PendKind::Block);
             }
             Word::Contextual(Contextual::Meta) => self.add_pending(PendKind::Record),
+            Word::Contextual(Contextual::Format) => self.format_section = true,
             Word::Contextual(_) | Word::Ident => {}
         }
     }
@@ -1185,6 +1199,7 @@ impl<'a> Lexer<'a> {
             TokenKind::Gt => {
                 if self.angles.last() == Some(&self.stack.len()) {
                     self.angles.pop();
+                    self.closed_angle = self.last_sig;
                 }
             }
             TokenKind::Comma

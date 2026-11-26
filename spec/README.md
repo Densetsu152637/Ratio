@@ -1,9 +1,24 @@
 # The Ratio specification
 
-Version: draft 0.7 (2026-11-26). Status: design; stage 1 of the implementation (the token
-reader) is built in this repository.
+Version: draft 0.8 (2026-11-26). Status: design; stages 1 and 2 of the implementation (the
+token reader and the parser) are built in this repository.
 
-**Changes in draft 0.7.** Errata from the stage 1 review and the repository-split review.
+**Changes in draft 0.8.** Errata from the stage 2 parser. Chapter 02: a `>` that closes a generic
+argument list ends a statement at a line end inside a type declaration or a prompt `format`
+section (insertion condition 2); a block head's `{` must be on the head's line (`P0008`); the
+parser takes the token reader's brace kind as disambiguation rule 1's decision (`P0003` when it
+does not fit); `record_pattern` becomes `"{" [ ( field_pattern {"," field_pattern} ["," ".."] |
+".." ) [","] ] "}"`; the grammar is applied strictly (trailing commas only where a production
+allows one, jumps are not operands, `()` is not an expression); parser nesting counts tree depth,
+one level per nested expression, type or pattern, per prefix operator and per link of a chain,
+limited by `max_nesting` (`P0002`). Chapter 10 adds the parse diagnostic series `P0001` to
+`P0009` (unexpected token, nesting too deep, wrong brace, not a place, chained comparison or
+range, misplaced modifier, too many errors, head split across lines, positional after named),
+the expectation kinds `parse-ok`, `parse-error CODE at L:C` and `tree:`, says that
+`RatioHost::open_frame` looks up the parent by frame path, and says that only the release
+workflow creates a release, given the tag ruleset.
+
+**Changes in draft 0.7** (kept for reference). Errata from the stage 1 review and the repository-split review.
 Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;
 insertion's condition 1 includes the top level of the file, condition 3's `.` includes `..` and
 `..=`, and a line holding only attributes never ends a statement; disambiguation rule 1 is
