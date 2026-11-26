@@ -16,7 +16,11 @@ limited by `max_nesting` (`P0002`). Chapter 10 adds the parse diagnostic series 
 range, misplaced modifier, too many errors, head split across lines, positional after named),
 the expectation kinds `parse-ok`, `parse-error CODE at L:C` and `tree:`, says that
 `RatioHost::open_frame` looks up the parent by frame path, and says that only the release
-workflow creates a release, given the tag ruleset.
+workflow creates a release, given the tag ruleset. Also in 0.8: in a type declaration or a
+`format` section a line-ending `??` that ends a type ends the statement, like `>`; chapter 06's
+`type Sampling` example uses a `//` comment (there are no block comments) and `ToolChoice`'s
+`none` variant is renamed `no_tools` (`none` is a keyword; chapter 05 follows); chapter 07's
+nesting row says the limit counts tree depth, chain links included.
 
 **Changes in draft 0.7** (kept for reference). Errata from the stage 1 review and the repository-split review.
 Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;

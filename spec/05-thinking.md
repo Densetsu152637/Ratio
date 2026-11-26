@@ -114,9 +114,9 @@ type Sampling = {
 }
 ```
 
-**Tool choice.** `GenOpts.tool_choice` (`auto`, the default; `none`; `required`; or
+**Tool choice.** `GenOpts.tool_choice` (`auto`, the default; `no_tools`; `required`; or
 `Named { name }`) is sent to backends that support it on `model.chat`, `model.chat_as` and
-`model.loop` calls; on others `none` is honoured by offering no tools and the rest is dropped
+`model.loop` calls; on others `no_tools` is honoured by offering no tools and the rest is dropped
 with a warning (or `Unsupported` under `strict`).
 
 Options are merged field by field: the frame's `sampling`, then the call's. An option the

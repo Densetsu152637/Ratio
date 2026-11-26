@@ -71,51 +71,6 @@ const FRAGMENTS: &[(&str, usize)] = &[
     ("05-thinking.md", 71),
 ];
 
-/// A mistake in a specification example, with the text that corrects it. The block is parsed
-/// after the correction, so the rest of it stays covered; the mistake itself is reported to the
-/// specification's owner as an erratum.
-struct Erratum {
-    file: &'static str,
-    line: usize,
-    /// `(wrong text, corrected text)`.
-    patch: (&'static str, &'static str),
-    reason: &'static str,
-}
-
-const ERRATA: &[Erratum] = &[
-    Erratum {
-        file: "06-stdlib/README.md",
-        line: 67,
-        patch: ("{ /* chapter 05 */ }", "{ }"),
-        reason: "block comments do not exist (only `//`), so `type Sampling = { /* chapter 05 */ }` \
-                 is not a record type",
-    },
-    Erratum {
-        file: "06-stdlib/README.md",
-        line: 67,
-        patch: ("auto, none, required,", "auto, no_tools, required,"),
-        reason: "`none` is a keyword and cannot name a variant in `enum ToolChoice { auto, none, \
-                 required, … }`",
-    },
-];
-
-fn corrected(file: &str, line: usize, text: &str, skip: Option<&Erratum>) -> String {
-    let mut text = text.to_owned();
-    for erratum in ERRATA.iter().filter(|e| e.file == file && e.line == line) {
-        if skip.is_some_and(|s| std::ptr::eq(s, erratum)) {
-            continue;
-        }
-        assert!(
-            text.contains(erratum.patch.0),
-            "{file}:{line}: the erratum text `{}` no longer appears ({})",
-            erratum.patch.0,
-            erratum.reason
-        );
-        text = text.replace(erratum.patch.0, erratum.patch.1);
-    }
-    text
-}
-
 #[test]
 fn every_ratio_block_in_the_specification_parses() {
     let blocks = ratio_blocks();
@@ -123,7 +78,6 @@ fn every_ratio_block_in_the_specification_parses() {
     let mut problems = Vec::new();
     let mut fragments_seen = 0;
     for (file, line, text) in &blocks {
-        let text = corrected(file, *line, text, None);
         let parsed = parse(&text);
         if FRAGMENTS.contains(&(file.as_str(), *line)) {
             fragments_seen += 1;
@@ -147,25 +101,6 @@ fn every_ratio_block_in_the_specification_parses() {
         "a listed fragment was not found"
     );
     assert!(problems.is_empty(), "{}", problems.join("\n"));
-}
-
-#[test]
-fn each_erratum_is_still_needed() {
-    // Keeps the list honest: when the specification is fixed, its entry has to go.
-    for erratum in ERRATA {
-        let (_, _, text) = ratio_blocks()
-            .into_iter()
-            .find(|(f, l, _)| f == erratum.file && *l == erratum.line)
-            .expect("the block of an erratum exists");
-        let without_this_patch = corrected(erratum.file, erratum.line, &text, Some(erratum));
-        assert!(
-            !parse(&without_this_patch).is_clean(),
-            "{}:{} parses without the patch for: {}",
-            erratum.file,
-            erratum.line,
-            erratum.reason
-        );
-    }
 }
 
 // ---- the nesting limit and the stack ----

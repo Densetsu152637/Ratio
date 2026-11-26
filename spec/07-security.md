@@ -241,7 +241,7 @@ examples on the eval suites (chapter 10, stage 24).
 | Heap (live values) | 64 MiB | 512 MiB | `Budget { which: heap }` |
 | Call depth (nested function and closure calls) | 512 | 4,096 | `Budget { which: call_depth }` |
 | Frame depth (nested harness calls) | 8 | 32 | `Budget { which: depth }` |
-| Parser nesting (brackets, blocks, expressions, interpolations) | 128 | 256 | A check-time diagnostic |
+| Parser nesting (tree depth: brackets, blocks, expressions, types, patterns, and every link of an operator or `.` chain) | 128 | 256 | A check-time diagnostic |
 | Interpolation nesting inside strings | 4 | 8 | A check-time diagnostic |
 | JSON nesting (`json.parse`, decoding) | 128 | 256 | `Invalid` |
 | Single string | 16 MiB | 64 MiB | `Invalid` |
@@ -258,6 +258,11 @@ examples on the eval suites (chapter 10, stage 24).
 | Log and event data | 16 KiB per event | — | Cut with a marker |
 | Live-view site events | 20 per second per frame (chapter 08) | 60 | Coalesced |
 | Tape per turn | 64 MiB | 1 GiB | Recording stops with a notice; the turn continues live |
+
+Parser nesting counts the depth of the syntax tree, not only brackets: a nested expression, type
+or pattern costs one level, a parenthesis one, a call two, a tuple pattern two, and every link of
+a left-associative chain costs one (`a + b + c` and `x |> f |> g`, a `.` chain, a postfix chain),
+so a chain of 128 or more terms exceeds the default limit; split it with `let` bindings.
 
 Step accounting is deterministic (it depends only on the program and its data), so a run that
 exceeds its steps exceeds them identically in replay.

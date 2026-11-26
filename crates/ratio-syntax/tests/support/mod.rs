@@ -294,8 +294,8 @@ fn can_end_a_statement(kind: &TokenKind) -> bool {
 
 /// The insertion property: in a clean read, an inserted `;` appears only where the innermost
 /// open delimiter is a block, a prompt body or the top level of the file (condition 1), only
-/// after a token that can end a statement (condition 2) or a `>` ending a type declaration or a
-/// prompt `format` line, never before a continuation token (condition 3: `.`, `..`, `..=`, `?.`,
+/// after a token that can end a statement (condition 2) or a `>` or `??` ending a type declaration
+/// or a prompt `format` line, never before a continuation token (condition 3: `.`, `..`, `..=`, `?.`,
 /// `|>`, `??`, `and`, `or`, `else`, `catch`), and never after a line that holds only attributes.
 /// Reads with diagnostics are not checked: recovery may close delimiters the token stream never
 /// shows as closed.
@@ -337,7 +337,8 @@ pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
                         open.last()
                     ));
                 }
-                let closes_generic = type_or_format && matches!(prev, Some(TokenKind::Gt));
+                let closes_generic = type_or_format
+                    && matches!(prev, Some(TokenKind::Gt | TokenKind::QuestionQuestion));
                 if !closes_generic && !prev.is_some_and(can_end_a_statement) {
                     return Err(format!(
                         "token {index}: a semicolon inserted after {prev:?}, which cannot end a statement"

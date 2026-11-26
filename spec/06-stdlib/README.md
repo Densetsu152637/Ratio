@@ -97,8 +97,8 @@ enum Tier { basic, standard, strong, frontier }
 enum Location { local, cloud, any }
 enum Effort { low, medium, high, max }
 type Thinking = { effort?: Effort, budget_tokens?: Int, off?: Bool }
-type Sampling = { /* chapter 05 */ }
-enum ToolChoice { auto, none, required, Named { name: Str } }
+type Sampling = { }  // fields: chapter 05
+enum ToolChoice { auto, no_tools, required, Named { name: Str } }
 type GenOpts = { model?: ModelRef, effort?: Effort, thinking?: Thinking, sampling?: Sampling,
                  tool_choice?: ToolChoice, repairs?: Int, timeout?: Duration, title?: Str }
 type Usage = { prompt_tokens: Int, completion_tokens: Int, cached_tokens: Int,

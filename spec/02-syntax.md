@@ -140,8 +140,8 @@ The parser's token reader inserts one at a line end when **all** of these hold:
    or `prompt` up to the `{` of its body;
 2. the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or one of `break`,
    `continue`, `return`, `none`, `true`, `false`; or it is a `>` that closes a generic argument
-   list, when the statement is a type declaration (it began with `type`) or a prompt's `format`
-   section (see below);
+   list, or a `??` that ends a type, when the statement is a type declaration (it began with
+   `type`) or a prompt's `format` section (see below);
 3. the next non-blank line does not start with `.` (including `..` and `..=`), `?.`, `|>`, `??`,
    `and`, `or`, `else` or `catch`. Lines holding only a `//` comment count as blank; a line
    holding a `///` documentation comment does not.
@@ -152,19 +152,21 @@ attribute belongs to the item on the lines below it. An attribute counts as such
 starts a statement or item (at the start of the file, or after `;`, `{` or another attribute);
 it lasts through its name and, when present, its parenthesised arguments.
 
-A `>` is otherwise never the last token of a statement, because it is the comparison operator.
-Inside a type declaration (`type T = List<Int>`) and a prompt `format` section
-(`format Map<K, V>`), a `>` that closes a `<` opened in the same statement ends the statement at
+A `>` is otherwise never the last token of a statement, because it is the comparison operator,
+and `??` because it is the coalescing operator. Inside a type declaration (`type T = List<Int>`,
+`type X = Int??`) and a prompt `format` section (`format Map<K, V>`), a `>` that closes a `<`
+opened in the same statement, or a `??` (the double option of a type), ends the statement at
 a line end, so the next item or section can start on the next line. The token reader does not
 tell a generic `<` from a comparison, so it pairs each `>` with the nearest open `<` of the same
 delimiter depth; in these two statements the grammar allows no comparison, so the pairing is
 exact. Condition 3 still applies.
 
-A block head (`if c`, `while c`, `for p in xs`, `repeat n`, `with timeout d`, and the heads of
-`loop`, `try`, `defer`, `do`, `test`) must have its `{` on the same line: the line end after
-the head's expression ends a statement as usual, and a `{` that then follows it is reported by
-the parser as `P0008`, not read as a split head. A `fn`, `harness` or `prompt` head, which has
-no expression to end a statement, may span lines up to its `{` (condition 1).
+A `{` must start on the line of what opens it: the line end before it ends a statement as
+usual (after `if c`, `while c`, `for p in xs`, `repeat n`, `with timeout d`, `match x`, `enum E`,
+`loop`, `try`, `do`, and so on), and wherever the parser needs a `{` (a block, the branches of
+an `if` or `for`, a match or catch arm list, an enum body, a record, an import list, a prompt
+body) it reports a `{` that follows an inserted `;` once, as `P0008`, and reads it anyway. A `fn`, `harness` or `prompt` head, which has no expression to end a statement,
+may span lines up to its `{` (condition 1).
 
 So pipelines and `else` on the next line continue an expression; inside a `match`, `catch`, enum
 or record the line breaks are only whitespace and the entries are separated by commas; a

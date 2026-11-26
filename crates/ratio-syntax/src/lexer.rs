@@ -812,10 +812,11 @@ impl<'a> Lexer<'a> {
         if !innermost_is_block || self.head_pending_here() || self.attr.is_some() {
             return false;
         }
-        let closes_generic = (self.type_decl || self.format_section)
-            && self.last_sig.is_some()
-            && self.last_sig == self.closed_angle;
-        let ends = closes_generic || self.prev_kind().is_some_and(ends_statement);
+        // In a type declaration or a `format` section a closing `>` or a `??` ends the type.
+        let closes_type = (self.type_decl || self.format_section)
+            && ((self.last_sig.is_some() && self.last_sig == self.closed_angle)
+                || matches!(self.prev_kind(), Some(TokenKind::QuestionQuestion)));
+        let ends = closes_type || self.prev_kind().is_some_and(ends_statement);
         ends && !self.continuation_follows()
     }
 
