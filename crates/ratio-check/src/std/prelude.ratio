@@ -53,8 +53,9 @@ enum DeniedBy { rule, mode, floor, user, hook, profile, attenuation, unattended,
 type ModelReply = { text: Untrusted<Str>, tool_calls: [ToolCall], usage: Usage, finish: Finish }
 enum Finish { stop, tool_calls, length, content_filter, cancelled }
 
-// Frames (chapter 04). PermissionRequest's fields are provisional (stage 10 owns frames), and
-// ContextMode lacks `none`, which cannot be declared because `none` is a keyword.
+// Frames (chapter 04). PermissionRequest's fields are provisional (stage 10 owns frames).
+// ContextMode's fourth variant, `none`, is a keyword and cannot be declared here: the checker
+// adds it, and reads `none` as that variant where a ContextMode is expected.
 type Sees = {
   turn?: Bool, attachments?: Bool, plan?: Bool, memory_environment?: Bool,
   memory_index?: Bool, agents?: Bool, system_default?: Bool, state?: Bool, secrets?: Bool,

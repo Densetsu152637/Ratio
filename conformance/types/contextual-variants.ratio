@@ -38,3 +38,20 @@ enum Verdict { pass, fail }
 fn tools() -> HarnessConfig {
   { tools: [read_file, grep, "mcp__github__*"], context: fresh }
 }
+
+fn modes(m: ContextMode) -> Int {
+  match m {
+    fresh => 1,
+    fork => 2,
+    main => 3,
+    none => 4,
+  }
+}
+
+fn single_shot() -> HarnessConfig {
+  { context: none, effort: low }
+}
+
+fn qualified() -> ContextMode {
+  ContextMode.none
+}

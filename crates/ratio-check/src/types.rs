@@ -180,6 +180,19 @@ impl EnumDef {
         }
     }
 
+    /// Adds a unit variant (one a source cannot declare, such as `ContextMode`'s `none`).
+    pub(crate) fn add_unit_variant(&mut self, name: &str) {
+        if self.by_name.contains_key(name) {
+            return;
+        }
+        self.by_name.insert(name.to_owned(), self.variants.len());
+        self.variants.push(VariantDef {
+            name: name.to_owned(),
+            payload: None,
+            has_payload: false,
+        });
+    }
+
     /// Whether no variant has a payload (option-like enums: `Effort`, `Tier`).
     #[must_use]
     pub fn unit_only(&self) -> bool {

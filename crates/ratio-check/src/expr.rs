@@ -212,7 +212,18 @@ impl Checker<'_> {
             Lit::Duration(_) => TypeId::DURATION,
             Lit::Money(_) => TypeId::MONEY,
             Lit::Bool(_) => TypeId::BOOL,
-            Lit::None => self.types.option(TypeId::NEVER),
+            Lit::None => {
+                // Where an enum with a `none` variant (`ContextMode`) is expected, `none` is
+                // that variant, as a contextual variant would be.
+                if let Some(target) = expected.map(|t| self.strip_option(t))
+                    && let Some(id) = self.types.as_enum(target)
+                    && let Some(index) = self.types.enum_def(id).variant("none")
+                {
+                    self.res(b, span, crate::tables::Res::Variant(id, index));
+                    return target;
+                }
+                self.types.option(TypeId::NEVER)
+            }
             Lit::Str(s) => {
                 let mut tainted = false;
                 let mut plain = true;

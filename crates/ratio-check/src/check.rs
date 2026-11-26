@@ -341,6 +341,11 @@ impl<'a> Checker<'a> {
                 ));
                 let r = ItemRef { origin, index };
                 self.set_sig(r, ItemSig::Enum(id));
+                // `ContextMode`'s `none` (chapter 04) is a keyword, so its source cannot
+                // declare it; the prelude adds it here.
+                if origin == Origin::Std(0) && decl.name.name == "ContextMode" {
+                    self.types.enum_def_mut(id).add_unit_variant("none");
+                }
                 let ty = {
                     let args = params.iter().map(|(_, p)| self.types.param(*p)).collect();
                     self.types.enum_type(id, args)

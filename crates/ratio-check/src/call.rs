@@ -119,7 +119,7 @@ impl Checker<'_> {
         })
     }
 
-    fn res(&mut self, b: &Body, span: Span, res: Res) {
+    pub(crate) fn res(&mut self, b: &Body, span: Span, res: Res) {
         self.table(b.module).res.insert(Key::from(span), res);
     }
 

@@ -46,6 +46,9 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
   that is not a local and names one of its unit variants is that variant; where it is a
   `ToolName` or `ToolSet`, a bare name is a tool. A string literal where a `ModelRef` is
   expected builds `Named { id }`, and where a `ToolName` is expected names a tool pattern.
+  `ContextMode`'s variant `none` is a keyword, so the prelude cannot declare it: the checker
+  adds it, and `none` where a `ContextMode` (or `ContextMode?`) is expected is that variant
+  (`with { context: none }`), not an absent value.
 - **Variant literals** (rule 3): `Name { … }` resolves to the expected enum's variant, else to
   the one enum in scope (the module's, then the prelude's) that has it; several is `C0008`.
 - **Patterns.** In `match`, `catch`, `if let` and `while let` arms a bare name that is a variant

@@ -206,6 +206,14 @@ impl Checker<'_> {
     fn literal_pattern(&mut self, b: &mut Body, lit: &Lit, ty: TypeId, span: Span) -> DPat {
         let (lit_ty, shape) = match lit {
             Lit::None => {
+                if let Some((id, index)) = self.variant_named(ty, "none")
+                    && !matches!(self.types.get(ty), Ty::Option(_))
+                {
+                    self.table(b.module)
+                        .patterns
+                        .insert(Key::from(span), PatRes::Variant(id, index));
+                    return DPat::Ctor(Ctor::Variant(index), Vec::new());
+                }
                 if !matches!(self.types.get(ty), Ty::Option(_) | Ty::Error) {
                     self.no_fit(b, ty, "`none`", span);
                 }
