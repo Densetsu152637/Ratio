@@ -1080,8 +1080,9 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k, v) = (arg(cx, args, 0)?, arg(cx, args, 1)?, arg(cx, args, 2)?);
-    // Whether the key set grew depends on the key.
-    let labels = m.labels | k.labels;
+    // Whether the key set grew depends on the key, and on the keys it was compared with.
+    let (_, path) = map(cx, m)?.probe(k);
+    let labels = m.labels | k.labels | path;
     let out = map(cx, m)?
         .insert(cx.heap, k.clone(), v.clone())
         .map_err(|f| cx.fault(f, labels))?;

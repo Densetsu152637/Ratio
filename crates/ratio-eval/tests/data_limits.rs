@@ -90,6 +90,12 @@ fn w_m_merge(m: Map<Int, Int>) -> Map<Int, Int> { map.merge(m, m) }
 fn w_m_map_values(m: Map<Int, Int>) -> Map<Int, Int> { map.map_values(m, |v| v) }
 fn w_m_filter(m: Map<Int, Int>) -> Map<Int, Int> { map.filter(m, |k, v| true) }
 fn w_m_count_by(xs: [Int]) -> Map<Int, Int> { map.count_by(xs, |x| x % 100) }
+fn k_get(m: Map<Str, Int>, k: Str) -> Int? { map.get(m, k) }
+fn k_has(m: Map<Str, Int>, k: Str) -> Bool { map.has(m, k) }
+fn k_set(m: Map<Str, Int>, k: Str) -> Map<Str, Int> { map.set(m, k, 1) }
+fn k_remove(m: Map<Str, Int>, k: Str) -> Map<Str, Int> { map.remove(m, k) }
+fn k_update(m: Map<Str, Int>, k: Str) -> Map<Str, Int> { map.update(m, k, |v| v, 0) }
+fn mk_smap(xs: [Int]) -> Map<Str, Int> { map.from(xs.map(|x| (text.repeat("a", x), x))) }
 
 fn w_j_parse(s: Str) -> Json { json.parse(s) }
 fn w_j_stringify(xs: [Int]) -> Untrusted<Str> { json.stringify(xs) }
@@ -397,6 +403,53 @@ fn product_charges_are_debited_before_running() {
             (n, o) => panic!("{n}: {o:?}"),
         }
     }
+}
+
+/// A map lookup or update walks its key at every comparison, so a long key in a big map is
+/// charged by its weight and refused, without running, when the steps left cannot pay.
+#[test]
+fn a_long_map_key_is_refused_before_it_is_compared() {
+    let p = prepared(SOURCE);
+    let m = value(&p, "mk_smap", vec![ints(1000)]);
+    let key = Value::text(&"k".repeat(1 << 20));
+    let limits = Limits {
+        steps: 1500,
+        ..Limits::default()
+    };
+    for name in ["k_get", "k_has", "k_set", "k_remove", "k_update"] {
+        work::reset();
+        let f = run_with(&p, name, vec![m.clone(), key.clone()], limits);
+        let Outcome::Raised(e) = &f.outcome else {
+            panic!("{name} ran")
+        };
+        assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{name}");
+        if work::ENABLED {
+            assert!(work::total() < 100, "{name} did {} units", work::total());
+        }
+    }
+}
+
+/// An `output` built-in refuses a count that cannot be built before allocating anything.
+#[test]
+fn list_range_and_repeat_refuse_before_allocating() {
+    let p = prepared(SOURCE);
+    for name in ["w_range", "w_repeat"] {
+        // (`list.range(0, -1)` is the empty list; a negative count of `repeat` is refused.)
+        for n in [1_000_001, i64::MAX, -1] {
+            if name == "w_range" && n == -1 {
+                continue;
+            }
+            let f = run(&p, name, vec![Value::int(n)]);
+            let Outcome::Raised(e) = f.outcome else {
+                panic!("{name}({n}) returned")
+            };
+            assert_eq!(e.kind(&p), "Invalid", "{name}({n})");
+            assert!(f.heap_peak < 1024, "{name}({n}) allocated {}", f.heap_peak);
+        }
+    }
+    // The most there may be is allowed, and charged for its output: 1 + 1,000,000 / 64.
+    let f = run(&p, "w_range", vec![Value::int(1_000_000)]);
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
 }
 
 const LOOPS: &str = r"
