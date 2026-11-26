@@ -363,7 +363,7 @@ fn qualified_names_read_and_print() {
         "authored:vote",
         "authored:env/vote@=1.0.0",
         "debate",
-        "std:consul-escalation",
+        "std:consul_escalation",
     ] {
         assert_eq!(QualifiedName::parse(text).unwrap().to_string(), text);
     }
@@ -516,6 +516,8 @@ fn names_outside_ascii_and_device_names_are_refused() {
         "user:a\u{200b}b",
         "user:a\u{202e}b",
         "user:critic~1",
+        "std:consul-escalation",
+        "plugin:ac-me/review",
         "plugin:\u{430}cme/review",
         "plugin:a.b/review",
     ] {
