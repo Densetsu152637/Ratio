@@ -1,6 +1,6 @@
 # Plan: Ratio-side implementation roadmap
 
-Revision: 2026-11-26 (plan gate round 1 applied; base e2bb2e5, branch `feat/stage-2-parser`)
+Revision: 2026-11-26 (stage 2 merged as 0794aba; stage 2S and stage 3 in progress)
 
 Goals (each verified by the named check):
 
@@ -65,8 +65,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   - every ```` ```ratio ```` block in `spec/` parses (or is marked as a deliberate error example);
   - draft 0.8 errata are in `spec/README.md`, `ratio::SPEC_DRAFT` is `"0.8"`, `ratio::STAGE` is 2;
   - CI green.
-- Status: in progress
-- Outcome:
+- Status: done
+- Outcome: PR #3 squash-merged as 0794aba; CI 8/8 green; security critic converged in 3 rounds (8 findings accepted).
 - Handoff notes:
   - Already in the WIP: `ast.rs`, `parser.rs` (recursive descent, never yet run on real input),
     `diag.rs` P0001–P0009 and `Diagnostic::render`.
@@ -108,8 +108,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: none.
 - Owned paths: `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: the review file exists with a decision per proposal; G4.
-- Status: in progress
-- Outcome:
+- Status: done
+- Outcome: review converged after 4 security-critic rounds; committed with stage 2S.
 - Handoff notes:
 
 ## Stage 2S: Specification update for accepted proposals (spec-only PR, draft 0.9)
@@ -120,7 +120,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: stage 2 merged, stage 2R decided.
 - Owned paths: `spec/**`, `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: G4; docs CI job green; each accepted proposal names its implementing stage.
-- Status: pending
+- Status: in progress (branch feat/wt-s2s-spec)
 - Handoff notes:
   - Stage 2R converged after 4 security-critic rounds (23 findings accepted, 0 rejected); the review is
     `docs/design/performance-concurrency-review.md` (sha256 prefix 5908123c). Accepted PC-1..PC-9,
@@ -142,7 +142,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   `conformance/names/**`.
 - Acceptance checks: resolution corpus; shadowing refused across trust levels; import-trust rules per
   source; imports cannot escape the root or follow links.
-- Status: pending
+- Status: in progress (branch feat/wt-s3-names)
 
 ## Stage 4: Type checker
 
