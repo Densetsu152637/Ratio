@@ -3,9 +3,9 @@
 Task DESIGN-LOOPS (user request: "make looping and vectorised operations compatible and
 optimised", widened to "also add in other function syntax", then to "`Result<T>` types and
 monadic chain expressions", under the style "a nice fusion between Haskell and Java").
-Revision 2: the user adopted FS-1, FS-2, FS-3 and `scan`/`zip_with`; this revision adds
+Revision 3 applies the 17 accepted findings of the critic review. Revision 2: the user adopted FS-1, FS-2, FS-3 and `scan`/`zip_with`, and added
 [Style](#style), [Result and monadic chains](#result-and-monadic-chains) and re-evaluates the
-syntax options. Reviewed against `main` at
+syntax options (revision 2). Reviewed against `main` at
 `4837678` (stages 1 to 7, specification draft 0.14) and the in-flight branches
 `feat/wt-s8-data2` (`1278e59`), `feat/wt-s9-data3` (`834e7db`), `feat/wt-s10-frames`
 (`f1f2429`), `feat/wt-sC-checker` (`79b1e37`) and `feat/wt-s11a-host` (local, no commits of its
@@ -32,16 +32,10 @@ need to be. This document
    equivalence to `raise`/`try`;
 6. sequences the work around the in-flight branches so no two touch the same file at once.
 
-Read in full or in the relevant ranges: `crates/ratio-eval/README.md`; `machine.rs` (the walk,
-loop frames, `call_builtin`, `drive_task`, `enter`), `prepare.rs` (`PKind`), `value.rs`
-(`Repr`, `Meta`, labels), `plist.rs`, `pmap.rs` (cursors), `heap.rs`, `labels.rs`,
-`builtins.rs`; stage 8's `builtins/list.rs`, `work.rs` and its machine diff; stage 9's
-`builtins/vec.rs` and `math.rs`; stage 10's machine diff; `spec/02-syntax.md` (grammar,
-disambiguation, canonical form), `spec/03-semantics.md` (control flow, implicit flows,
-secrecy, concurrency), `spec/06-stdlib/data.md` (cost classes, `list`, `map`, `math`, `vec`),
-`control.md` (`par_map`, `par_fold`), `spec/07-security.md` (limits, step accounting),
-`ratio-check/src/lint.rs` (`C0039`), `ratio-ir/src/lower.rs` (pipe lowering); PC-4, PC-5 and
-PC-6 of the [performance review](performance-concurrency-review.md).
+Read: the `ratio-eval` README and sources (`machine`, `prepare`, `value`, `plist`, `pmap`,
+`heap`, `labels`, `builtins`), the in-flight branches' diffs, chapters 02, 03, 06 (`data`,
+`control`) and 07, `lint.rs`, `lower.rs`, and PC-4 to PC-6 of the
+[performance review](performance-concurrency-review.md).
 
 Numbers in the baseline are **measured** (release build, see [Baseline](#baseline)). Gains
 marked *prototype* come from a throwaway patch measured on the same benchmark; gains marked
@@ -92,7 +86,7 @@ and method syntax already gives the Java reading (`r.and_then(f)` reads as `r.an
 | LV-4 | Batched heap credit for frames and buffers | Accounting | Accept | P1 (buffers), P2 (frames) | Medium |
 | LV-5 | Tuple-free `for (k, v) in m` | Interpreter | Accept | P2 | Low |
 | LV-6 | Leaf-slice walks in built-ins | Data | Accept | P1 | Low |
-| LV-7 | Cancellation polling in `vec` and `math` | Security fix | Accept | P1 (or stage 9 review) | Low |
+| LV-7 | Cancellation polling in `vec` and `math` | Security fix | Dropped: fixed on stage 9 at `abb1702` | — | — |
 | LV-8 | Last-use moves and in-place appends for `xs = list.push(xs, x)` | Interpreter, data | Accept, after LV-1–3 | P2b | Medium |
 | LV-9 | Packed `f64` leaves for homogeneous `[Float]` | Data | Defer | after 24 | Medium |
 | LV-10 | Fusing `filter`/`map` chains in the prepared form | Interpreter | Defer | after 24 | Medium |
@@ -106,8 +100,8 @@ and method syntax already gives the Java reading (`r.and_then(f)` reads as `r.an
 | FS-7 | `list.scan`, `list.zip_with` | Stdlib | Adopted (user) | D4 | Low |
 | FS-5, 8–13 | Multi-clause functions, fold sugar, arrow lambdas, lazy sequences, … | Syntax | Options / rejected | — | — |
 | R-1 | Keep `Result<T>` with the fixed `Error`; no user generic enums | Types | Accept | — | — |
-| R-2 | `res.*` and `opt.*` combinators (methods on `Result<T>` and `T?`) | Stdlib | Adopt | D4 | Low |
-| R-3 | `res.sequence`, `res.traverse` | Stdlib | Adopt | D4 | Low |
+| R-2 | `outcome.*` and `maybe.*` combinators (methods on `Result<T>` and `T?`) | Stdlib | Adopt | D4 | Low |
+| R-3 | `outcome.sequence`, `outcome.traverse` | Stdlib | Adopt | D4 | Low |
 | R-4 | Postfix `?`: unwrap `Ok` or re-raise | Syntax | Adopt | F | Medium |
 | R-5 | Chain blocks `do { a <- f(x); … }` over `Result<T>` and `T?` | Syntax | Adopt | F | Medium |
 | R-6 | Lint: branching combinators and `?` as guards in `C0039` | Checker | Adopt | F | Low |
@@ -147,8 +141,12 @@ one call of the callback per element, the accumulator updated with the same oper
 where the built-in stops (`any`, `all`, `find`, `take_while`). The rules compare a built-in with
 its canonical loop on the same arguments.
 
-**E-1 Values.** Equal, structurally, for every built-in of `list` and `map` and for `list.sum`,
-`vec.dot` and `vec.add`; `Float` results are bit-identical, because both sum in index order with
+**E-1 Values.** Equal, structurally, for the built-ins that have a canonical loop: `list.map`,
+`map_indexed`, `filter`, `filter_map`, `flat_map`, `fold`, `reduce`, `find`, `find_index`,
+`any`, `all`, `count`, `partition`, `take_while`, `contains`, `index_of`, `sum`, `min`, `max`,
+`min_by`, `max_by`, `zip`, `enumerate`, `flatten`, `reverse`, `unique`, `unique_by`,
+`group_by`; `map.keys`, `values`, `entries`, `map_values`, `filter`, `count_by`; and `vec.dot`,
+`vec.add` (the sorts, slices and constructors have none); `Float` results are bit-identical, because both sum in index order with
 plain IEEE 754 binary64 operations and no fused multiply-add. Measured: `list.sum` and a loop
 over 100,000 floats both give `0x40ed45c000000000`; `vec.dot` and the loop `s += a[i] * b[i]`
 both give `0x40b6f3013953def9`.
@@ -188,6 +186,8 @@ Messages and sites may differ. Three exceptions:
   differ; both are deterministic, so replay is unaffected.
 - `Budget { which: heap }`: the forms allocate differently (a buffer of slots against persistent
   pushes), so the point of exhaustion may differ.
+- `Budget { which: call_depth }`: a callback runs one call deeper than a loop body (the
+  built-in's call), so at the depth limit the built-in raises where the loop does not.
 - `par_map` and `par_fold`: the error is the first failure **in the turn sequence** (recorded,
   PC-1), which equals `list.map`'s when at most one element fails; `par_map_settled` returns
   every outcome by index.
@@ -204,7 +204,9 @@ counters stay within 8 × 64 units per charged step (stage 7's check), which is 
 of the real work".
 
 **E-6 Determinism and replay.** Every form's value, labels, steps and heap peak depend only on
-the program and its data; offloading (PC-6) and the optimisations below change none of them.
+the program, its data and the engine version. Offloading (PC-6) and the optimisations below
+change no value, label or step; they may change heap peaks within stated bounds, so a
+`Budget { which: heap }` point on a tape is valid for the engine version that recorded it.
 `par_map` and `par_fold` record what depends on timing (PC-1).
 
 ### Where the errata go
@@ -289,8 +291,12 @@ the Core IR, its canonical serialisation, `IR_VERSION`, any hash, site id or eff
 charge: steps follow the IR's nodes one for one (`prepare.rs:8-9`), and every fast path must
 charge exactly what the general walk charges, before the work. A shared acceptance check for all
 of them: the equivalence corpus (below) and the existing `conformance/eval` `steps`
-expectations give identical values, labels, steps and heap peaks with each fast path on and off
-(a test-only switch on `Prepared`).
+expectations give **identical values, labels and steps** with each fast path on and off (a
+test-only switch on `Prepared`). The heap is not required to be identical (LV-4 and LV-8 change
+what is held): it must be **deterministic across runs** of one engine version, and its live
+total may exceed the switched-off run's by at most the bound each proposal states (4 KiB for
+LV-4b, none for LV-8). A heap-exhaustion point recorded on a tape is therefore tied to the
+engine version, as step totals already are to the step rules.
 
 ### LV-1: borrow the prepared form instead of cloning its `Arc` per node
 
@@ -310,13 +316,16 @@ moves. **Stage.** P2. **Files.** `machine.rs`.
 `Vec<Option<Value>>` in `drive_task`, and `Env { slots: Vec<Slot> }` in `enter`; three
 allocations and frees per element of `list.map`.
 
-**Proposal.** One `Vec<Slot>` for the whole machine with a base index per call (popped on
-`CallRet`); `TaskStep::Call` carries up to three arguments inline (`SmallArgs`); `bind_params`
+**Proposal.** One `Vec<Slot>` **per branch** (a single one until 11a's scheduler runs branches
+concurrently; then one per branch it creates) with a base index per call (popped on `CallRet`);
+each slot keeps its `level` for the branch restriction; `TaskStep::Call` carries up to three arguments inline (`SmallArgs`); `bind_params`
 binds from that. Slot memory is already outside the heap ledger (frames' fixed part, at most
 `call_depth` deep); the shared stack keeps that bound.
 
 **Gain.** *Estimate* −15% to −25% per callback element after LV-1. **Risk.** Low (slot indexes
 are already per-function). **Security.** Call depth stays checked before any slot is pushed.
+**Test.** Branches interleaved by the scheduler (scripted completion orders) keep their own
+slots and the `var` restriction. **Coordination.** 11a owns branch state; P2 builds on it.
 **Stage.** P2. **Files.** `machine.rs`, `stack.rs`, `builtins.rs` (the `Task` protocol),
 `builtins/list.rs`, `builtins/map.rs`.
 
@@ -338,13 +347,22 @@ steps, and the point where they run out, are the walk's. A fault raises exactly 
 would, with the same kind, message and labels, because the operations are the same `ops::*`
 functions.
 
+The fast path charges **the walk's whole charge set**, through free functions both paths call
+(`ops::charge_binary`, `ops::charge_show`, a shared `labels_of_choice`): the node step; the
+extra charges of `Machine::binary` (comparisons of containers and text `⌈w/64⌉` over the
+weights, membership, text `+` `1 + ⌈m/64⌉`); the labels `and`, `or` and `??` add (today pushed
+as `K::AddLabels`); the `Held` slot charge for each gathered operand; and the call-depth check
+of the call it replaces. It is resumable: when a charge sets `yield_due`, it saves its position
+and value stack in the task and returns to `Machine::run`, so yield and cancellation points do
+not move.
+
 **Gain.** *Estimate* `list.map(xs, |x| x + 1)` from 628 to 60 to 120 ns per element; `fold` and
 `filter` alike; the steps are unchanged. **Cost.** Medium: a mini-evaluator over prepared nodes,
 reusing `ops`. **Risk.** Medium: a divergence between the two evaluators. Mitigated by sharing
 the operations, by a differential property test (random simple lambdas, both paths, identical
 value, labels, steps, error), and by the on/off switch. **Security.** Charge before work holds
 (per node, as the walk); no recursion (a flat array and an explicit stack); labels come from
-the same `ops` functions. **Stage.** P2. **Files.** `prepare.rs` (the mark and `c`), a new
+the same `ops` functions. **Stage.** P2. **Files.** `prepare.rs` (the mark and the flat array), a new
 `machine/fast.rs`, `builtins/list.rs`, `builtins/map.rs`.
 
 ### LV-4: batched heap credit for frames and buffers
@@ -392,20 +410,9 @@ references, no recursion), used by every pure built-in that reads a whole list (
 **Risk.** Low. **Security.** None. **Stage.** P1. **Files.** `plist.rs`, `builtins/list.rs`,
 `builtins/vec.rs`, `builtins/math.rs`.
 
-### LV-7: cancellation polling in `vec` and `math` (finding)
+### LV-7 (dropped): cancellation polling in `vec` and `math`
 
-**Problem.** Stage 9's `vec` and `math` aggregates do not poll cancellation. At the measured 5 to
-15 ns per element, a `vec.top_k` over the largest input the heap admits (about 22 million
-`Float` slots at 512 MiB) runs a few hundred milliseconds without a checkpoint; `text.similarity`
-and `re` poll every checkpoint's worth of work.
-
-**Proposal.** Poll `cx.cancel` every 64,000 units of work (one checkpoint's worth) in every pure
-built-in whose work can exceed it, as `text.similarity` does; add the `vec.top_k` and
-`math.median` cases to the cancellation tests.
-
-**Risk.** Low. **Security.** Restores "cancellation checkpoints in long built-ins". **Stage.**
-P1, or folded into stage 9's next review round if root prefers. **Files.** `builtins/vec.rs`,
-`builtins/math.rs`, `tests/data3_limits.rs`.
+Fixed on stage 9 at `abb1702` (the aggregates poll every 64,000 units of work).
 
 ### LV-8: last-use moves and in-place appends for `xs = list.push(xs, x)`
 
@@ -420,6 +427,18 @@ the slot before the slot is reassigned in the same statement (`xs = list.push(xs
 is unshared, copying as today otherwise. Charges stay the class charge (they never depend on
 representation state, `spec/06-stdlib/data.md:62`); only wall time changes. Values shared with
 other branches or captured by closures are never unique, so persistence is unaffected.
+
+**Moves under `try`.** A moved slot must never be observable empty: the move reads the slot
+**after every other operand** of the statement has been evaluated (`f(x)` in
+`xs = list.push(xs, f(x))` runs first), so a raise caught by a `try` leaves `xs` intact. If an
+operand after the move can still raise, the unwind restores the slot.
+
+**Heap.** In-place growth is charged exactly as the copy path: the new node's bytes are
+allocated (and the limit checked) first, the old node's `Charge` released after, so the live
+total and its peak are those of the copy path whatever the uniqueness. In place is used only
+when every node on the path is unshared **and** its `Charge` belongs to this run's ledger (never
+a host value or another session's); uniqueness depends on timing (pool jobs, sibling drops), so
+it may change wall time only, never a charge (`spec/06-stdlib/data.md:62-64`).
 
 **Gain.** *Estimate* 3 to 5 times faster push and set loops. **Cost.** Medium: a liveness pass
 over each function's statements in `prepare.rs`. **Risk.** Medium; the in-place path must keep
@@ -492,28 +511,35 @@ let pairs = [(a, b) for a in xs for b in ys if a < b]
 ```
 
 Grammar: `list_lit = "[" , expr , comp_clause , { comp_clause } , "]" | …` with
-`comp_clause = "for" , pattern , "in" , or_expr | "if" , expr`. After the first expression of a
+`comp_clause = "for" , pattern , "in" , pipe_expr | "if" , expr`. After the first expression of a
 list literal the parser sees `for` (a keyword, rule 8 already gives `in` its loop meaning there),
-which no other list form allows, so there is no ambiguity. The source of a `for` clause is an
-`or_expr`, so `if` ends it.
+which no other list form allows, so there is no ambiguity. The source of a `for` clause is a
+`pipe_expr` (`for f in files |> .filter(p)`), and `if` or `for` ends it. A record or variant
+literal in a clause must be parenthesised, as in a loop head (brace rule 1).
 
 Desugaring (innermost first):
 
 | Form | Core IR |
 | --- | --- |
 | `[e for p in xs]` | `list.map(xs, \|p\| e)` |
-| `[e for p in xs if c]` | `list.flat_map(xs, \|p\| if c { [e] } else { [] })` |
+| `[e for p in xs if c]` | `list.flat_map(xs, \|p\| list.filter([()], \|_\| c) \|> .map(\|_\| e))` |
 | `[e for p in xs for q in ys …]` | `list.flat_map(xs, \|p\| [e for q in ys …])` |
 | source a map `m` | `map.entries(m)` in its place (pairs in key order, as `for`) |
-| source a range `a..b` | `list.range(a, b)` (at most 1,000,000 elements, as any list) |
+| source a range `a..b` | `list.range(a, b)`: a range of more than 1,000,000 elements raises `Invalid` before any element is produced, as `list.range` does (a `for` loop over it does not) |
 
 `flat_map` keeps the loop's interleaving (the condition, then the element, element by element),
 so effects and errors come in the same order as in the canonical loop, and it never collapses
-`T??` as a `filter_map` would. A refutable pattern raises `Invalid` on a mismatch, as in `for`.
+`T??` as a `filter_map` would. The one-element `filter` gives the condition **filter
+semantics**: its result's own labels carry the labels of `c`, so the comprehension's result is
+labelled as `list.filter`'s is, without Q2 (chapter 03 states it: "a comprehension's result
+carries the labels of every condition that decided which elements it kept"). A refutable pattern
+raises `Invalid` on a mismatch, as in `for`. **Jumps.** The clauses and the element are closure
+bodies, so `return`, `break` and `continue` there, and assigning a `var` declared outside, are
+check errors naming the comprehension ("a comprehension's element cannot `break` the enclosing
+loop; use a `for` loop").
 
 **Equivalence.** By construction a comprehension *is* its vectorised form, so E-1 to E-6 relate it
-to the loop. One caveat: the labels of `c` are an implicit flow in the `if` and are dropped,
-exactly as in the loop; the explicit `list.filter` keeps them (open question Q2 closes this).
+to the loop: labels equal `list.filter` then `list.map`, ⊇ the loop's.
 **Cost.** Parser, checker (element type from the source), lowering, printer, about 400 lines
 with tests. **Risk.** Low. **Interchangeability.** High: it is the loop's shape with the
 built-in's semantics.
@@ -531,8 +557,14 @@ Rule: `_` in expression position (today an error: `_` is only the wildcard patte
 the parameter of an implicit one-parameter closure whose body is the **smallest argument, pipe
 stage or call that properly contains the `_`**. So `xs.map(_ + 1)` is `xs.map(|a| a + 1)`, a bare
 `_` argument makes the enclosing call the body (`add(_, 2)` is `|a| add(a, 2)`), and `f(g(_))` is
-`f(|a| g(a))`. At most one `_` per implicit closure (a second is a parse error: write a closure); `_`
-never crosses a closure, block or `match` arm. In patterns `_` keeps its wildcard meaning; the
+`f(|a| g(a))`. A method call's **receiver is not an argument**: in `_.path.len()` the `_` is
+inside the receiver, so the smallest enclosing argument or stage is taken (`xs.map(_.path.len())`
+is `xs.map(|a| a.path.len())`), and a bare `_` receiver (`_.len()` as an argument) is the same.
+A **pipe stage** containing `_` is itself the closure, applied to the piped value:
+`xs |> list.take(_, 3)` is `xs |> (|a| list.take(a, 3))`, that is `list.take(xs, 3)`, and
+`n |> math.max(0, _)` is `math.max(0, n)`. At most one `_` per implicit closure (a second is a
+parse error: write a closure); `_` never crosses a closure, block or `match` arm, and its body
+may not `return`, `break`, `continue` or assign an outer `var` (check errors, as for FS-1). In patterns `_` keeps its wildcard meaning; the
 parser knows which position it is in, so rule 5 (`|`) and rule 6 (patterns) are unaffected.
 
 Desugaring: an ordinary closure node with a fresh slot. Inference needs an expected function type,
@@ -574,8 +606,9 @@ fn score(r: Review) -> Float {
 Grammar: `fn_decl = … , block , [ "where" , where_block ]`, `where_block = "{" , { let_stmt ,
 ";" } , "}"`, on `fn` and `harness` declarations only. `where` is a **contextual** keyword: a
 keyword only directly after the `}` of an item's body, an identifier everywhere else, so no
-existing name breaks; semicolon rule 3 gains `where` (a line starting with it continues the
-item). Desugaring: the `let`s are placed at the start of the body block, in written order,
+existing name breaks. The token reader continues a line that starts with `where` **only when
+the previous token is the `}` closing an item's body** (it already tracks the item keyword that
+opened the brace), never elsewhere. Desugaring: the `let`s are placed at the start of the body block, in written order,
 after the parameters are bound; they see the parameters and each earlier `where` binding, and
 the body sees them all. Evaluation is **strict and in order** (Ratio is strict), so the
 bindings must be effect-free: an effect there is refused as in a constant (`C0016`, with the
@@ -642,50 +675,53 @@ user enums without function-typed fields (covariant by construction), and `?` on
 ### R-2 and R-3 (adopt): combinators on `Result<T>` and `T?`
 
 Two modules whose first parameter is the receiver, so every row is also a method
-(`r.map(f).and_then(g).unwrap_or(d)`): `res` for `Result<T>` and `opt` for `T?`. Short names, as
-`re`, `vec` and `url`; `result` is taken by the control function `result(f)`. Method lookup goes
-by the receiver's static type, so `x.map(f)` on `[Int]?` is `opt.map` and `x?.map(f)` keeps its
+(`r.map(f).and_then(g).unwrap_or(d)`): `outcome` for `Result<T>` and `maybe` for `T?`. Names: `maybe` (Haskell's
+`Maybe`, for options) and `outcome`. `result` is taken by the control function `result(f)`, and
+the short `res` and `opt` are common local names that would draw the shadowing warning
+(`spec/03-semantics.md:394-398`) in ordinary code; neither `maybe` nor `outcome` is a std module,
+a prelude name or a local in the corpus, `std` or the spec (`outcome` appears only as a parameter
+name of `think.reflect`'s signature, which shadows nothing). Method lookup goes
+by the receiver's static type, so `x.map(f)` on `[Int]?` is `maybe.map` and `x?.map(f)` keeps its
 optional-chaining meaning (`list.map` on the present value).
 
 **Label rule.** Every result carries the labels of everything that decided it: `Lr`, the
 receiver's own labels (for a `Result`, which variant it is; for `T?`, the present value's own
 labels or those of the `none`), is added to whatever the call returns on either branch, and the
-labels of any callback result that decided a choice (`opt.filter`) too. Values that pass through
+labels of any callback result that decided a choice (`maybe.filter`) too. Values that pass through
 keep their own labels. **Charge:** `const` (1 step) plus the callback's own steps; `sequence`
 and `traverse` are `linear` (`1 + ⌈n/64⌉` before, the output part on return), stopping early as
 `list.any` does. **Needs:** `pure`, or "as `f`" for the rows with a callback, like `list.map`.
 
 | Built-in | Signature | Result and labels |
 | --- | --- | --- |
-| `res.map` | `<T, U>(r: Result<T>, f: fn(T) -> U) -> Result<U>` | `Ok { f(v) }` or `r`; own labels `+ Lr` |
-| `res.and_then` | `<T, U>(r: Result<T>, f: fn(T) -> Result<U>) -> Result<U>` | `f(v)` or `r`; `+ Lr` |
-| `res.map_err` | `<T>(r: Result<T>, f: fn(Error) -> Error) -> Result<T>` | `Err { f(e) }` or `r`; `+ Lr` |
-| `res.or_else` | `<T>(r: Result<T>, f: fn(Error) -> Result<T>) -> Result<T>` | `f(e)` or `r`; `+ Lr` |
-| `res.unwrap_or` | `<T>(r: Result<T>, d: T) -> T` | `v` or `d`; `+ Lr` |
-| `res.unwrap_or_else` | `<T>(r: Result<T>, f: fn(Error) -> T) -> T` | `v` or `f(e)`; `+ Lr` |
-| `res.or_raise` | `<T>(r: Result<T>) -> T` | `v + Lr`, or raises `e` unchanged (kind, message, data, site, scope) with `+ Lr`; the target of R-4 |
-| `res.ok` | `<T>(r: Result<T>) -> T?` | `v` or `none`; `+ Lr` |
-| `res.is_ok`, `res.is_err` | `<T>(r: Result<T>) -> Bool` | `Lr` |
-| `res.zip` | `<A, B>(a: Result<A>, b: Result<B>) -> Result<(A, B)>` | the first `Err` in argument order, else `Ok { (x, y) }`; `+ La + Lb` |
-| `res.sequence` | `<T>(rs: [Result<T>]) -> Result<[T]>` | the first `Err` by index, else `Ok` of the values; own labels: the list's own and `Lr` of every element read |
-| `res.traverse` | `<T, U>(xs: [T], f: fn(T) -> Result<U>) -> Result<[U]>` | stops calling `f` at the first `Err`; labels as `sequence`, plus `xs`'s own |
-| `opt.map` | `<T, U>(x: T?, f: fn(T) -> U) -> U?` | `f(v)` or `none`; `+ Lx` (a `U` that is itself an option collapses, `T??` is `T?`) |
-| `opt.and_then` | `<T, U>(x: T?, f: fn(T) -> U?) -> U?` | `f(v)` or `none`; `+ Lx` |
-| `opt.or_else` | `<T>(x: T?, f: fn() -> T?) -> T?` | `x` or `f()`; `+ Lx` |
-| `opt.unwrap_or` | `<T>(x: T?, d: T) -> T` | exactly `x ?? d` (value, labels, steps) |
-| `opt.unwrap_or_else` | `<T>(x: T?, f: fn() -> T) -> T` | `v` or `f()`; `+ Lx` |
-| `opt.ok_or` | `<T>(x: T?, err: Error) -> Result<T>` | `Ok { v }` or `Err { err }`; `+ Lx` |
-| `opt.filter` | `<T>(x: T?, p: fn(T) -> Bool) -> T?` | `x` or `none`; `+ Lx +` the labels of `p`'s result |
-| `opt.zip` | `<A, B>(a: A?, b: B?) -> (A, B)?` | `+ La + Lb` |
-| `opt.is_some`, `opt.is_none` | `<T>(x: T?) -> Bool` | `Lx` |
+| `outcome.map` | `<T, U>(r: Result<T>, f: fn(T) -> U) -> Result<U>` | `Ok { f(v) }` or `r`; own labels `+ Lr` |
+| `outcome.and_then` | `<T, U>(r: Result<T>, f: fn(T) -> Result<U>) -> Result<U>` | `f(v)` or `r`; `+ Lr` |
+| `outcome.map_err` | `<T>(r: Result<T>, f: fn(Error) -> Error) -> Result<T>` | `Err { f(e) }` or `r`; `+ Lr` |
+| `outcome.or_else` | `<T>(r: Result<T>, f: fn(Error) -> Result<T>) -> Result<T>` | `f(e)` or `r`; `+ Lr` |
+| `outcome.unwrap_or` | `<T>(r: Result<T>, d: T) -> T` | `v` or `d`; `+ Lr` |
+| `outcome.unwrap_or_else` | `<T>(r: Result<T>, f: fn(Error) -> T) -> T` | `v` or `f(e)`; `+ Lr` |
+| `outcome.or_raise` | `<T>(r: Result<T>) -> T` | `v + Lr`, or `raise e` with `Lr` added to the error value's own labels; the target of R-4 |
+| `outcome.ok` | `<T>(r: Result<T>) -> T?` | `v` or `none`; `+ Lr` |
+| `outcome.is_ok`, `outcome.is_err` | `<T>(r: Result<T>) -> Bool` | `Lr` |
+| `outcome.zip` | `<A, B>(a: Result<A>, b: Result<B>) -> Result<(A, B)>` | the first `Err` in argument order, else `Ok { (x, y) }`; `+ La + Lb` |
+| `outcome.sequence` | `<T>(rs: [Result<T>]) -> Result<[T]>` | the first `Err` by index, else `Ok` of the values; own labels: the list's own and `Lr` of every element read |
+| `outcome.traverse` | `<T, U>(xs: [T], f: fn(T) -> Result<U>) -> Result<[U]>` | stops calling `f` at the first `Err`; labels as `sequence`, plus `xs`'s own |
+| `maybe.map` | `<T, U>(x: T?, f: fn(T) -> U) -> U?` | `f(v)` or `none`; `+ Lx` (a `U` that is itself an option collapses, `T??` is `T?`) |
+| `maybe.and_then` | `<T, U>(x: T?, f: fn(T) -> U?) -> U?` | `f(v)` or `none`; `+ Lx` |
+| `maybe.or_else` | `<T>(x: T?, f: fn() -> T?) -> T?` | `x` or `f()`; `+ Lx` |
+| `maybe.unwrap_or` | `<T>(x: T?, d: T) -> T` | not a built-in: the checker resolves the method and lowering writes `x ?? d`, so `d` is evaluated only when `x` is `none` |
+| `maybe.unwrap_or_else` | `<T>(x: T?, f: fn() -> T) -> T` | `v` or `f()`; `+ Lx` |
+| `maybe.ok_or` | `<T>(x: T?, err: Error) -> Result<T>` | `Ok { v }` or `Err { err }`; `+ Lx` |
+| `maybe.filter` | `<T>(x: T?, p: fn(T) -> Bool) -> T?` | `x` or `none`; `+ Lx +` the labels of `p`'s result |
+| `maybe.zip` | `<A, B>(a: A?, b: B?) -> (A, B)?` | `+ La + Lb` |
+| `maybe.is_some`, `maybe.is_none` | `<T>(x: T?) -> Bool` | `Lx` |
 
-`res.sequence(par_map_settled(xs, f))` is `par_map` without cancellation whose error is the first
+`outcome.sequence(par_map_settled(xs, f))` is `par_map` without cancellation whose error is the first
 by index (E-4's `par_map` exception does not apply).
 
 ### R-4 (adopt): postfix `?`
 
-`e?`, for `e: Result<T>`, is `res.or_raise(e)`: the `Ok` value, or the `Err`'s error raised again
-unchanged. It is the bridge from `Result` values back to raised errors, as `result(|| …)` is the
+`e?`, for `e: Result<T>`, is `outcome.or_raise(e)`: the `Ok` value, or exactly `raise e.error`. It is the bridge from `Result` values back to raised errors, as `result(|| …)` is the
 bridge the other way: `result(|| r?)` equals `r` in value. Grammar: `postfix = … | "?"`
 (level 11, with calls and fields). Only on `Result`: on a `T?` it is a check error suggesting
 `x ?? d` or `x.ok_or(err)?` (Rust's `?` on an option returns `none` from the function; Ratio
@@ -707,9 +743,11 @@ closure's call (a `list.map` stops there, E-4); in a `par` or `par_map` branch i
 branch, which cancels its siblings fail-fast (recorded, PC-1); in a `race` branch it is that
 branch's failure; in `par_fold`'s `step`, `Fold.Next { acc: acc.push(r?) }` turns an `Err`
 outcome into fail-fast, cancelling the running branches; inside `result(|| …)` it is caught back
-into an `Err`. An `Err` never holds `Cancelled` or `Replay` (`result` lets them through), and a
-re-raised `Budget` keeps its scope, so `?` cannot move an uncatchable error into a catchable
-place. **Labels:** the value gets `Lr`; a re-raised error gets `Lr` on its message and data.
+into an `Err`. **Safety** rests on `result`, not on `?`: `result` lets `Cancelled`, `Replay`
+and the frame's own `Budget` through, so an `Err` never holds an error that may not be caught
+there, and `?` only raises what a `raise` of that value would. **Labels:** the value gets `Lr`;
+a raised error value gets `Lr` added to its own labels (so its kind, message and data read as
+labelled).
 **Charge:** the call node and the `const` built-in, 2 steps.
 
 ### R-5 (adopt): chain blocks `do { a <- f(x); … }`
@@ -737,21 +775,29 @@ with at least one bind is a **chain block**:
   kind (convert with `.ok()` or `.ok_or(err)`), else a check error.
 - **Value.** The final expression `e: U`, wrapped: `Ok { value: e }` for a `Result` chain
   (`Result<U>`), `e` as `U?` for an option chain (an option passes through, `T??` is `T?`).
-- **Other statements.** `let` and expression statements run in order. An expression statement
-  of the chain's own type is a check error ("bind it with `_ <- e`, or ignore it with
-  `let _ = e`"), so no `Err` is dropped silently.
-- **Exits.** `return`, `break` and `continue` may not leave a chain block, and it may not assign
-  a `var` declared outside it (check errors): its body becomes closures. `return` keeps its Java
+- **Other statements.** `let` and expression statements run in order. **Any discarded value of
+  the chain's kind** (a `Result` in a `Result` chain, an option in an option chain), whether a
+  top-level statement or a value dropped inside a nested block or `if`, is a check error ("bind
+  it with `_ <- e`, or ignore it with `let _ = e`"), so no `Err` is dropped silently.
+- **Final expression.** If it is itself of the chain's kind it is refused ("bind it: `x <- e; x`"),
+  since wrapping would nest (`Result<Result<U>>`).
+- **`<-` in a nested block.** Binds are recognised only directly in the chain's block; a `x<-y`
+  inside a nested block or `if` gets a hint ("`<-` binds only at the top of a `do` block").
+- **Exits and `var`s.** `return`, `break` and `continue` may not leave a chain block, and it may
+  not assign a `var` declared outside it (check errors): its body becomes closures. A `var`
+  declared in the chain before a bind is **captured by value** by the closures after it; assigning
+  it after the bind is a check error naming the bind ("`n` is captured by the bind at 4:3; use
+  `let` or a new name"). `return` keeps its Java
   meaning, leaving the function, everywhere (Q5); the user's sketch `return h(b)` is written
   `h(b)`.
 - **Desugaring.**
 
   ```text
   do { p1 <- e1; s1…; p2 <- e2; s2…; e }
-    ⇒ res.and_then(e1, |p1| { s1…; res.and_then(e2, |p2| { s2…; Ok { value: e } }) })
+    ⇒ outcome.and_then(e1, |p1| { s1…; outcome.and_then(e2, |p2| { s2…; Ok { value: e } }) })
   ```
 
-  `opt.and_then` and a bare `e` for an option chain. A refutable pattern that does not match
+  `maybe.and_then` and a bare `e` for an option chain. A refutable pattern that does not match
   raises `Invalid`, as in `for`. Raises inside the block propagate as raises: the chain
   short-circuits on `Err` values only (wrap it in `result(|| …)` to reify those too).
 - **Labels.** Each `and_then` adds its receiver's own labels, so the chain's result carries the
@@ -763,7 +809,7 @@ with at least one bind is a **chain block**:
 
 **With comprehensions (FS-1).** A comprehension builds a list and does not short-circuit: over a
 function returning `Result<U>` it gives `[Result<U>]`. To stop at the first `Err`, use
-`res.traverse(xs, f)` (stops calling `f`) or `res.sequence([f(x) for x in xs])` (calls every
+`outcome.traverse(xs, f)` (stops calling `f`) or `outcome.sequence([f(x) for x in xs])` (calls every
 `f`); `[f(x)? for x in xs]` raises at the first `Err` by index. Comprehensions are deliberately
 not made monadic: the same brackets would then mean two things.
 
@@ -774,7 +820,7 @@ not made monadic: the same brackets would then mean two things.
 
 `C0039` reports an effect whose only guards are model-derived conditions. The new forms hide a
 branch inside a call, so the lint must see it: the callback of a branching combinator
-(`res.map`, `and_then`, `map_err`, `or_else`, `unwrap_or_else`, and the `opt.*` rows with a
+(`outcome.map`, `and_then`, `map_err`, `or_else`, `unwrap_or_else`, and the `maybe.*` rows with a
 callback) is treated as guarded by its receiver (a model-only guard when the receiver is
 derived); the statements after a `?` on a derived `Result` are guarded by it; chain blocks follow
 from their desugaring. `r.is_ok()` as an `if` condition is already handled as a derived
@@ -800,18 +846,21 @@ When no expression in the block raises:
 
 When an expression raises, A, B and D propagate the raise, and C returns it as an `Err`.
 
-**E-8 Options.** `x.unwrap_or(d)` is `x ?? d` exactly; `x.map(f)` equals `if let v = x { f(v) }
+**E-8 Options.** `x.unwrap_or(d)` is lowered to `x ?? d`, so it is lazy in `d` and identical in
+value, labels and steps; `x.map(f)` equals `if let v = x { f(v) }
 else { none }` in value, with labels ⊇ (the `if let` drops `Lx` on `none`, an implicit flow).
 
-**E-9 Lists of results.** `res.traverse(xs, f)`, `result(|| list.map(xs, |x| f(x)?))` and the loop
+**E-9 Lists of results.** `outcome.traverse(xs, f)`, `result(|| list.map(xs, |x| f(x)?))` and the loop
 `for x in xs { out = out.push(f(x)?) }` inside `result` agree on value and on the first failing
-index, and none calls `f` after it; `res.sequence(list.map(xs, f))` agrees on value but calls `f`
+index, and none calls `f` after it; `outcome.sequence(list.map(xs, f))` agrees on value but calls `f`
 on every element.
 
-**Errata.** `spec/06-stdlib/README.md:144` (a note: the combinators live in `res` and `opt`);
-`spec/06-stdlib/data.md` (two new sections `res` and `opt`, rows in the submodule table and the
+**Errata.** `spec/06-stdlib/README.md:144` (a note: the combinators live in `outcome` and `maybe`);
+`spec/06-stdlib/data.md` (two new sections `outcome` and `maybe`, rows in the submodule table and the
 `const`/`linear` classes); `spec/06-stdlib/control.md:124` (`result(|| r?)` equals `r`);
 `spec/03-semantics.md:480` (after `result`: the `?` operator and chain blocks, with E-7);
+`spec/03-semantics.md:228` (implicit flows: state what the machine already does, that `and`,
+`or` and `??` add the labels of the value that chose the result, and FS-1's comprehension rule);
 `spec/02-syntax.md` (`postfix` gains `"?"`, `bind_stmt` in `do` blocks, `where` after a body, a
 note at `:178` that the token reader still reads `<` then `-`, and new disambiguation rules for
 `<-` and `?`).
@@ -830,7 +879,7 @@ directive, labelled ones with `secret` (source 0).
 | 2 | same | same | `[1, secret 2, 3]` | value 6, labels `{0}` in both (labels =) |
 | 3 | same | `list.sum` | `[]` with own label `secret` | value 0; loop unlabelled, built-in `{0}` (labels ⊇) |
 | 4 | push loop | `list.map(xs, \|x\| x * 2)`; FS-1 `[x * 2 for x in xs]` | `[1, 2, 3]` | `[2, 4, 6]`; element labels equal; list own labels ⊇ |
-| 5 | `if x % 2 == 0 { out = out.push(x) }` | `list.filter`; FS-1 with `if` | `[1, 2, secret 3, 4]` | `[2, 4]`; `filter` result own labels `{0}`, loop and comprehension none (implicit flow) |
+| 5 | `if x % 2 == 0 { out = out.push(x) }` | `list.filter`; FS-1 with `if` | `[1, 2, secret 3, 4]` | `[2, 4]`; `filter` and comprehension own labels `{0}`, loop none (implicit flow) |
 | 6 | `for x in xs { if p(x) { found = true; break } }` | `list.any(xs, p)` | `p` true at index 1 | `true`; callback called twice in both (a counter in the result) |
 | 7 | loop calling `f` | `list.map(xs, f)` | `f` raises `Invalid` at indexes 2 and 4 | `Invalid` at element 2 in both; element 3 never called |
 | 8 | `for x in xs { s += x }` | `list.sum` | `[9223372036854775807, 1]` | `Invalid` (overflow) in both |
@@ -842,13 +891,15 @@ directive, labelled ones with `secret` (source 0).
 | 14 | `par_map(xs, f)` | `list.map(xs, f)` | one failing element | same error kind and element |
 | 15 | loop of length 10,000 | `list.map` | steps left 5,000 | `Budget { which: steps }` in both (kind only) |
 | 16 | E-7 forms C and D | chain A, combinators B | `f` gives a secret `Ok 1`, `g` an `Err` `User { tag: "b" }` | `Err` tag `b`, same site in all four; labels `A = B ⊇ C ⊇ D`; steps `A = B` |
-| 17 | `result(\|\| list.map(rs, \|r\| r?))` | `res.sequence(rs)` | `[Ok 1, Err a, Err b]` | `Err a` in both |
-| 18 | `x ?? d` | `x.unwrap_or(d)` | `none` with a secret own label | identical value, labels and steps |
-| 19 | loop with `f(x)?` inside `result` | `res.traverse(xs, f)` | `f` fails at index 1 of 3 | `Err` of index 1; `f` called twice in both |
+| 17 | `result(\|\| list.map(rs, \|r\| r?))` | `outcome.sequence(rs)` | `[Ok 1, Err a, Err b]` | `Err a` in both |
+| 18 | `x ?? d` | `x.unwrap_or(d)` | `x` present, `d` a call that raises | no raise in both (`d` not evaluated); identical value, labels and steps; the same IR |
+| 19 | loop with `f(x)?` inside `result` | `outcome.traverse(xs, f)` | `f` fails at index 1 of 3 | `Err` of index 1; `f` called twice in both |
 | 20 | `par_fold` with `step` using `r?` | `par_map` | one failing element | the same error kind |
+| 21 | `try { xs = list.push(xs, f(x)) } catch e { }` (LV-8) | the same with fast paths off | `f` raises | `xs` unchanged in both; identical values, labels, steps |
+| 22 | loop body at the depth limit | `list.map` | `call_depth` set to the loop's depth + 1 | loop completes; built-in raises `Budget { which: call_depth }` (E-4) |
 
 **Fast-path tests** (P2): the whole corpus, `conformance/eval` and `conformance/data` with the
-fast paths on and off give identical values, labels, steps and heap peaks; a differential property
+fast paths on and off give identical values, labels and steps, and heap peaks deterministic and within the stated bounds; a differential property
 test for LV-3 over random simple lambdas (overflow and division by zero included); for LV-8, the
 summary property after random in-place and shared pushes; the existing hash snapshots stay
 unchanged (no IR change).
@@ -868,25 +919,27 @@ model-derived `Result` and after a `?` on one.
 
 | Slice | Content | Starts after | Owned files | In-flight overlap |
 | --- | --- | --- | --- | --- |
-| **P0** errata and corpus | E-1 to E-6 in the spec; `conformance/equiv/` and `tests/equiv.rs` | stages 8 and 9 merged (needs their built-ins) | `spec/03-semantics.md`, `spec/06-stdlib/data.md`, `spec/06-stdlib/control.md`, `spec/07-security.md`, `spec/README.md`, `conformance/equiv/**`, `conformance/spec-map.txt`, `crates/ratio-eval/tests/equiv.rs` | Draft bump: only one open PR bumps the draft; stage 10 takes 0.15, so P0 takes the next free number and must not be open at the same time as 11a's spec PR |
-| **P1** built-in-local | LV-4a, LV-6, LV-7 | stages 8 and 9 merged; runs beside 11a | `plist.rs`, `builtins/util.rs`, `builtins/list.rs`, `builtins/vec.rs`, `builtins/math.rs`, `tests/data3_limits.rs` | none: 10 and 11a do not touch these files (11a owns `control` and the machine) |
+| **P0** errata and corpus | E-1 to E-6 in the spec; `conformance/equiv/` and `tests/equiv.rs` | stages 8, 9 and 10 merged (needs their built-ins; 10 edits chapters 03 and 07) | `spec/03-semantics.md`, `spec/06-stdlib/data.md`, `spec/06-stdlib/control.md`, `spec/07-security.md`, `spec/README.md`, `conformance/equiv/**`, `conformance/spec-map.txt`, `crates/ratio-eval/tests/equiv.rs` | Draft bump: only one open PR bumps the draft; P0 takes the next free draft at merge time and is never open beside another draft-bumping PR |
+| **P1** built-in-local | LV-4a, LV-6 | stages 8 and 9 merged; runs beside 11a; before D4 (both own `builtins/list.rs`) | `plist.rs`, `builtins/util.rs`, `builtins/list.rs`, `builtins/vec.rs`, `builtins/math.rs`, `tests/data3_limits.rs` | none: 10 and 11a do not touch these files (11a owns `control` and the machine) |
 | **P2** machine hot path | LV-1, LV-2, LV-3, LV-4b, LV-5 | stage 11a merged (10 and 11a rewrite `machine.rs`: frames, scheduler) | `machine.rs` (and a new `machine/fast.rs`), `prepare.rs`, `stack.rs`, `heap.rs`, `builtins.rs` (`Task` protocol), `builtins/list.rs`, `builtins/map.rs` | 11b (control, `par_fold`) also touches `machine.rs` and `builtins.rs`: land P2 before 11b starts, or after it merges, never both open |
 | **P2b** | LV-8 | P2 merged | `prepare.rs`, `machine.rs`, `plist.rs`, `pmap.rs` | as P2 |
-| **D4** built-ins | R-2, R-3 (`res.*`, `opt.*`), FS-7 (`list.scan`, `zip_with`) | stages 8, 9 and C merged (C owns the checker's signatures); after P0 (both edit `data.md`) | `crates/ratio-eval/src/builtins/{res,opt}.rs` (new), `builtins/list.rs`, one new block in `builtins.rs`'s table, `crates/ratio-check/src/builtins.rs` (signatures), `conformance/builtins.txt`, `conformance/data/{res,opt}-*.ratio`, `spec/06-stdlib/data.md`, `spec/06-stdlib/README.md` | 11a adds control rows to `builtins.rs`'s table: a separate block, rebased by whichever lands second |
-| **F** functional syntax | FS-1 to FS-4, FS-6, R-4 to R-6 | D4 merged (the desugarings call `res.and_then` and `res.or_raise`); stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body,lint}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md`, `spec/06-stdlib/control.md`, `conformance/syntax/**`, `conformance/types/**`, `conformance/taint/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
+| **Q2** (optional, user decision) | the value of `if`, `if let`, `match` and `while let` carries the labels of the condition or scrutinee that chose the branch (own labels, and for `match` the labels the tested patterns read); statements unchanged | 11a merged | `machine.rs`, `spec/03-semantics.md`, `crates/ratio-eval/tests/labels.rs` | as P2; never open beside P2 |
+| **D4** built-ins | R-2, R-3 (`outcome.*`, `maybe.*`), FS-7 (`list.scan`, `zip_with`) | stages 8, 9, 10 and C merged (C owns the checker's signatures; 10 edits the built-in tables); after P0 (both edit `data.md`) and P1 (both own `builtins/list.rs`) | `crates/ratio-eval/src/builtins/{outcome,maybe}.rs` (new), `builtins/list.rs`, one new block in `builtins.rs`'s table, `crates/ratio-check/src/builtins.rs` (signatures), `conformance/builtins.txt`, `conformance/data/{outcome,maybe}-*.ratio`, `spec/06-stdlib/data.md`, `spec/06-stdlib/README.md` | 11a adds control rows to `builtins.rs`'s table: a separate block, rebased by whichever lands second |
+| **F** functional syntax | FS-1 to FS-4, FS-6, R-4 to R-6 | D4 merged (the desugarings call `outcome.and_then` and `outcome.or_raise`); stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body,lint}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md`, `spec/06-stdlib/control.md`, `conformance/syntax/**`, `conformance/types/**`, `conformance/taint/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
 
-P1, D4 and F can run in parallel with 11a; P2 is the only slice that waits for the scheduler. The
+Every spec-bearing slice takes the next free draft at merge time. P1, then D4, then F can run beside 11a; P2 is the only slice that waits for the scheduler. The
 deferred items (LV-9, LV-10) and the remaining options wait for stage 24's measurements.
 
 ## Open questions
 
-Decided by the user: FS-1, FS-2, FS-3 and FS-7 (the former Q1). Remaining:
+Decided by the user: FS-1, FS-2, FS-3 and FS-7 (the former Q1). Recorded as following the
+recommendations: Q4 (the fixed `Error`), Q5 (`return` keeps its function meaning), Q6 (bare
+`<-` with the nested-block hint); Q7 defers FS-5 and FS-10, pending the user. Remaining:
 
-- **Q2 (implicit flows in values).** Should an `if` or `match` *value* carry the labels of its
-  condition or scrutinee? Then a comprehension's filter labels its result as `list.filter` does,
-  and `if secret { a } else { b }` is labelled, at no cost to statements (assignments under a
-  labelled branch stay an implicit flow, as today). Recommended yes (a chapter 03 change and one
-  line in the machine), but it relabels existing programs' values, so it is the user's call.
+- **Q2 (implicit flows in values).** FS-1 no longer depends on it (its filter keeps the labels in
+  lowering). Adopt the optional Q2 slice after 11a, so that `if secret { a } else { b }` and
+  `match` values are labelled (statements unchanged)? Recommended yes; it relabels existing
+  programs' values, so it is the user's call.
 - **Q3 (calibration).** Agree that stage 24 calibrates the 64-units-per-step rate only after
   LV-1 to LV-3 land, since they widen the wall-time gap between interpreted and built-in steps
   from 4–8× to an *estimated* 10–20×?
