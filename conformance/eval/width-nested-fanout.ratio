@@ -1,0 +1,9 @@
+// expect: value [[1, 2, 3], [2, 4, 6], [3, 6, 9]]
+
+// A 3 by 3 nested `par_map` at width 2: every outer branch parks while its inner branches
+// run, so they find slots (chapter 03, "Width and admission"; a deadlock would hang here).
+fn main() -> [[Int]] {
+  with { limits: { width: 2 } } {
+    par_map([1, 2, 3], |i: Int| par_map([1, 2, 3], |j: Int| i * j, limit: 3), limit: 3)
+  }
+}

@@ -1,0 +1,17 @@
+// expect: value ["a after 1", "b after 2", "c after 1"]
+// fixture: fail-first-b
+
+// The first attempt of branch 1 fails; its retry has the same key whichever branch finishes
+// first, so a replay under another completion order consumes the same keys (design PC-1).
+fn review(f: Str) -> Str {
+  var n = 0
+  loop {
+    n = n + 1
+    let ok = try { tools.read_file(f); true } catch e { false }
+    if ok { break "{f} after {n}" }
+  }
+}
+
+fn main() -> [Str] {
+  par_map(["a", "b", "c"], |f: Str| review(f), limit: 3)
+}

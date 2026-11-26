@@ -2,7 +2,10 @@
 //! by class, the drain fence and re-parenting, `defer`, timeouts and deadlines, budgets
 //! under concurrency, and the guard at every secrecy sink, against `ScriptedHost`.
 
-#![allow(clippy::many_single_char_names, reason = "programs, hosts, finishes and calls named briefly")]
+#![allow(
+    clippy::many_single_char_names,
+    reason = "programs, hosts, finishes and calls named briefly"
+)]
 
 mod support;
 

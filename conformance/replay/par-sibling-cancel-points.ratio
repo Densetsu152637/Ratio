@@ -1,0 +1,12 @@
+// expect: runtime-error User
+// fixture: slow-reads
+
+// The first branch fails while its sibling is part-way through its reads: the sibling is
+// cancelled, and a replay cancels it at the recorded (effect index, step count).
+fn main() -> Str {
+  let (_, done) = par {
+    { tools.read_file("fast"); raise fail("boom", "the first branch failed") }
+    { tools.read_file("slow1"); tools.read_file("slow2"); tools.read_file("slow3"); "done" }
+  }
+  done
+}

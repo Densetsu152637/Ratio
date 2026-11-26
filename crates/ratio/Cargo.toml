@@ -11,12 +11,19 @@ description = "Ratio, the programming language for agent harnesses: the public f
 [lib]
 name = "ratio"
 
+[features]
+# The host contract suite (`ratio::host_tests`): a host's own tests enable it.
+host-tests = ["ratio-eval/host-tests"]
+
 [dependencies]
 ratio-syntax.workspace = true
 ratio-names.workspace = true
 ratio-check = { path = "../ratio-check", version = "0.1.0" }
 ratio-ir = { path = "../ratio-ir", version = "0.1.0" }
 ratio-eval = { path = "../ratio-eval", version = "0.1.0" }
+
+[dev-dependencies]
+ratio-eval = { path = "../ratio-eval", version = "0.1.0", features = ["host-tests"] }
 
 [lints]
 workspace = true

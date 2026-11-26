@@ -50,6 +50,9 @@ pub enum Behaviour {
     Sequence(Vec<Result<Value, String>>),
     /// Waits for an approval first ([`ScriptedHost::pending_approvals`]); then answers.
     Approval(Value),
+    /// By the text of the call's first argument: answers from that argument's list, one per
+    /// call, in call order (the last repeats); an argument not listed answers `()`.
+    PerArg(Vec<(String, Vec<Result<Value, String>>)>),
 }
 
 /// A tool of the scripted table.
@@ -490,7 +493,22 @@ impl Future for GateWait {
 
 impl ScriptedHost {
     /// The call itself, by its behaviour, without cancellation.
-    async fn work(self: Arc<Self>, tool: String, behaviour: Behaviour) -> Result<Value, HostError> {
+    async fn work(
+        self: Arc<Self>,
+        tool: String,
+        first: String,
+        behaviour: Behaviour,
+    ) -> Result<Value, HostError> {
+        let behaviour = match behaviour {
+            Behaviour::PerArg(map) => {
+                let list = map
+                    .into_iter()
+                    .find(|(a, _)| *a == first)
+                    .map_or_else(|| vec![Ok(Value::unit())], |(_, l)| l);
+                return self.sequence(&format!("{tool}#{first}"), &list);
+            }
+            b => b,
+        };
         match behaviour {
             Behaviour::Reply(v) => Ok(v),
             Behaviour::After(d, v) => {
@@ -515,24 +533,28 @@ impl ScriptedHost {
                 .await;
                 Ok(v)
             }
-            Behaviour::Sequence(list) => {
-                let i = {
-                    let mut st = lock(&self.st);
-                    let c = st.sequence.entry(tool).or_insert(0);
-                    let i = *c;
-                    *c += 1;
-                    i
-                };
-                match list.get(i).or(list.last()) {
-                    Some(Ok(v)) => Ok(v.clone()),
-                    Some(Err(m)) => Err(HostError::ToolFailed {
-                        message: Labelled::plain(m.clone()),
-                        data: Value::unit(),
-                    }),
-                    None => Ok(Value::unit()),
-                }
-            }
+            Behaviour::Sequence(list) => self.sequence(&tool, &list),
             Behaviour::Approval(v) => Ok(v),
+            Behaviour::PerArg(_) => Ok(Value::unit()),
+        }
+    }
+
+    /// The next answer of a list, counted under `counter`.
+    fn sequence(&self, counter: &str, list: &[Result<Value, String>]) -> Result<Value, HostError> {
+        let i = {
+            let mut st = lock(&self.st);
+            let c = st.sequence.entry(counter.to_owned()).or_insert(0);
+            let i = *c;
+            *c += 1;
+            i
+        };
+        match list.get(i).or(list.last()) {
+            Some(Ok(v)) => Ok(v.clone()),
+            Some(Err(m)) => Err(HostError::ToolFailed {
+                message: Labelled::plain(m.clone()),
+                data: Value::unit(),
+            }),
+            None => Ok(Value::unit()),
         }
     }
 
@@ -569,7 +591,15 @@ impl ScriptedHost {
         };
         let n = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(n, Ordering::SeqCst);
-        let r = Arc::clone(&self).dispatch(&key, &tool, spec, &cx).await;
+        let first = call
+            .args
+            .first()
+            .and_then(|(_, v)| v.as_text())
+            .unwrap_or_default()
+            .to_owned();
+        let r = Arc::clone(&self)
+            .dispatch(&key, &tool, &first, spec, &cx)
+            .await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
         if let Some(s) = lock(&self.st).seen.get_mut(index) {
             s.finished = Some(Instant::now());
@@ -593,6 +623,7 @@ impl ScriptedHost {
         self: Arc<Self>,
         key: &str,
         tool: &str,
+        first: &str,
         spec: ToolSpec,
         cx: &EffectCtx,
     ) -> Result<Value, HostError> {
@@ -641,7 +672,8 @@ impl ScriptedHost {
         } else {
             spec.class.class
         };
-        let work = Box::pin(Arc::clone(&self).work(tool.to_owned(), spec.behaviour));
+        let work =
+            Box::pin(Arc::clone(&self).work(tool.to_owned(), first.to_owned(), spec.behaviour));
         match class {
             CancelClass::Abort => {
                 // Stopped at once when cancelled, and bounded by the deadline.

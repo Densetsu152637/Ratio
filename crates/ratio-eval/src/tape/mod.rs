@@ -571,6 +571,8 @@ pub trait Tape: Send + Sync {
     fn winner(&self, construct: &str) -> Option<u32>;
     /// The recorded first failing branch of a `par` (replay).
     fn first_failure(&self, construct: &str) -> Option<u32>;
+    /// A branch's recorded step total (replay): the branch is capped there.
+    fn step_total(&self, branch: &str) -> Option<u64>;
     /// Checks a branch's step total against the recorded one (replay).
     ///
     /// # Errors
@@ -1332,6 +1334,10 @@ impl Tape for TapeHost {
         self.loaded()?.failures.get(construct).copied()
     }
 
+    fn step_total(&self, branch: &str) -> Option<u64> {
+        self.loaded()?.steps.get(branch).copied()
+    }
+
     fn check_steps(&self, branch: &str, steps: u64) -> Result<(), String> {
         let Some(l) = self.loaded() else {
             return Ok(());
@@ -1714,7 +1720,8 @@ fn verify(l: &Loaded) -> Result<(), String> {
                             ));
                         }
                     }
-                    ("drained", None, None) => {}
+                    // Drained with a failure: the failure is its entry.
+                    ("drained", None, Some(e)) if matches!(e.res, Res::Error(_)) => {}
                     ("aborted" | "abandoned" | "withdrawn", None, None) => {}
                     _ => {
                         return Err(format!(

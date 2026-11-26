@@ -656,6 +656,8 @@ pub struct Machine {
     cancel_seen: bool,
     /// The next timeout scope id (from 1; 0 is no scope).
     next_scope: u32,
+    /// In replay: the step count this branch stops at (its recorded total).
+    step_cap: Option<u64>,
     #[cfg(debug_assertions)]
     work_log: Vec<BuiltinWork>,
 }
@@ -754,6 +756,7 @@ impl Machine {
             fenced: None,
             cancel_seen: false,
             next_scope: 1,
+            step_cap: None,
             #[cfg(debug_assertions)]
             work_log: Vec::new(),
         };
@@ -985,7 +988,7 @@ impl Machine {
     /// Debits `n` steps, or raises `Budget { which: steps }` without debiting.
     fn charge(&mut self, n: u64, loc: Loc) -> Result<(), RtError> {
         let next = self.steps.saturating_add(n);
-        if next > self.frames.step_limit {
+        if next > self.frames.step_limit || self.step_cap.is_some_and(|c| next > c) {
             let mut e = raise(
                 &self.p,
                 Kind::Budget("steps"),
@@ -3801,6 +3804,7 @@ impl Machine {
             fenced: None,
             cancel_seen: false,
             next_scope: 1,
+            step_cap: None,
             #[cfg(debug_assertions)]
             work_log: Vec::new(),
         };
@@ -3943,6 +3947,14 @@ impl Machine {
     /// The ledger nodes of the frames open in this machine.
     pub(crate) fn open_nodes(&self) -> Vec<LedgerNode> {
         self.frames.nodes()
+    }
+
+    /// In replay: the branch stops at `steps`, its recorded total, with `Budget { which:
+    /// steps }` if it would pass it (chapter 01: a replay raises at the recorded steps
+    /// exhaustion, whatever its siblings spent meanwhile; a branch that completed never
+    /// reaches its cap).
+    pub(crate) fn cap_steps(&mut self, steps: u64) {
+        self.step_cap = Some(steps);
     }
 
     /// Frames open and close through `host` (the scheduler's guarded host), which checks

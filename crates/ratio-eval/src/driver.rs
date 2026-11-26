@@ -531,6 +531,13 @@ impl Scheduler {
             .as_ref()
             .filter(|t| t.replaying())
             .and_then(|t| t.cancel_point(&label));
+        let mut m = m;
+        if let Some(t) = self.tape.as_ref().filter(|t| t.replaying()) {
+            // A branch without a recorded total diverges when it ends (`check_steps`).
+            if let Some(total) = t.step_total(&label) {
+                m.cap_steps(total);
+            }
+        }
         self.tasks[id].label = label;
         self.tasks[id].machine = Some(m);
         if self.replay_due(id).is_some() {
@@ -669,18 +676,9 @@ impl Scheduler {
     fn effect(&mut self, id: TaskId, req: EffectRequest, cx: &mut Context<'_>) {
         self.tasks[id].state = State::Ready;
         if self.replay_due(id).is_some() {
-            // In replay a call cancelled at this point never starts: its recorded outcome is
-            // checked by the tape.
-            if let Some(t) = &self.tape
-                && let Err(msg) = t.check_ended(&req.key())
-            {
-                self.abort = Some(self.diverged(id, &msg, req.loc));
-                return;
-            }
-            if let Some(m) = &mut self.tasks[id].machine {
-                // The effect is pending: answer it with the cancellation.
-                let _ = m;
-            }
+            // In replay a call cancelled at this point never starts. If it had started when
+            // recorded, its outcome is on the tape, verified against the entries when the
+            // tape was loaded; if it had not (it waited behind the fence), there is none.
             self.deliver_replay(id);
             return;
         }
@@ -1481,14 +1479,15 @@ impl Scheduler {
             Err(HostError::Cancelled(o)) => *o,
             _ => CancelOutcome::Drained,
         };
+        // A drained call's discarded answer (a value or a failure) is on the tape, so replay
+        // can check the outcome against it.
+        if outcome == CancelOutcome::Drained
+            && let Some(t) = &self.tape
+        {
+            let _ = t.answered(&d.call.req, &a.result);
+        }
         let digest = match &a.result {
-            Ok(v) => {
-                // The discarded response is on the tape, so replay can check the outcome.
-                if let Some(t) = &self.tape {
-                    let _ = t.answered(&d.call.req, &a.result);
-                }
-                Some(crate::tape::value_digest(v).hex())
-            }
+            Ok(v) => Some(crate::tape::value_digest(v).hex()),
             Err(_) => None,
         };
         self.record(Event::Ended {
