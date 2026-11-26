@@ -4,6 +4,9 @@ Every model call goes through the engine's `ChatClient` for the chosen model
 (`docs/03-agent-engine.md#agent-loop`), is charged to the frame's budgets, and emits
 `model_call_completed` and (for calls on a conversation) `context_breakdown`. The model is the
 frame's unless `opts.model` names another; routing and location rules apply as in chapter 04.
+Every model call is admitted by reservation (chapter 04): it reserves its counted input and its
+effective `max_tokens`, and is sent with that `max_tokens`, so a reply never overshoots a budget;
+a hosted model without a configured price is refused under a cost cap.
 
 ## Generation
 
@@ -13,8 +16,18 @@ frame's unless `opts.model` names another; routing and location rules apply as i
 | `model.generate_as` | `<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T>` | Structured generation against `T`'s schema, using the strongest mechanism the backend has, then validation; repairs up to `opts.repairs` (default 2) | `SchemaMismatch`, `ModelFailed` | `model ×1..1+repairs` |
 | `model.generate_n` | `(p: Prompt, n: Int, opts: GenOpts = {}) -> [Untrusted<Str>]` | `n` independent samples (the backend's `n` when it supports it, else `n` calls run in parallel within the frame's width); results in sample order. Temperature defaults to 0.8 when the frame sets none | `ModelFailed` (any sample), `Invalid` (`n` < 1 or > 64) | `model ×n` |
 | `model.complete` | `(text: Str, opts: GenOpts = {}) -> Untrusted<Str>` | Raw text completion without a chat template, for endpoints with a completions route (local llama.cpp, vLLM). A raw completion has no channel separation, so its text is an instruction position: trusted text only | `Unsupported`, `ModelFailed` | `model ×1` |
-| `model.stream` | `(p: Prompt, on_text: fn(Untrusted<Str>) -> (), opts: GenOpts = {}) -> Untrusted<Str>` | As `generate`, calling `on_text` with each text delta as it arrives (in order, on the frame's task); returns the whole text. `on_text` may not make effects other than `session.stream` and logging | `ModelFailed`, `Invalid` (effectful callback) | `model ×1` |
+| `model.stream` | `(p: Prompt, on_text: fn(Untrusted<Str>) -> (), until: (fn(Untrusted<Str>, Untrusted<Str>) -> Bool)? = none, opts: GenOpts = {}) -> Untrusted<Streamed>` | As `generate`, calling `on_text` with each text delta as it arrives (in order, on the frame's task). After each delta it calls `until` (when given) with the delta and the text so far; when `until` returns `true`, the request is cancelled (as an `abort`, chapter 03) and the call returns the text so far with `stopped: until`. Returns `{ text, stopped: done \| until \| max_tokens }` (below). `on_text` may not make effects other than `session.stream` and logging; `until` may make none | `ModelFailed`, `Invalid` (effectful callback) | `model ×1` |
 | `model.logprobs` | `(p: Prompt, opts: GenOpts = {}) -> Untrusted<TokenText>` | Generates with token log probabilities: `{ text, tokens: [{ token, logprob, top: [{ token, logprob }] }] }` | `Unsupported` (no logprobs on this backend) | `model ×1` |
+
+**Streaming with `until`.** `until` receives the new delta first, so a predicate can test only what
+arrived; the text so far is a prefix view of one shared append-only buffer, built in O(1) per
+delta, so neither the interpreter nor a delta-only predicate does quadratic work over a long reply.
+A streamed response is taped with its delta boundaries, and its text is the text up to the stop, so
+replay delivers the same deltas and `on_text` and `until` see what they saw live. Tokens are
+charged as the provider reports them for the cancelled request or, when it reports nothing, as
+the host counts the received text; the charge is recorded. `model.chat` has no `until`: an
+assistant message cut in the middle of a tool call would break the pairing of calls and results.
+`Streamed` and `StreamStop` are among the shared types (README).
 
 ## Conversations and the agent loop
 

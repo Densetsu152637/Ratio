@@ -1,6 +1,6 @@
 # Plan: Ratio-side implementation roadmap
 
-Revision: 2026-11-26 (plan gate round 1 applied; base e2bb2e5, branch `feat/stage-2-parser`)
+Revision: 2026-11-26 (stage 2 merged as 0794aba; stage 2S and stage 3 in progress)
 
 Goals (each verified by the named check):
 
@@ -20,7 +20,7 @@ Goals (each verified by the named check):
   with a draft bump and an erratum line in `spec/README.md`, and is assigned to a stage below.
 - G5: `bash scripts/check-rust.sh` exits 0 on each stage PR's head before it is pushed.
 - G6: "Imperium Implementation" is sent a message (recorded in this plan's outcome for the stage)
-  when stage 11's `Host` trait is on `main`, and whenever the user creates a release tag.
+  when stage 11a's `Host` trait is on `main`, and whenever the user creates a release tag.
 
 Scope / non-goals:
 
@@ -65,8 +65,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   - every ```` ```ratio ```` block in `spec/` parses (or is marked as a deliberate error example);
   - draft 0.8 errata are in `spec/README.md`, `ratio::SPEC_DRAFT` is `"0.8"`, `ratio::STAGE` is 2;
   - CI green.
-- Status: in progress
-- Outcome:
+- Status: done
+- Outcome: PR #3 squash-merged as 0794aba; CI 8/8 green; security critic converged in 3 rounds (8 findings accepted).
 - Handoff notes:
   - Already in the WIP: `ast.rs`, `parser.rs` (recursive descent, never yet run on real input),
     `diag.rs` P0001–P0009 and `Diagnostic::render`.
@@ -108,8 +108,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: none.
 - Owned paths: `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: the review file exists with a decision per proposal; G4.
-- Status: in progress
-- Outcome:
+- Status: done
+- Outcome: review converged after 4 security-critic rounds; committed with stage 2S.
 - Handoff notes:
 
 ## Stage 2S: Specification update for accepted proposals (spec-only PR, draft 0.9)
@@ -120,7 +120,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: stage 2 merged, stage 2R decided.
 - Owned paths: `spec/**`, `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: G4; docs CI job green; each accepted proposal names its implementing stage.
-- Status: pending
+- Status: in progress (branch feat/wt-s2s-spec)
 - Handoff notes:
   - Stage 2R converged after 4 security-critic rounds (23 findings accepted, 0 rejected); the review is
     `docs/design/performance-concurrency-review.md` (sha256 prefix 5908123c). Accepted PC-1..PC-9,
@@ -142,7 +142,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   `conformance/names/**`.
 - Acceptance checks: resolution corpus; shadowing refused across trust levels; import-trust rules per
   source; imports cannot escape the root or follow links.
-- Status: pending
+- Status: in progress (branch feat/wt-s3-names)
 
 ## Stage 4: Type checker
 
@@ -181,14 +181,35 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 
 ## Stage 11: Host, tape and concurrency (security review)
 
-- Depends on: 10. Owned paths: `Host` trait, `ScriptedHost`, `TapeHost`, contract suite.
-- Acceptance checks: replay determinism under random completion orders; record-then-replay gives
-  identical event streams; replayed values keep labels and are untrusted; divergence tests; real
-  concurrency; every secrecy sink refuses a labelled value at the guard and at the unguarded host;
-  the contract suite's frame cases refuse a wider child scope in every dimension (the suite Imperium's
-  `RatioHost::open_frame` must also pass, stage 13); the throwaway Imperium `RatioHost` spike's result
-  against the candidate commit is recorded in the PR before merge (the spike code is never merged).
+Split into two PRs (draft 0.9, chapter 10 rows 11a and 11b; design PC-1, PC-2, PC-3, PC-7 in 11a,
+PC-4 and PC-9 in 11b).
+
+### Stage 11a: Host, tape and scheduler
+
+- Depends on: 10. Owned paths: `Host` trait (with `EffectCtx`, `tool_class`,
+  `conversation_digest`), `ScriptedHost`, `TapeHost`, the scheduler, contract suite.
+- Acceptance checks: replay determinism under random completion orders with sequenced, verified
+  ledgers, and replay of one tape under permuted resolution orders; effect keys with branch paths;
+  record-then-replay gives identical event streams; replayed values keep (and may gain) labels and
+  are untrusted; divergence tests (tape mutations, reply digest, tampered blobs); width with parked
+  branches and branch-path admission; cancellation classes, withdrawal, re-parenting and the drain
+  fence; the host-contract requirement that every `drain`-class tool declares a bound of at most
+  3600 s and is failed there; real concurrency; every secrecy sink refuses a labelled value at the
+  guard and at the unguarded host; the contract suite's frame cases refuse a wider child scope in
+  every dimension (the suite Imperium's `RatioHost::open_frame` must also pass, stage 13); the
+  throwaway Imperium `RatioHost` spike's result against the candidate commit is recorded in the PR
+  before merge (the spike code is never merged).
 - Status: pending. On merge: message "Imperium Implementation" (G6).
+
+### Stage 11b: Control, rand, time, state
+
+- Depends on: 11a. Owned paths: `control` (with `par_fold` and single-flight caches), `rand`,
+  `time`, `state`, their conformance files.
+- Acceptance checks: chapter 10 row 11b: `par_fold` in index and completion order, after `Stop` and
+  on a raise; single-flight caches (one producer, promotion, no deadlock, verified waits in
+  replay); labels kept by session caches and the `sees` refusal of labelled hits; per-branch `rand`
+  draws identical under permuted orders with no tape entries.
+- Status: pending.
 
 ## Stage 12: Model and think (security review)
 

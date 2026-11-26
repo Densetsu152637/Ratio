@@ -1,9 +1,57 @@
 # The Ratio specification
 
-Version: draft 0.8 (2026-11-26). Status: design; stages 1 and 2 of the implementation (the
+Version: draft 0.9 (2026-11-26). Status: design; stages 1 and 2 of the implementation (the
 token reader and the parser) are built in this repository.
 
-**Changes in draft 0.8.** Errata from the stage 2 parser. Chapter 02: a `>` that closes a generic
+**Changes in draft 0.9.** The accepted proposals of the performance, parallelism and concurrency
+review (`docs/design/performance-concurrency-review.md`, proposals PC-1 to PC-9; PC-10 to PC-15
+deferred). No grammar change.
+
+- Effect keys gain a **branch path**, so keys no longer depend on completion order (chapter 01).
+- One **turn sequence** numbers every scheduling event (ledger, cancellation, cache and ordering
+  events); replay verifies it against the tape alone (chapter 01).
+- Budgets admit effects by **bounded reservation** with an effective `max_tokens` and a reply
+  floor (`ratio.limits.min_reply_tokens`, default 256); a hosted model (any location other than
+  `local`) without an explicitly configured price is refused under a cost cap, while a `local`
+  model's price of 0 counts as priced; budget decisions and readings are sequenced and
+  verified in replay (chapters 04, 07).
+- Every cancelled branch's cancellation point is recorded, whatever cancelled it (chapter 03).
+- Width counts **running** branches only; parked branches release their slot, so nested fan-out
+  cannot deadlock; waiting branches start in branch-path order (chapters 03, 04, 06 `control`).
+- Tools have **cancellation classes** (`abort`, `drain`); pending approvals are withdrawn
+  atomically; outstanding drains are re-parented and held by a **drain fence**; every host call
+  carries a deadline; every `drain` call has a finite bound of at most 3600 s (chapters 03, 06
+  `tools`, 07 T17, 10).
+- New built-in `par_fold` and the types `Fold`, `FoldOrder`, `Folded` (chapter 06 `control` and
+  README; `control` 30 built-ins, 479 in all).
+- `cached`, `memo` and `once` are **single-flight**, with recorded and verified waits;
+  session caches keep labels, a labelled hit is refused without `sees.secrets`, and headless
+  tapes record labelled cache keys only by redaction digest (chapters 01, 03, 04, 06 `control`).
+- Pure data built-ins are charged by **cost class** (including `product` for `text.similarity`,
+  `diff.*` on lines or words, and `json.diff`), debited before running from the input sizes, with
+  required representations and label summaries (chapters 01, 06 `data`, 07).
+- The interpreter yields every 1,000 steps, offloads large built-ins to a bounded pool (heap
+  accounted before dispatch), uses
+  `Send` values and a prepared form that is never hashed (chapters 01, 07).
+- Tapes: entries for input-bearing effects only, suppressed output effects and an end-of-turn
+  reply digest, a `full` recording mode, content-addressed blobs, chained conversation digests,
+  zstd files, and replayed labels that can only be added (chapters 01, 03, 08).
+- Per-branch random generators: `rand` draws need no tape entries (chapter 06 `data`).
+- `model.stream` gains `until` and returns `Streamed`; `think.self_consistency` and
+  `think.best_of` gain `early_stop` (`best_of` refuses it without `good_enough`) (chapters 05,
+  06 `model`, `think`, README).
+- Chapter 08 states Imperium's host requirements: the class table, a conservative read-only
+  command allowlist (stage 17; until then no command is read-only), read-only MCP tools from user
+  configuration only, drain clamps, atomic withdrawal, and refusal of unpriced hosted models
+  (from stage 13).
+- Chapter 10: the `Host` sketch gains `EffectCtx`, `tool_class` and `conversation_digest`;
+  `TAPE_VERSION` notes; ownership rows; stage 11 splits into **11a** (trait, tape, keys,
+  scheduler) and **11b** (`control`, `par_fold`, single-flight caches, `rand`, `time`, `state`),
+  and stages 6 to 14, 17 and 19 carry the new work and tests; the `steps` expectation.
+- Chapter 07 adds limit rows (reply floor, pool jobs, drain bound) and threat T17, and widens
+  T8, T10 and T13; chapter 11 lists the deferred proposals.
+
+**Changes in draft 0.8** (kept for reference). Errata from the stage 2 parser. Chapter 02: a `>` that closes a generic
 argument list ends a statement at a line end inside a type declaration or a prompt `format`
 section (insertion condition 2); a block head's `{` must be on the head's line (`P0008`); the
 parser takes the token reader's brace kind as disambiguation rule 1's decision (`P0003` when it
@@ -158,7 +206,7 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | R5 | **Static types with local inference**, structural records and tagged enums, one dynamic escape (`Json`) that must be decoded through a schema; types double as generation schemas | 03 |
 | R6 | **Taint typing**: every string an effect returns is `Untrusted` unless it is an engine identifier; it may flow anywhere except instruction positions; `task` sections take only `Brief`; `trust` and `as_task` are monomorphic, audited and gated by `ratio.trust`; guarantees cover explicit flows | 03, 07 |
 | R7 | **Exceptions with a closed set of error kinds**, `try … catch` as an expression, `result()` to reify; cancellation and the budget that ran out cannot be swallowed by the scope they stop | 03 |
-| R8 | **Structured concurrency only** (`par`, `par_map`, `race`, `timeout`); no detached tasks except engine subagents, which the engine owns | 03 |
+| R8 | **Structured concurrency only** (`par`, `par_map`, `par_fold`, `race`, `timeout`); no detached tasks except engine subagents, which the engine owns; cancellation by tool class, with a drain fence | 03 |
 | R9 | **Harness calls are function calls** with their own frame (model, tools, permissions, budget, `sees`, conversation); a callee sees nothing of its caller or the session unless passed, forked or granted | 04 |
 | R10 | **Attenuation only**: every frame's tools, permissions, model locations, `sees`, budgets and subagents are bounded by its caller's | 04, 07 |
 | R11 | **Prompts are typed values** built from sections; only a `TrustedPrompt` may be a system prompt; the section decides how text is framed | 05 |
@@ -175,10 +223,10 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | [`model`](06-stdlib/model.md) | 29 | [`session`](06-stdlib/session.md) | 22 |
 | [`think`](06-stdlib/think.md) | 30 | [`state`](06-stdlib/session.md#state-package-state) | 4 |
 | [`tools`](06-stdlib/tools.md) | 50 | [`data`](06-stdlib/data.md) (15 submodules) | 213 |
-| [`agents`](06-stdlib/agents.md) | 20 | [`control`](06-stdlib/control.md) | 29 |
+| [`agents`](06-stdlib/agents.md) | 20 | [`control`](06-stdlib/control.md) | 30 |
 | [`memory`](06-stdlib/memory.md) | 12 | [`eval`](06-stdlib/eval.md) | 14 |
 | [`context`](06-stdlib/context.md) | 35 | [`meta`](06-stdlib/meta.md) | 20 |
-| | | **Total** | **478** |
+| | | **Total** | **479** |
 
 The counts are maintained by hand; chapter 10's conformance suite checks, from a `builtins.txt`
 generated from these tables, that every built-in has a test, that no implemented built-in is

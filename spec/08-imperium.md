@@ -38,7 +38,7 @@ secrets = { enabled = false }     # secrecy labels are opt-in (chapter 03)
 secret_paths = []                 # path globs whose contents are secret; empty by default
 secret_commands = []              # command prefixes whose output is secret; empty by default
 log_level = "info"                # debug | info | warn | error
-limits = { steps = 5000000, heap_mb = 64, call_depth = 512, depth = 8, width = 16, tool_calls = 500 }
+limits = { steps = 5000000, heap_mb = 64, call_depth = 512, depth = 8, width = 16, tool_calls = 500, min_reply_tokens = 256 }
 authored = { enabled = true, contained_budget = { tokens = 50000, model_calls = 20, wall_s = 120 } }
 ```
 
@@ -305,6 +305,44 @@ the computation-over-items use cases with no new approval surface, since contain
 none. Move to C only if real tasks need writes from harnesses inside programs, and then with its
 own review.
 
+## Cancellation, deadlines and budgets in the engine
+
+The host side of chapter 03's cancellation and chapter 04's admission rules is Imperium's. These
+are requirements on `RatioHost` and the engine behind it, checked by the host contract tests
+(chapter 10) where a test can observe them:
+
+- **Cancellation classes.** `RatioHost` declares the class of every tool (chapter 06, `tools`); a
+  tool it does not list is `drain`. Dispatch can abort an `abort`-class call and acknowledges it,
+  and records a call that already reached a remote server as `abandoned`.
+- **Read-only commands.** The command classifier that makes a `run_command` `abort`-class is a
+  conservative allowlist owned by Imperium, in its permission broker: a command line it does not
+  recognise is not read-only. It is built in stage 17; until then no command is
+  read-only, so every command is `drain` and is killed only at its deadline.
+- **Read-only MCP tools** come only from the user's configuration (a per-tool flag in the user's
+  or an environment's MCP settings, never a project's files and never the server's own
+  annotations).
+- **A bound on every drain.** Every `drain`-class call has a finite bound of at most 3600 s once
+  started, after which the host fails it. `run_command` already clamps its timeout to 1 s to
+  3600 s; `RatioHost` adds an upper clamp to the MCP `timeout_s` and a per-call bound to the
+  browser tools. A contract test (stage 11a) checks that every `drain`-class tool in the host's
+  table declares a bound and that a never-ending scripted call is failed at it.
+- **Deadlines.** Every host call receives its deadline (chapter 10, `EffectCtx`): model and MCP
+  requests use it as their request timeout, and `run_command` takes the smaller of its timeout and
+  the time left.
+- **Atomic approve-or-withdraw.** The approval broker resolves a withdrawal racing the user's
+  answer atomically (chapter 03); an answer to a withdrawn prompt changes no session approval and
+  records no denial. An `install_extension` withdrawn before its approval is not installed.
+- **Session stop is unchanged**: it drains every in-flight call whatever its class, as the native
+  loop does.
+- **Unpriced models under a cost cap.** Imperium admits unpriced models under a cost cap today.
+  With Ratio, `BudgetGate` refuses a call to a hosted model (any location other than `local`,
+  chapter 04) under any cost cap unless the model has an explicitly configured price (a price of
+  0 counts as priced); the card Imperium gives a `local` model has price 0, which counts as
+  priced. So admission by reservation (chapter 04) can always bound cost; Imperium implements
+  this from stage 13.
+- **Conversation digests.** The engine keeps each conversation's chained digest per message,
+  restored by rollback, and exposes the head through the host (chapter 01, tape storage).
+
 ## Headless evaluations
 
 `imperium run` (`docs/03-agent-engine.md#running-evals-through-the-harness-implemented`) gains:
@@ -313,7 +351,7 @@ own review.
 | --- | --- |
 | `--harness <name \| path.ratio>` | The root agent's harness: `native` (default), a registered package, or a file. A file is loaded as a package of its own source root, with user-source trust |
 | `--subagent-harness <name \| path.ratio>` | The harness for every subagent the run starts (item 58's per-subagent selection in evals); `spawn_agent`'s own `harness` still wins unless `--force-subagent-harness` |
-| `--ratio-tape <file>` | Record every effect to the file (`--ratio-tape-mode record`, the default when the file does not exist) or answer effects from it (`replay`, the default when it does; `lenient` falls through to live calls on a mismatch) |
+| `--ratio-tape <file>` | Record every effect to the file (`--ratio-tape-mode record`, the default when the file does not exist) or answer effects from it (`replay`, the default when it does; `lenient` falls through to live calls on a mismatch). `full` records like `record` and adds a digest-only entry for every output-only effect (chapter 01). A file name ending in `.jsonl.zst` is zstd-compressed |
 | `--flag ratio.<limit>=<n>` | Lowers a Ratio limit for the run |
 
 `--subagent-replay` keeps working and is consulted before the tape for subagent reports.
@@ -346,7 +384,7 @@ All additive, in one protocol minor version:
 | `harness_site` | The live position of each frame (streamed only, opt-in for statement sites) |
 | `harness_authored`, `harness_approved` | Authored versions (closure hash, every source in the closure with `untrusted: true`, diffs) and the user's approvals (closure hash and the authority approved) |
 | `ratio_log`, `ratio_trust`, `ratio_metric`, `ratio_span`, `ratio_event` | Logs, trust conversions (digest only), metrics, spans and custom events |
-| `ratio_state`, `ratio_cache`, `ratio_effect` | Persistence: package state with its type digest, session-scoped cache entries, the effect tape. Journalled; `ratio_effect` is not streamed to clients unless they ask for it |
+| `ratio_state`, `ratio_cache`, `ratio_effect` | Persistence: package state with its type digest, session-scoped cache entries with the labels of their leaves, the effect tape. Journalled; a `ratio_effect` whose body is already journalled refers to that event instead of copying it; `ratio_effect` is not streamed to clients unless they ask for it |
 | Tools `write_harness`, `run_harness` | Model-facing tools for authored and offered harnesses, specified in chapter 06 (`meta`, model-facing harness tools) and chapter 07, defined in `imperium-protocol` like the other built-in tools and exported to `schemas/tools/` |
 | `session.control` `declassify_conversation`, `session.subscribe` `secrets: true` | The user's recovery path for a labelled conversation, and unredacted events for the user's own view (chapters 03 and 07). Both need a single-use challenge bound to the installed desktop app and its native dialog (`ratio.declassify_challenge`, `ratio.secrets_challenge`, as `plugins.approval_challenge`); no CLI or other client can do either; refused in unattended sessions |
 
@@ -371,7 +409,8 @@ of it (chapter 10, the repository split). For this chapter's subjects:
 | Hooks | Nothing: programs cannot register or run hooks | Every hook and its payloads |
 | Agents panel and live harness view | Site ids, source maps and the effect keys that name frames | Events, throttling, redaction, the panels |
 | Code mode (Q9) | Frame-path elements for frames opened from a program | `run_script`, its budgets, and the option the user chooses |
-| Headless evaluations | The tape format (`TAPE_VERSION`) and replay | `imperium run`'s flags and output |
+| Headless evaluations | The tape format (`TAPE_VERSION`), the turn sequence and verified replay | `imperium run`'s flags and output, compressed tape files |
+| Cancellation and budgets | Cancellation points, the drain fence, withdrawal on the tape, admission by reservation and the reply floor, the host contract tests | The class of each tool, the read-only command classifier, read-only MCP configuration, the drain bounds, deadlines in dispatch, atomic withdrawal in the broker, `BudgetGate`'s refusal of unpriced models, conversation digest chains |
 | Protocol | Nothing | Every method, event and tool |
 
 The engine's side of Ratio is an implementation of the library's `Host` trait plus the harness
