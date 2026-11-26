@@ -170,14 +170,14 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: 6 (7, then 8, then 9). Owned paths: built-in modules, `conformance/data/**`.
 - Acceptance checks: one conformance test per built-in with each row's failures and label
   propagation; stage 9 adds float determinism with fixed bit patterns.
-- Status: 7 in review (draft 0.14); 8, 9 in progress
+- Status: 7 done (PR #9, 4837678); 8, 9 in review
 
 ## Stage 10: Frames (security review)
 
 - Depends on: 9. Owned paths: frame model in the interpreter, `conformance/frames/**`.
 - Acceptance checks: attenuation monotonicity property; ledger tests; `sees` refusals including
   labelled values entering frames without `secrets`.
-- Status: pending
+- Status: in review (draft 0.15)
 
 ## Stage 11: Host, tape and concurrency (security review)
 

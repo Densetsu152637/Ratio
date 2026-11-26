@@ -250,6 +250,7 @@ examples on the eval suites (chapter 10, stage 24).
 | Value nesting (lists of lists, records of records, closures capturing closures) | 256 | 256 | `Invalid` |
 | Package source | 256 KiB per file, 2 MiB per package (authored: 64 KiB) | — | Not loadable |
 | Package loading | 1024 files, 64 packages, 4096 registry calls per load (answers, failures included, remembered); at most 64 modules in one import chain, the entry counted; package and plugin names at most 128 bytes | — | Not loadable |
+| Configuration lists (`tools`, `need`, `want`, `paths`, `deny`, `ask` of one configuration record) | 256 entries | 256 | `Invalid`; opening a frame is charged a step per comparison its meets and checks make |
 | Concurrent branches (running; parked branches hold no slot, chapter 03) | 16 | 64 | Excess branches wait, and start in branch-path order |
 | Reply floor (`min_reply_tokens`: the fewest output tokens a model call is admitted with, chapter 04) | 256 | — | The admission waits for held reservations, then raises `Budget` |
 | Offloaded built-in jobs in flight per session (an implementation constant, chapter 01) | 2 | — | Further offloads wait; heap is accounted before dispatch, and a cancelled branch's job keeps its place, heap and steps until it ends |
