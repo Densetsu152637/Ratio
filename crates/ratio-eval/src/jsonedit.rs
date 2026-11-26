@@ -88,6 +88,7 @@ pub(crate) fn index_token(token: &str) -> Option<u64> {
 }
 
 pub(crate) fn escape(key: &str) -> String {
+    crate::work::add(crate::work::len_cost(key));
     key.replace('~', "~0").replace('/', "~1")
 }
 
@@ -119,7 +120,7 @@ pub(crate) fn array(v: &Value) -> Option<&List> {
 pub(crate) fn field<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
     object(v)?
         .iter()
-        .find(|(k, _)| k.as_text() == Some(name))
+        .find(|(k, _)| crate::work::key_is(k, name))
         .map(|(_, x)| x)
 }
 
@@ -167,7 +168,7 @@ fn find(cur: &Value, token: &str) -> Option<Pos> {
         Json::Object(e) => {
             crate::work::add(e.len() as u64);
             e.iter()
-                .position(|(k, _)| k.as_text() == Some(token))
+                .position(|(k, _)| crate::work::key_is(k, token))
                 .map(Pos::Key)
         }
         Json::Array(l) => index_token(token).filter(|i| *i < l.len()).map(Pos::Index),
@@ -284,7 +285,9 @@ fn edit_leaf(
         Some(Json::Object(entries)) => {
             let own = cur.labels | extra | key_labels(entries);
             crate::work::add(2 * entries.len() as u64 + 1);
-            let at = entries.iter().position(|(k, _)| k.as_text() == Some(token));
+            let at = entries
+                .iter()
+                .position(|(k, _)| crate::work::key_is(k, token));
             let _charge = pre_charge(heap, 2 * (entries.len() as u64 + 1))?;
             let mut out: Vec<(Value, Value)> = Vec::with_capacity(entries.len() + 1);
             out.extend(entries.iter().cloned());
@@ -397,6 +400,8 @@ pub(crate) fn json_equal(a: &Value, b: &Value) -> bool {
                 if p.len() != q.len() {
                     return false;
                 }
+                crate::work::hashed(q);
+                crate::work::hashed(p);
                 let index: HashMap<&str, &Value> = q
                     .iter()
                     .map(|(k, v)| (k.as_text().unwrap_or(""), v))
@@ -450,7 +455,9 @@ pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
         crate::work::add(1);
         let o = match step {
             Step::Lengths(p, q) => p.cmp(&q),
-            Step::Keys(p, q) => p.as_text().unwrap_or("").cmp(q.as_text().unwrap_or("")),
+            Step::Keys(p, q) => {
+                crate::work::str_cmp(p.as_text().unwrap_or(""), q.as_text().unwrap_or(""))
+            }
             Step::Pair(x, y) => match (node(&x), node(&y)) {
                 (Some(Json::Bool(p)), Some(Json::Bool(q))) => p.cmp(q),
                 (Some(Json::Int(p)), Some(Json::Int(q))) => p.cmp(q),
@@ -474,7 +481,10 @@ pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
                     let sorted = |e: &[(Value, Value)]| {
                         let mut v: Vec<(Value, Value)> = e.to_vec();
                         v.sort_by(|m, n| {
-                            m.0.as_text().unwrap_or("").cmp(n.0.as_text().unwrap_or(""))
+                            crate::work::str_cmp(
+                                m.0.as_text().unwrap_or(""),
+                                n.0.as_text().unwrap_or(""),
+                            )
                         });
                         v
                     };
@@ -529,6 +539,8 @@ impl Merging {
             4 * target_entries.len() as u64 + 3 * patch_entries.len() as u64,
         )?;
         let at = {
+            crate::work::hashed(target_entries);
+            crate::work::hashed(patch_entries);
             let index: HashMap<&str, usize> = target_entries
                 .iter()
                 .enumerate()
@@ -798,6 +810,8 @@ fn visit<E>(
 ) -> Result<(), E> {
     match (node(x), node(y)) {
         (Some(Json::Object(ex)), Some(Json::Object(ey))) => {
+            crate::work::hashed(ex);
+            crate::work::hashed(ey);
             let in_y: HashMap<&str, &Value> = ey
                 .iter()
                 .map(|(k, v)| (k.as_text().unwrap_or(""), v))

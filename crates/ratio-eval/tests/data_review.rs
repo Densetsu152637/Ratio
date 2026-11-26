@@ -6,6 +6,11 @@
 #![allow(
     clippy::many_single_char_names,
     clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::similar_names,
+    clippy::format_in_format_args,
     reason = "test programs name values briefly"
 )]
 
@@ -511,4 +516,76 @@ fn every_loop_inside_a_check_is_paid_for() {
         Outcome::Returned(_) => {}
         Outcome::Raised(e) => assert_eq!(e.budget(&p).as_deref(), Some("steps")),
     }
+}
+
+/// As [`doubling_chain`], with `suffix` added to every definition's name (long `$ref` targets).
+fn named_chain(n: u32, leaf: &str, suffix: &str) -> String {
+    let mut defs: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r##""a{i}{suffix}":{{"allOf":[{{"$ref":"#/$defs/a{j}{suffix}"}},{{"$ref":"#/$defs/a{j}{suffix}"}}]}}"##,
+                j = i + 1
+            )
+        })
+        .collect();
+    defs.push(format!(r#""a{n}{suffix}":{leaf}"#));
+    format!(
+        r##"{{"$ref":"#/$defs/a0{suffix}","$defs":{{{}}}}}"##,
+        defs.join(",")
+    )
+}
+
+/// Work that grows with the length of a string (a key compared, a path written, a `$ref`
+/// target hashed) is paid for, not only the number of keys and hops.
+#[test]
+fn work_that_grows_with_string_length_is_paid_for() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let long = "k".repeat(8000);
+    // LM: long keys that match the schema's, on every visit.
+    let lm_instance = format!("{{\"{long}\":1}}");
+    let lm_leaf = format!("{{\"properties\":{{\"{long}\":{{}}}}}}");
+    // LK: long keys that share a long prefix, looked up in a list of required names.
+    let prefix = "p".repeat(4000);
+    let keys: Vec<String> = (0..200).map(|i| format!("\"{prefix}{i}\":1")).collect();
+    let names: Vec<String> = (0..200).map(|i| format!("\"{prefix}x{i}\"")).collect();
+    let lk_instance = format!("{{{}}}", keys.join(","));
+    let lk_leaf = format!("{{\"required\":[{}]}}", names.join(","));
+    // LR: long `$ref` targets.
+    let cases = [
+        ("LM", lm_instance, doubling_chain(14, &lm_leaf)),
+        ("LK", lk_instance, doubling_chain(10, &lk_leaf)),
+        (
+            "LR",
+            "1".to_owned(),
+            named_chain(14, "{}", &"r".repeat(8000)),
+        ),
+    ];
+    for (name, instance, schema) in cases {
+        let start = Instant::now();
+        let f = run(&p, "v", vec![Value::text(&instance), Value::text(&schema)]);
+        // Either it was refused (`Budget`), or it ran and was charged for what it did: the time
+        // per charged step stays small (the old walk took 30 µs a step).
+        if let Outcome::Raised(e) = &f.outcome {
+            assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{name}");
+        }
+        let per_step = start.elapsed().as_secs_f64() / f.steps.max(1) as f64;
+        assert!(per_step < 5e-6, "{name}: {per_step:e} s a step");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{name}: {:?}",
+            start.elapsed()
+        );
+    }
+    // Unshared, the same checks are validated.
+    let f = run(
+        &p,
+        "v",
+        vec![
+            Value::text(&format!("{{\"{long}\":1}}")),
+            Value::text(&format!("{{\"properties\":{{\"{long}\":{{}}}}}}")),
+        ],
+    );
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
 }

@@ -228,7 +228,7 @@ derivation of `json.schema`) are bounded (192 levels of nesting, `$ref` hops cou
 most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 12
 levels, and on the large-stack worker the preparation pass uses (its counted work added to the
 caller's) beyond that. `json.validate` also counts its visits of a schema node to an instance
-node and raises `Budget { which: steps }` past four times its charge (plus a floor), so shared
+node and raises `Budget { which: steps }` past four units a pair of nodes of its charge (plus a floor), so shared
 sub-schemas reached over and over (`$ref` into `allOf`) cannot do more work than was paid for;
 a failing or finished `json.schema` is charged one step for each unit of its derivation work. `json.stringify` stops writing at 16 MiB and is charged for
 what it wrote.

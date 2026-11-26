@@ -5,6 +5,10 @@
 #![allow(
     clippy::many_single_char_names,
     clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::format_in_format_args,
     clippy::single_match_else,
     reason = "test programs and models name values briefly, and a corpus runner reads best whole"
 )]
@@ -461,7 +465,7 @@ fn json_set_then_get_gives_the_value_back() {
 // ---- json.validate: the work stays within the charge ----
 
 fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
-    let leaf = |rng: &mut Rng| match rng.below(12) {
+    let leaf = |rng: &mut Rng| match rng.below(17) {
         0 => r#"{"type":"integer"}"#.to_owned(),
         1 => r#"{"type":["string","null","array","object"]}"#.to_owned(),
         2 => format!(
@@ -479,6 +483,23 @@ fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
         8 => r#"{"propertyNames":{"maxLength":3}}"#.to_owned(),
         9 => r#"{"minItems":1,"maxItems":9,"contains":{"type":"integer"}}"#.to_owned(),
         10 => "true".to_owned(),
+        11 => format!(
+            "{{\"properties\":{{\"{0}\":{{}}}},\"required\":[\"{0}\",\"{1}\"]}}",
+            "q".repeat(rng.below(3000) as usize),
+            format!("{}z", "q".repeat(rng.below(3000) as usize))
+        ),
+        12 => format!(
+            "{{\"type\":[{}\"integer\",\"string\"]}}",
+            (0..rng.below(200))
+                .map(|_| "\"null\",".to_owned())
+                .collect::<String>()
+        ),
+        13 => {
+            r#"{"patternProperties":{"^k[0-9]$":{"type":"integer"}},"additionalProperties":true}"#
+                .to_owned()
+        }
+        14 => r#"{"prefixItems":[{"type":"integer"},{"type":"string"}],"items":true}"#.to_owned(),
+        15 => r#"{"dependentSchemas":{"k0":{"required":["k1"]}}}"#.to_owned(),
         _ => r#"{"minimum":0,"multipleOf":1}"#.to_owned(),
     };
     if depth == 0 {
@@ -522,16 +543,17 @@ fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
 /// A schema with `defs` shared definitions; definition `i` may refer only to later ones, and
 /// often does so twice (a chain of doublings).
 fn random_root(rng: &mut Rng) -> String {
-    let defs = u32::try_from(rng.below(10)).unwrap();
+    let defs = u32::try_from(rng.below(40)).unwrap();
+    let suffix = "n".repeat(rng.below(2000) as usize);
     let mut out = Vec::new();
     for i in 0..defs {
-        let next = format!("{{\"$ref\":\"#/$defs/d{}\"}}", i + 1);
+        let next = format!("{{\"$ref\":\"#/$defs/d{}{suffix}\"}}", i + 1);
         let body = if i + 1 < defs && rng.below(3) != 0 {
             format!("{{\"allOf\":[{next},{next}]}}")
         } else {
             random_schema(rng, 2, 0)
         };
-        out.push(format!("\"d{i}\":{body}"));
+        out.push(format!("\"d{i}{suffix}\":{body}"));
     }
     let root = random_schema(rng, 3, defs);
     if defs == 0 {
@@ -554,7 +576,19 @@ fn validate_work_stays_within_the_charge_for_random_schemas() {
     let mut worst = 0.0f64;
     for _ in 0..200 {
         let schema = random_root(&mut rng);
-        let instance = random_json(&mut rng, 3);
+        let extra = u32::try_from(rng.below(3)).unwrap();
+        let mut instance = random_json(&mut rng, 3 + extra);
+        if rng.below(3) == 0 {
+            // A wide object and a wide list, with long keys that share a prefix.
+            let keys: Vec<String> = (0..rng.below(300))
+                .map(|i| format!("\"{}{i}\":{instance}", "k".repeat(rng.below(500) as usize)))
+                .collect();
+            instance = format!(
+                "{{\"k0\":[{}],{}}}",
+                vec![instance.clone(); rng.below(100) as usize].join(","),
+                keys.join(",")
+            );
+        }
         let (f, log) = support::run_logged(
             &p,
             "v",
@@ -570,7 +604,7 @@ fn validate_work_stays_within_the_charge_for_random_schemas() {
             let ratio = w.work as f64 / (64 * w.steps) as f64;
             worst = worst.max(ratio);
             assert!(
-                w.work <= 16 * 64 * w.steps,
+                w.work <= 64 * 64 * w.steps,
                 "{} units of work for {} steps: {instance} against {schema}",
                 w.work,
                 w.steps

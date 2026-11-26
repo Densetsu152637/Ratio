@@ -383,6 +383,7 @@ impl Parser<'_> {
                 Open::Object { entries, seen, key } => {
                     // A repeated key: the later value wins, in the first one's place.
                     let name = key.as_text().unwrap_or("").to_owned();
+                    crate::work::add(2 * crate::work::len_cost(&name));
                     if let Some(&at) = seen.get(&name) {
                         entries[at].1 = v;
                     } else {
@@ -940,7 +941,7 @@ impl Decoder<'_> {
                 }
             }
             (Type::Enum(e, args), Json::Object(entries)) => {
-                let kind = entries.iter().find(|(k, _)| k.as_text() == Some("kind"));
+                let kind = entries.iter().find(|(k, _)| crate::work::key_is(k, "kind"));
                 // The variant is chosen by the `kind` node: its labels (and its key's) reach
                 // the result.
                 let chosen = kind.map_or(Labels::NONE, |(k, v)| k.labels | v.quick());
@@ -1018,7 +1019,7 @@ impl Decoder<'_> {
         for f in fields {
             match entries
                 .iter()
-                .find(|(k, _)| k.as_text() == Some(f.name.as_str()))
+                .find(|(k, _)| crate::work::key_is(k, f.name.as_str()))
             {
                 Some((key, x)) => {
                     // The field was found by its key: the key's labels reach its value.
@@ -1106,7 +1107,7 @@ fn child(cur: &Value, key: Option<&str>, at: Option<u64>) -> Result<Value, Value
             crate::work::add(entries.len() as u64);
             entries
                 .iter()
-                .find(|(k2, _)| k2.as_text() == Some(k))
+                .find(|(k2, _)| crate::work::key_is(k2, k))
                 .map(|(k2, v)| v.clone().with_labels(k2.labels))
         }
         (Json::Array(l), _, Some(i)) => l.get(i).cloned(),

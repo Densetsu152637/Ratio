@@ -23,12 +23,13 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::error::{Kind, RtError, raise};
 use crate::heap::{Charge, cost};
-use crate::jsonedit::{array, escape, field, node, object, string_of, tokens};
+use crate::jsonedit::{array, node, object, string_of, tokens};
 use crate::labels::Labels;
 use crate::machine::Cx;
 use crate::plist::List;
 use crate::pmap::Map;
 use crate::value::{Json, Value};
+use crate::work::len_cost;
 
 use super::util::{Pace, heap_error};
 use crate::re::{Regex, Stopped, scratch_bytes, search_work};
@@ -108,8 +109,9 @@ fn cmp_num(a: Num, b: Num) -> Ordering {
 pub(super) struct Validator<'a, 'b> {
     cx: &'a Cx<'b>,
     root: &'a Value,
-    /// The instance pointer of the node being checked.
-    path: String,
+    /// The instance pointer of the node being checked, as segments (a key is shared, not
+    /// copied): it is written out only when a violation is reported.
+    path: Vec<Seg>,
     /// While above 0, violations are not reported (an `anyOf` branch, a `not`, an `if`).
     silent: u32,
     sink: &'a mut Sink<'a>,
@@ -141,6 +143,13 @@ pub(super) struct Validator<'a, 'b> {
     labels: Labels,
 }
 
+/// One step of an instance pointer.
+#[derive(Clone, Debug)]
+enum Seg {
+    Key(Value),
+    Index(u64),
+}
+
 /// Receives each violation: the instance pointer and a message.
 pub(super) type Sink<'a> = dyn FnMut(&str, String) -> Result<(), RtError> + Send + 'a;
 
@@ -151,7 +160,7 @@ const INLINE_HOPS: u32 = 8;
 const INLINE_BUFFER: usize = 256;
 
 /// The walk's work allowed for a charge of `n1 * n2 + n1 + n2` (the sizes of the two inputs):
-/// a few visits per pair of nodes, and a floor for tiny inputs.
+/// four units per pair of nodes (a visit, the lookups, comparisons and copies inside it), and a floor for tiny inputs.
 pub(super) fn visit_budget(n1: u64, n2: u64) -> u64 {
     n1.saturating_mul(n2)
         .saturating_add(n1)
@@ -186,7 +195,7 @@ pub(super) fn validate(
         let mut v = Validator {
             cx,
             root: schema,
-            path: String::new(),
+            path: Vec::new(),
             silent: 0,
             sink,
             pace: Pace::new(),
@@ -272,16 +281,57 @@ impl Validator<'_, '_> {
     /// Reports a violation at the current path, unless a branch is being tried silently.
     fn fail(&mut self, message: &str) -> Check {
         if self.silent == 0 {
+            let pointer = self.pointer()?;
             if self.inline {
                 if self.buffer.len() >= INLINE_BUFFER {
                     return Err(self.restart());
                 }
-                self.buffer.push((self.path.clone(), message.to_owned()));
+                self.buffer.push((pointer, message.to_owned()));
             } else {
-                (self.sink)(&self.path, message.to_owned())?;
+                (self.sink)(&pointer, message.to_owned())?;
             }
         }
         Ok(false)
+    }
+
+    /// The pointer of the current node, paid for by its length.
+    fn pointer(&mut self) -> Result<String, RtError> {
+        let mut out = String::new();
+        let mut units = 1u64;
+        for seg in &self.path {
+            out.push('/');
+            match seg {
+                Seg::Index(i) => out.push_str(&i.to_string()),
+                Seg::Key(k) => {
+                    let key = k.as_text().unwrap_or("");
+                    units = units.saturating_add(2 * crate::work::len_cost(key));
+                    out.push_str(&crate::jsonedit::escape(key));
+                }
+            }
+        }
+        self.work(units.saturating_add(self.path.len() as u64))?;
+        Ok(out)
+    }
+
+    /// The value of `name` among an object's entries, each comparison paid for by the length
+    /// compared.
+    fn get<'e>(
+        &mut self,
+        entries: &'e [(Value, Value)],
+        name: &str,
+    ) -> Result<Option<&'e Value>, RtError> {
+        let mut units = 1u64;
+        let mut found = None;
+        for (k, x) in entries {
+            let key = k.as_text().unwrap_or("");
+            units = units.saturating_add(crate::work::eq_cost(key, name));
+            if key == name {
+                found = Some(x);
+                break;
+            }
+        }
+        self.work(units)?;
+        Ok(found)
     }
 
     /// Gives up the walk on the caller's stack: it is made again on a large one.
@@ -399,8 +449,9 @@ impl Validator<'_, '_> {
             }
             return Err(self.bad("`$ref` refers to itself"));
         }
+        // Hashing the target, and comparing it with the entry found.
+        self.work(1 + 2 * target.len() as u64)?;
         let sub = if let Some(sub) = self.refs.get(target).cloned() {
-            self.work(1)?;
             sub
         } else {
             // Resolved once per walk: the pointer's length and the widths scanned are the
@@ -595,6 +646,7 @@ impl Validator<'_, '_> {
     }
 
     fn compiled(&mut self, pattern: &str) -> Result<usize, RtError> {
+        self.work(1 + 2 * pattern.len() as u64)?;
         if let Some(&i) = self.pattern_index.get(pattern) {
             return Ok(i);
         }
@@ -623,8 +675,10 @@ impl Validator<'_, '_> {
 
     fn matches(&mut self, pattern: &str, text: &str) -> Result<bool, RtError> {
         let i = self.compiled(pattern)?;
+        // The text's characters are counted, and the search is paid for before it runs: a
+        // program's weight per character.
+        self.work(len_cost(text))?;
         let re = &self.patterns[i].1;
-        // The search is paid for before it runs: a program's weight per character.
         let predicted = search_work(re.weight(), text.chars().count() as u64, 0);
         let scratch = scratch_bytes(re.insts(), 0);
         self.pay(predicted)?;
@@ -676,13 +730,11 @@ impl Validator<'_, '_> {
         Ok(ok)
     }
 
-    /// Checks the child `child` of the current node at `segment` against `sub`.
-    fn descend(&mut self, child: &Value, sub: &Value, segment: &str, depth: u32) -> Check {
-        let restore = self.path.len();
-        self.path.push('/');
-        self.path.push_str(&escape(segment));
+    /// Checks the child `child` of the current node at `seg` against `sub`.
+    fn descend(&mut self, child: &Value, sub: &Value, seg: Seg, depth: u32) -> Check {
+        self.path.push(seg);
         let r = self.check(child, sub, depth + 1, 0);
-        self.path.truncate(restore);
+        self.path.pop();
         r
     }
 
@@ -719,7 +771,7 @@ impl Validator<'_, '_> {
             self.work(1)?;
             let sub = prefix.and_then(|p| p.get(i)).or(kw.items);
             if let Some(sub) = sub {
-                ok &= self.descend(&item, sub, &i.to_string(), depth)?;
+                ok &= self.descend(&item, sub, Seg::Index(i), depth)?;
             }
             i += 1;
         }
@@ -735,7 +787,7 @@ impl Validator<'_, '_> {
                 self.work(
                     1 + item
                         .weight()
-                        .saturating_mul(crate::ops::log_work(seen.len())),
+                        .saturating_mul(crate::ops::log_work(seen.len()) + 1),
                 )?;
                 if seen.get_entry(&item).is_some() {
                     duplicate = true;
@@ -799,7 +851,7 @@ impl Validator<'_, '_> {
                     return Err(self.bad("`required` is an array of names"));
                 };
                 self.work(1 + width)?;
-                if field(inst, name).is_none() {
+                if self.get(entries, name)?.is_none() {
                     ok &= self.fail(&format!("is missing the required property `{name}`"))?;
                 }
             }
@@ -818,9 +870,9 @@ impl Validator<'_, '_> {
             let mut matched = false;
             if let Some(d) = declared {
                 self.work(1 + d.len() as u64)?;
-                if let Some((_, sub)) = d.iter().find(|(n, _)| n.as_text() == Some(name)) {
+                if let Some(sub) = self.get(d, name)? {
                     matched = true;
-                    ok &= self.descend(v, sub, name, depth)?;
+                    ok &= self.descend(v, sub, Seg::Key(k.clone()), depth)?;
                 }
             }
             for (p, sub) in patterns.unwrap_or(&[]) {
@@ -829,13 +881,14 @@ impl Validator<'_, '_> {
                 };
                 if self.matches(pattern, name)? {
                     matched = true;
-                    ok &= self.descend(v, sub, name, depth)?;
+                    ok &= self.descend(v, sub, Seg::Key(k.clone()), depth)?;
                 }
             }
             if !matched && let Some(extra) = kw.additional {
-                ok &= self.descend(v, extra, name, depth)?;
+                ok &= self.descend(v, extra, Seg::Key(k.clone()), depth)?;
             }
             if let Some(names) = kw.property_names {
+                self.work(len_cost(name))?;
                 let key = crate::jsonedit::text_node(self.cx.heap, name)
                     .map_err(|f| self.cx.fault(f, self.labels))?;
                 self.silent += 1;
@@ -852,7 +905,7 @@ impl Validator<'_, '_> {
             };
             for (name, needs) in deps {
                 self.work(1 + width)?;
-                if field(inst, name.as_text().unwrap_or("")).is_none() {
+                if self.get(entries, name.as_text().unwrap_or(""))?.is_none() {
                     continue;
                 }
                 let Some(l) = array(needs) else {
@@ -864,7 +917,7 @@ impl Validator<'_, '_> {
                         return Err(self.bad("`dependentRequired` maps names to arrays of names"));
                     };
                     self.work(1 + width)?;
-                    if field(inst, need).is_none() {
+                    if self.get(entries, need)?.is_none() {
                         ok &= self.fail(&format!(
                             "has `{}` but not `{need}`",
                             name.as_text().unwrap_or("")
@@ -879,7 +932,7 @@ impl Validator<'_, '_> {
             };
             for (name, sub) in deps {
                 self.work(1 + width)?;
-                if field(inst, name.as_text().unwrap_or("")).is_some() {
+                if self.get(entries, name.as_text().unwrap_or(""))?.is_some() {
                     ok &= self.check(inst, sub, depth + 1, 0)?;
                 }
             }

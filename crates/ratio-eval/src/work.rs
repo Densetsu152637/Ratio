@@ -37,3 +37,52 @@ pub fn reset() {
 pub fn total() -> u64 {
     WORK.with(Cell::get)
 }
+
+// ---- strings: work grows with the length compared, hashed or copied ----
+
+/// The units comparing two texts for equality costs: one, and their length when the lengths
+/// agree (when they differ the comparison stops at once).
+#[must_use]
+pub fn eq_cost(a: &str, b: &str) -> u64 {
+    1 + if a.len() == b.len() {
+        a.len() as u64
+    } else {
+        0
+    }
+}
+
+/// The units comparing two texts in order costs: one plus the shorter's length.
+#[must_use]
+pub fn cmp_cost(a: &str, b: &str) -> u64 {
+    1 + a.len().min(b.len()) as u64
+}
+
+/// The units hashing (or copying, or escaping) a text costs: one plus its length.
+#[must_use]
+pub fn len_cost(s: &str) -> u64 {
+    1 + s.len() as u64
+}
+
+/// `a == b`, counted.
+pub(crate) fn str_eq(a: &str, b: &str) -> bool {
+    add(eq_cost(a, b));
+    a == b
+}
+
+/// `a.cmp(b)`, counted.
+pub(crate) fn str_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    add(cmp_cost(a, b));
+    a.cmp(b)
+}
+
+/// Whether `key` (a text value) is `name`, counted.
+pub(crate) fn key_is(key: &crate::value::Value, name: &str) -> bool {
+    key.as_text().is_some_and(|k| str_eq(k, name))
+}
+
+/// Counts hashing the keys of `entries` into a map and looking each up once.
+pub(crate) fn hashed(entries: &[(crate::value::Value, crate::value::Value)]) {
+    for (k, _) in entries {
+        add(2 * len_cost(k.as_text().unwrap_or("")));
+    }
+}
