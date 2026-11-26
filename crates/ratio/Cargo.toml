@@ -15,6 +15,8 @@ name = "ratio"
 ratio-syntax.workspace = true
 ratio-names.workspace = true
 ratio-check = { path = "../ratio-check", version = "0.1.0" }
+ratio-ir = { path = "../ratio-ir", version = "0.1.0" }
+ratio-eval = { path = "../ratio-eval", version = "0.1.0" }
 
 [lints]
 workspace = true

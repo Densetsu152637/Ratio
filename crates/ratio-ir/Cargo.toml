@@ -1,0 +1,17 @@
+[package]
+name = "ratio-ir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Ratio Core IR (stage 6): lowering from the checked tree, site ids, canonical serialisation and the IR hash"
+
+[dependencies]
+ratio-syntax.workspace = true
+ratio-names.workspace = true
+ratio-check = { path = "../ratio-check", version = "0.1.0" }
+
+[lints]
+workspace = true

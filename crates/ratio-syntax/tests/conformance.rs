@@ -26,7 +26,7 @@
 //! // tree: (module - [(item [] [] - (fn f [] [] - (block [(expr (bin + (int 1) (int 2)))])))])
 //! ```
 //!
-//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `fixture` or, from
+//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `steps` (stage 6), `fixture` or, from
 //! stage 3, `resolve-ok`, `resolve-error` and `resolve-warning` (run by `ratio-names`'s own
 //! runner) and, from stage 4, `check-ok` and `check-warning` (with `check-error`, run by
 //! `ratio-check`'s runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
@@ -104,7 +104,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
                 }
                 [
                     "ok" | "value" | "check-ok" | "check-error" | "check-warning" | "runtime-error"
-                    | "resolve-ok" | "resolve-error" | "resolve-warning",
+                    | "resolve-ok" | "resolve-error" | "resolve-warning" | "steps",
                     ..,
                 ] => case.other_stage = true,
                 _ => {

@@ -1,0 +1,7 @@
+// expect: runtime-error SchemaMismatch
+type Item = { name: Str, n: Int }
+
+fn main() -> Int {
+  let j = json.parse("\{\"name\": 1\}")
+  json.decode::<Item>(j).n
+}

@@ -1,0 +1,8 @@
+// expect: value [[1, 2, 3], [1, 2, 3, 4], [9, 2, 3], 6, [2, 3]]
+fn main() -> ([Int], [Int], [Int], Int, [Int]) {
+  let xs = [1, 2, 3]
+  let ys = xs.push(4)
+  var zs = xs
+  zs[0] = 9
+  (xs, ys, zs, xs.fold(0, |a, x| a + x), [..xs].filter(|x| x > 1))
+}

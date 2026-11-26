@@ -16,9 +16,12 @@ report through the same diagnostics), and `ratio::harnesses_check(&registry, &bu
 is chapter 08's `harnesses.check` as a library call: the package's summary (writes, commands,
 network, delegation, tools), every trust site it can reach through imports and `meta.harness`
 loads, and which harnesses a model may run. `Checked::schema` and `Checked::digest` give a
-type's JSON Schema and type digest. It also names the specification draft (`SPEC_DRAFT`) and
-the stage reached (`STAGE`, 5). The `Host` trait,
-the checker and the interpreter join it in later stages; chapter 10 of the
+type's JSON Schema and type digest. Stage 6 adds the Core IR of
+[`ratio-ir`](../ratio-ir/README.md) as `ratio::ir` (`ratio::lower`, the IR hash of each package,
+`ratio::IR_VERSION`) and the core interpreter of [`ratio-eval`](../ratio-eval/README.md) as
+`ratio::interp` (`ratio::prepare`, `ratio::evaluate`, `ratio::Value` with its secrecy `Labels`,
+`ratio::Limits`). It also names the specification draft (`SPEC_DRAFT`) and the stage reached
+(`STAGE`, 6). The `Host` trait and the rest of the standard library join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`

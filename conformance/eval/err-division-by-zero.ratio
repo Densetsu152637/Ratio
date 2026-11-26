@@ -1,0 +1,5 @@
+// expect: runtime-error Invalid
+fn main() -> Int {
+  let zero = 0
+  10 / zero
+}

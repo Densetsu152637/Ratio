@@ -9,7 +9,9 @@ re-exports it as `ratio::checker` and its entry point as `ratio::check`.
 
 `check(&loaded)` takes a package loaded by [`ratio-names`](../ratio-names/README.md) (stage 3)
 and checks every module that parsed cleanly. It returns `Checked`: the diagnostics (the `C`
-codes below) and, per module, the side tables later stages read.
+codes below) and, per module, the side tables later stages read. For stage 6's lowering it also names
+each enum's declaration (`Checked::enum_items`, by `EnumId`) and each built-in reference
+(`Checked::builtin_name`: `list.push`, or a bare `fail`).
 
 ```rust
 let loaded = ratio::Loader::new(&registry, &builtin).load(&name);

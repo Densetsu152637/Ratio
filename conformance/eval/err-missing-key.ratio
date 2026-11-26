@@ -1,0 +1,5 @@
+// expect: runtime-error NotFound
+fn main() -> Int {
+  let m: Map<Str, Int> = { a: 1 }
+  m["b"]
+}

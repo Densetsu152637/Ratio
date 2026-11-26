@@ -1,0 +1,4 @@
+// expect: runtime-error Invalid
+fn main() -> Int {
+  [1, 2, 3][3]
+}

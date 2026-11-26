@@ -1,0 +1,16 @@
+// expect: value [[1, 2, 3], [10, 20]]
+fn main() -> ([Int], [Int]) {
+  var order: [Int] = []
+  do {
+    defer { order = order.push(3) }
+    defer { order = order.push(2) }
+    order = order.push(1)
+  }
+  var unwound: [Int] = []
+  let r = try {
+    defer { unwound = unwound.push(20) }
+    defer { unwound = unwound.push(10) }
+    raise fail("x", "y")
+  } catch e { 0 }
+  (order, unwound)
+}

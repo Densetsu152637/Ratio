@@ -1,0 +1,5 @@
+// expect: runtime-error Unsupported
+fn main() -> Str {
+  let x: Untrusted<Str> = "text"
+  trust(x, because: "effects are stage 11's")
+}

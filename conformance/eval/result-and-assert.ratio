@@ -1,0 +1,15 @@
+// expect: value [true, false, 1]
+fn half(n: Int) -> Int {
+  assert(n % 2 == 0, message: "odd")
+  n / 2
+}
+
+fn main() -> (Bool, Bool, Int) {
+  let ok = result(|| half(4))
+  let bad = result(|| half(3))
+  let n = match ok {
+    Ok { value } => value - 1,
+    Err { .. } => -1,
+  }
+  (ok is Ok, bad is Ok, n)
+}

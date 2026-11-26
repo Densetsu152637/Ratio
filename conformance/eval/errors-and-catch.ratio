@@ -1,0 +1,32 @@
+// expect: value [3, 0, -1, "negative", "n was -2", "boom"]
+fn risky(n: Int) -> Int {
+  if n < 0 {
+    raise fail("negative", "n was {n}")
+  }
+  n
+}
+
+fn guarded(n: Int) -> Int {
+  try {
+    if n == 0 { [1][5] } else { risky(n) }
+  } catch {
+    e if e.kind is Invalid => 0,
+    e => -1,
+  }
+}
+
+fn main() -> (Int, Int, Int, Str, Untrusted<Str>, Untrusted<Str>) {
+  let tag = try { risky(-2); "none" } catch e {
+    match e.kind {
+      User { tag } => tag,
+      _ => "other",
+    }
+  }
+  let message = try { risky(-2); "none" } catch e { e.message }
+  let rethrown = try {
+    try { raise fail("x", "boom") } catch e { raise e }
+  } catch e {
+    e.message
+  }
+  (guarded(3), guarded(0), guarded(-1), tag, message, rethrown)
+}

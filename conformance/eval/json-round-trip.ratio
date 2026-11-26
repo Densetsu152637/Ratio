@@ -1,0 +1,11 @@
+// expect: value [{"name": "a", "n": 2}, "a", 2, "b", true]
+type Item = { name: Str, n: Int }
+
+fn main() -> (Untrusted<Item>, Untrusted<Str>, Int, Untrusted<Str>, Bool) {
+  let j = json.encode::<Item>({ name: "a", n: 2 })
+  let back = json.decode::<Item>(j)
+  let parsed = json.parse("\{\"k\": [\"a\", \"b\"]\}")
+  let second = if let v = json.get(parsed, "/k/1") { json.decode::<Str>(v) } else { "missing" }
+  let absent = if let v = json.get(parsed, "/nope") { false } else { true }
+  (back, back.name, back.n, second, absent)
+}

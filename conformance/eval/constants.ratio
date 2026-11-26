@@ -1,0 +1,7 @@
+// expect: value [60, "limit 60"]
+const LIMIT: Int = 3 * 20
+const LABEL: Str = "limit {LIMIT}"
+
+fn main() -> (Int, Str) {
+  (LIMIT, LABEL)
+}

@@ -1,0 +1,5 @@
+// expect: value 3
+// expect: steps 9
+fn main() -> Int {
+  list.len([1, 2, 3])
+}

@@ -11,10 +11,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratio-eval"
+version = "0.1.0"
+dependencies = [
+ "ratio-check",
+ "ratio-ir",
+ "ratio-names",
+ "ratio-syntax",
+]
+
+[[package]]
+name = "ratio-ir"
+version = "0.1.0"
+dependencies = [
+ "ratio-check",
+ "ratio-names",
+ "ratio-syntax",
+]
+
+[[package]]
 name = "ratio-lang"
 version = "0.1.0"
 dependencies = [
  "ratio-check",
+ "ratio-eval",
+ "ratio-ir",
  "ratio-names",
  "ratio-syntax",
 ]

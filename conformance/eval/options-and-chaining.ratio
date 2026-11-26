@@ -1,0 +1,19 @@
+// expect: value [0, 3, "none", "b", 7, 1]
+type Box = { inner?: { n: Int } }
+
+fn depth(b: Box?) -> Int {
+  b?.inner?.n ?? 0
+}
+
+fn main() -> (Int, Int, Str, Str, Int, Int) {
+  let found = if let (a, b) = text.split_once("a=b", "=") { b } else { "none" }
+  let missing = if let (a, b) = text.split_once("ab", "=") { b } else { "none" }
+  var total = 0
+  var xs = [3, 4]
+  while let x = xs.first() {
+    total += x
+    xs = xs.take(0)
+  }
+  let r = { inner: { n: 3 } }
+  (depth(none), depth(r), missing, found, total + 4, list.get([1, 2], -2) ?? 0)
+}

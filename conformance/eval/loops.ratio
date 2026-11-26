@@ -1,0 +1,20 @@
+// expect: value [10, 6, 8, 3, 4, 16]
+fn main() -> (Int, Int, Int, Int, Int, Int) {
+  var sum = 0
+  for i in 0..5 { sum += i }
+  var odd = 0
+  for x in [1, 2, 3, 4, 5] {
+    if x % 2 == 0 { continue }
+    odd += x - 1
+  }
+  var n = 0
+  while n < 8 { n += 1 }
+  let found = loop {
+    if sum > 0 { break 3 }
+  }
+  var r = 0
+  repeat 4 { r += 1 }
+  var inc = 0
+  for i in 1..=4 { inc += i }
+  (sum, odd, n, found, r, inc + 6)
+}

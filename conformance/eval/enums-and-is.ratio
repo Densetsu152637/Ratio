@@ -1,0 +1,19 @@
+// expect: value [12, 0, true, false, "circle"]
+enum Shape { Circle { r: Int }, Square { side: Int }, Dot }
+
+fn area(s: Shape) -> Int {
+  match s {
+    Circle { r } => 3 * r * r,
+    Square { side } => side * side,
+    Dot => 0,
+  }
+}
+
+fn main() -> (Int, Int, Bool, Bool, Str) {
+  let c = Circle { r: 2 }
+  let name = match c {
+    Circle { .. } => "circle",
+    _ => "other",
+  }
+  (area(c), area(Shape.Dot), c is Circle, c is Dot, name)
+}

@@ -1,0 +1,14 @@
+// expect: value [[1, "two"], 2, "first"]
+fn main() -> ((Int, Str), Int, Str) {
+  let pair = par { 1; "two" }
+  let won = race { raise fail("a", "lost"); 2 }
+  let first = try {
+    race { raise fail("first", "a"); raise fail("second", "b") }
+  } catch e {
+    match e.kind {
+      User { tag } => tag,
+      _ => "?",
+    }
+  }
+  (pair, won, first)
+}
