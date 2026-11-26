@@ -293,7 +293,8 @@ fn enum_key(p: &Prepared, t: u32, env: &Env) -> Option<EnumKey> {
 impl Writer<'_> {
     fn grow(&mut self, by: usize) -> Result<(), Fault> {
         self.size += by;
-        self.fuel = self.fuel.saturating_sub(1);
+        // A long name or description costs by its length: eight bytes a unit of fuel.
+        self.fuel = self.fuel.saturating_sub(1 + by as u64 / 8);
         if self.size > MAX_SCHEMA_BYTES || self.fuel == 0 {
             return Err(too_large());
         }
@@ -341,6 +342,7 @@ impl Writer<'_> {
                 }
             }
             if recursive {
+                self.grow(self.p.enums.get(id as usize).map_or(0, |en| en.name.len()))?;
                 let base: String = self
                     .p
                     .enums
@@ -476,6 +478,12 @@ impl Writer<'_> {
             .enums
             .get(e as usize)
             .ok_or_else(|| not_schemaable("an unknown enum"))?;
+        let names_len: usize = en
+            .variants
+            .iter()
+            .map(|v| v.json.len() + v.name.len())
+            .sum();
+        self.grow(names_len)?;
         if en.unit_only {
             let names = en
                 .variants
@@ -533,6 +541,7 @@ impl Writer<'_> {
                 required.push(f.name.clone());
             }
             let mut schema = self.schema(inner, env, depth)?;
+            self.grow(f.meta.len())?;
             if !f.meta.is_empty() {
                 refine(&mut schema, &parse_meta(&f.meta));
             }
@@ -586,7 +595,10 @@ fn schema_on(p: &Prepared, t: u32, nest: usize) -> (Result<String, Fault>, u64, 
         fuel: FUEL,
     };
     let r = write_schema(&mut w, t);
-    let used = FUEL - w.fuel;
+    // What was written, and the fuel spent reading and copying names and descriptions; the
+    // bytes are charged too (a sixty-fourth of a step each), whether the derivation finished
+    // or failed.
+    let used = (FUEL - w.fuel).saturating_add((w.size as u64).div_ceil(64));
     crate::work::add(used);
     (r, used, w.deep)
 }

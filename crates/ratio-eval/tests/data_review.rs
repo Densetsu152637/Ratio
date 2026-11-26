@@ -589,3 +589,70 @@ fn work_that_grows_with_string_length_is_paid_for() {
     );
     assert!(matches!(f.outcome, Outcome::Returned(_)));
 }
+
+/// Nothing is formatted or copied while a branch is tried silently: a long name in a message
+/// inside `not`, `anyOf`, `oneOf`, `if` or `contains` costs nothing unless it is reported.
+#[test]
+fn silent_branches_build_no_messages() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let long = "n".repeat(200_000);
+    let leaves = [
+        format!("{{\"not\":{{\"required\":[\"{long}\"]}}}}"),
+        format!("{{\"anyOf\":[{{\"required\":[\"{long}\"]}},{{\"required\":[\"{long}x\"]}}]}}"),
+        format!("{{\"oneOf\":[{{\"required\":[\"{long}\"]}},{{\"required\":[\"{long}y\"]}}]}}"),
+        format!("{{\"if\":{{\"required\":[\"{long}\"]}},\"then\":true,\"else\":true}}"),
+        format!("{{\"not\":{{\"dependentRequired\":{{\"a\":[\"{long}\"]}}}}}}"),
+        r#"{"not":{"propertyNames":{"maxLength":2}}}"#.to_owned(),
+        format!("{{\"contains\":{{\"required\":[\"{long}\"]}}}}"),
+    ];
+    for leaf in &leaves {
+        let instance = if leaf.contains("contains") {
+            r#"[{"a":1}]"#
+        } else {
+            r#"{"a":1,"bbbb":2}"#
+        };
+        let start = Instant::now();
+        let f = run(
+            &p,
+            "v",
+            vec![Value::text(instance), Value::text(&doubling_chain(8, leaf))],
+        );
+        let per_step = start.elapsed().as_secs_f64() / f.steps.max(1) as f64;
+        assert!(
+            f.steps < 10_000 || per_step < 5e-6,
+            "{per_step:e} s a step for {leaf:.60}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+}
+
+/// `json.schema` of a type with long names, and of a deep type, is charged for the bytes it
+/// wrote and the names it copied, whether it finishes or fails.
+#[test]
+fn schema_derivation_is_charged_for_names_and_bytes() {
+    let mut src = String::new();
+    let name = "f".repeat(2000);
+    let levels = 6;
+    for i in 0..levels {
+        let fields: Vec<String> = (0..4).map(|k| format!("{name}{k}: T{}", i + 1)).collect();
+        let _ = writeln!(src, "type T{i} = {{ {} }}", fields.join(", "));
+    }
+    let _ = writeln!(src, "type T{levels} = {{ z: Int }}");
+    src.push_str(
+        "fn s() -> Bool { try { let j = json.schema::<T0>(); true } catch e { false } }\n",
+    );
+    let p = prepared(&src);
+    let start = Instant::now();
+    let f = run(&p, "s", Vec::new());
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
+    // Over 1 MiB written before it was refused: at least a sixty-fourth of a step a byte.
+    assert!(f.steps >= (1 << 20) / 64, "only {} steps", f.steps);
+    let per_step = start.elapsed().as_secs_f64() / f.steps as f64;
+    assert!(per_step < 5e-6, "{per_step:e} s a step");
+}

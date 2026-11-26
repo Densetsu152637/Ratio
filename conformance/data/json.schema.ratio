@@ -1,7 +1,7 @@
 // builtin: json.schema
 // case record: value {"type": "object", "properties": {"n": {"type": "integer"}, "name": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["n", "name", "tags"], "additionalProperties": false}
 // case scalar: value [{"type": "integer"}, {"type": "boolean"}, {}]
-// case steps: steps 7
+// case steps: steps 10
 type Item = { name: Str, n: Int, tags: [Str] }
 
 fn record() -> Json { json.schema::<Item>() }

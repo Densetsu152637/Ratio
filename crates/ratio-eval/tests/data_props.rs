@@ -465,7 +465,7 @@ fn json_set_then_get_gives_the_value_back() {
 // ---- json.validate: the work stays within the charge ----
 
 fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
-    let leaf = |rng: &mut Rng| match rng.below(17) {
+    let leaf = |rng: &mut Rng| match rng.below(18) {
         0 => r#"{"type":"integer"}"#.to_owned(),
         1 => r#"{"type":["string","null","array","object"]}"#.to_owned(),
         2 => format!(
@@ -500,6 +500,19 @@ fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
         }
         14 => r#"{"prefixItems":[{"type":"integer"},{"type":"string"}],"items":true}"#.to_owned(),
         15 => r#"{"dependentSchemas":{"k0":{"required":["k1"]}}}"#.to_owned(),
+        16 => {
+            let long = "s".repeat(rng.below(4000) as usize);
+            match rng.below(4) {
+                0 => format!("{{\"not\":{{\"required\":[\"{long}\"]}}}}"),
+                1 => format!(
+                    "{{\"anyOf\":[{{\"dependentRequired\":{{\"k0\":[\"{long}\"]}}}},true]}}"
+                ),
+                2 => format!(
+                    "{{\"oneOf\":[{{\"propertyNames\":{{\"pattern\":\"^{long}$\"}}}},{{\"required\":[\"{long}\"]}}]}}"
+                ),
+                _ => format!("{{\"if\":{{\"required\":[\"{long}\"]}},\"then\":true}}"),
+            }
+        }
         _ => r#"{"minimum":0,"multipleOf":1}"#.to_owned(),
     };
     if depth == 0 {
@@ -543,7 +556,13 @@ fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
 /// A schema with `defs` shared definitions; definition `i` may refer only to later ones, and
 /// often does so twice (a chain of doublings).
 fn random_root(rng: &mut Rng) -> String {
-    let defs = u32::try_from(rng.below(40)).unwrap();
+    // Often many definitions, a chain of thirty or more doublings among them.
+    let defs = u32::try_from(if rng.below(4) == 0 {
+        30 + rng.below(12)
+    } else {
+        rng.below(40)
+    })
+    .unwrap();
     let suffix = "n".repeat(rng.below(2000) as usize);
     let mut out = Vec::new();
     for i in 0..defs {
@@ -577,7 +596,11 @@ fn validate_work_stays_within_the_charge_for_random_schemas() {
     for _ in 0..200 {
         let schema = random_root(&mut rng);
         let extra = u32::try_from(rng.below(3)).unwrap();
-        let mut instance = random_json(&mut rng, 3 + extra);
+        let mut instance = if rng.below(5) == 0 {
+            "1".to_owned()
+        } else {
+            random_json(&mut rng, 3 + extra)
+        };
         if rng.below(3) == 0 {
             // A wide object and a wide list, with long keys that share a prefix.
             let keys: Vec<String> = (0..rng.below(300))
@@ -604,7 +627,7 @@ fn validate_work_stays_within_the_charge_for_random_schemas() {
             let ratio = w.work as f64 / (64 * w.steps) as f64;
             worst = worst.max(ratio);
             assert!(
-                w.work <= 64 * 64 * w.steps,
+                w.work <= 16 * 64 * w.steps,
                 "{} units of work for {} steps: {instance} against {schema}",
                 w.work,
                 w.steps

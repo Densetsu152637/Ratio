@@ -250,7 +250,7 @@ pub(super) fn validate(
 /// The most counted work units there may be per unit of the visit budget (and per unit of
 /// pattern work paid for): a general guard, so a loop that escapes the budget is found by the
 /// property test, not by a hang.
-const GUARD_FACTOR: u64 = 64;
+const GUARD_FACTOR: u64 = 16;
 
 /// In debug builds: the work this walk counted stays within [`GUARD_FACTOR`] times its budget
 /// and what it paid for pattern work.
@@ -292,6 +292,18 @@ impl Validator<'_, '_> {
             }
         }
         Ok(false)
+    }
+
+    /// As [`Validator::fail`], for a message that is built: nothing is built, copied or formatted
+    /// while a branch is being tried silently, and a message that is built is paid for by its
+    /// length.
+    fn fail_with(&mut self, message: impl FnOnce() -> String) -> Check {
+        if self.silent > 0 {
+            return Ok(false);
+        }
+        let text = message();
+        self.work(len_cost(&text))?;
+        self.fail(&text)
     }
 
     /// The pointer of the current node, paid for by its length.
@@ -503,20 +515,23 @@ impl Validator<'_, '_> {
                 return Err(self.bad("`type` names an unknown type"));
             }
             if !any {
-                let mut names: Vec<String> = Vec::new();
-                match (string_of(t), array(t)) {
-                    (Some(s), _) => names.push(s.to_owned()),
-                    // The message shows at most the first 8 names.
-                    (_, Some(l)) => {
-                        let mut c = l.cursor();
-                        while let (Some(x), true) = (c.next(), names.len() < 8) {
-                            names.push(string_of(&x).unwrap_or("").to_owned());
+                // Built only if the violation is reported (never inside a silent branch).
+                ok &= self.fail_with(|| {
+                    let mut names: Vec<String> = Vec::new();
+                    match (string_of(t), array(t)) {
+                        (Some(s), _) => names.push(s.to_owned()),
+                        // The message shows at most the first 8 names.
+                        (_, Some(l)) => {
+                            let mut c = l.cursor();
+                            while let (Some(x), true) = (c.next(), names.len() < 8) {
+                                names.push(string_of(&x).unwrap_or("").to_owned());
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
-                let more = if count > 8 { " or …" } else { "" };
-                ok &= self.fail(&format!("expected {}{more}", names.join(" or ")))?;
+                    let more = if count > 8 { " or …" } else { "" };
+                    format!("expected {}{more}", names.join(" or "))
+                })?;
             }
         }
         if let Some(e) = kw.enumeration {
@@ -787,7 +802,7 @@ impl Validator<'_, '_> {
                 self.work(
                     1 + item
                         .weight()
-                        .saturating_mul(crate::ops::log_work(seen.len()) + 1),
+                        .saturating_mul(2 * (crate::ops::log_work(seen.len()) + 1)),
                 )?;
                 if seen.get_entry(&item).is_some() {
                     duplicate = true;
@@ -852,7 +867,8 @@ impl Validator<'_, '_> {
                 };
                 self.work(1 + width)?;
                 if self.get(entries, name)?.is_none() {
-                    ok &= self.fail(&format!("is missing the required property `{name}`"))?;
+                    ok &=
+                        self.fail_with(|| format!("is missing the required property `{name}`"))?;
                 }
             }
         }
@@ -895,7 +911,8 @@ impl Validator<'_, '_> {
                 let valid = self.check(&key, names, depth + 1, 0);
                 self.silent -= 1;
                 if !valid? {
-                    ok &= self.fail(&format!("the property name `{name}` is not allowed"))?;
+                    ok &=
+                        self.fail_with(|| format!("the property name `{name}` is not allowed"))?;
                 }
             }
         }
@@ -918,10 +935,9 @@ impl Validator<'_, '_> {
                     };
                     self.work(1 + width)?;
                     if self.get(entries, need)?.is_none() {
-                        ok &= self.fail(&format!(
-                            "has `{}` but not `{need}`",
-                            name.as_text().unwrap_or("")
-                        ))?;
+                        ok &= self.fail_with(|| {
+                            format!("has `{}` but not `{need}`", name.as_text().unwrap_or(""))
+                        })?;
                     }
                 }
             }
@@ -970,9 +986,9 @@ impl Validator<'_, '_> {
                 }
             }
             if hits != 1 {
-                ok &= self.fail(&format!(
-                    "matches {hits} of the `oneOf` schemas, not exactly 1"
-                ))?;
+                ok &= self.fail_with(|| {
+                    format!("matches {hits} of the `oneOf` schemas, not exactly 1")
+                })?;
             }
         }
         if let Some(n) = kw.not
