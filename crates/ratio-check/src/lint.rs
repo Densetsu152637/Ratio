@@ -719,31 +719,20 @@ impl Checker<'_> {
         Some(known.unwrap_or(Effects::ALL))
     }
 
-    /// The arguments a call may call into: those given for a parameter whose type may hold a
-    /// function (`retry`'s `f`, `par`'s `fs`, `think.until`'s `stop`; not `meta.signature`'s
-    /// `h: H`), or every argument of a call of a function value, whose parameters are not
-    /// known by name.
-    fn callback_args<'e>(
-        &self,
-        info: Option<&crate::tables::CallInfo>,
-        args: &'e [ast::Arg],
-    ) -> Vec<&'e ast::Arg> {
+    /// Whether a call may call into its arguments: a call of a function value (its parameters
+    /// are not known), or of a declaration one of whose parameters may hold a function
+    /// (`retry`'s `f`, `par`'s `fs`, `think.until`'s `stop`, a program's `f: fn(T) -> ()`).
+    /// When it may, every argument and the receiver count, by what they actually hold, so a
+    /// function inside a generic argument (`each([go], invoke)`) is seen too; a declaration
+    /// that cannot call anything (`meta.signature`'s `h: H`) calls none of them.
+    fn calls_into_args(&self, info: Option<&crate::tables::CallInfo>) -> bool {
         let Some(r) = info.and_then(|i| i.callee) else {
-            return args.iter().collect();
+            return true;
         };
-        let (Some(info), ItemSig::Fn(sig)) = (info, self.sig(r)) else {
-            return args.iter().collect();
+        let ItemSig::Fn(sig) = self.sig(r) else {
+            return true;
         };
-        sig.params
-            .iter()
-            .zip(&info.args)
-            .filter_map(|(param, source)| {
-                let ArgSource::Arg(k) = source else {
-                    return None;
-                };
-                self.holds_fn(param.ty, 0).then(|| args.get(*k)).flatten()
-            })
-            .collect()
+        sig.params.iter().any(|p| self.holds_fn(p.ty, 0))
     }
 
     /// Records what a local bound by `let` to a function value may do when called.
@@ -819,8 +808,22 @@ impl Checker<'_> {
         // Function values passed to a call run when it calls them (`retry(go)`): what they may
         // do counts here. A closure written at the call is linted in place instead.
         let mut effects = effects;
-        for a in self.callback_args(info, args) {
-            if let Some(more) = self.held_fn_effects(st, &a.value, false) {
+        if self.calls_into_args(info) {
+            for a in args {
+                if let Some(more) = self.held_fn_effects(st, &a.value, false) {
+                    effects = effects.union(more);
+                }
+            }
+            // The receiver: a pipe's left side (`go |> retry()`), or a method call's object.
+            let receiver_at = lhs.or(match callee.map(|c| &c.kind) {
+                Some(ExprKind::Member { object, .. })
+                    if info.is_some_and(|i| i.args.contains(&ArgSource::Receiver)) =>
+                {
+                    Some(object.span)
+                }
+                _ => None,
+            });
+            if let Some(more) = receiver_at.and_then(|at| self.value_fn_effects(st, at)) {
                 effects = effects.union(more);
             }
         }

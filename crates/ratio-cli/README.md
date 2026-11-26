@@ -54,7 +54,9 @@ for a person (file names, messages, source lines, and the paths and reasons on s
 comes from the package, so a character that could control the terminal or reorder text is
 written as an escape instead: C0 controls other than tab, DEL, C1 controls (U+0080 to U+009F),
 the bidirectional embeddings, overrides, isolates and marks (U+202A to U+202E, U+2066 to
-U+2069, U+200E, U+200F, U+061C), the invisible joiners and spaces (U+200B to U+200D, U+FEFF),
+U+2069, U+200E, U+200F, U+061C), the invisible joiners, spaces and operators (U+200B to
+U+200D, U+2060 to U+2064, U+FEFF, U+180E), the soft hyphen, the variation selectors (U+FE00 to
+U+FE0F, U+E0100 to U+E01EF),
 the line and paragraph separators (U+2028, U+2029), the interlinear annotation marks (U+FFF9
 to U+FFFB) and the tag characters (U+E0000 to U+E007F) appear as `\u{1b}`, `\u{202e}`, …, and
 in messages and source lines a `\` is doubled, so a `\u{1b}` written in the source cannot pass

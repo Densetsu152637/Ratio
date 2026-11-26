@@ -83,21 +83,28 @@ fn caret(span: ratio::Span, source: &str) -> String {
 
 /// Whether `c` would control the terminal or change how the text around it reads: a C0
 /// control other than tab, DEL, a C1 control, a bidirectional embedding, override, isolate or
-/// mark (U+200E, U+200F, U+061C), an invisible joiner or space (U+200B to U+200D, U+FEFF), a
-/// line or paragraph separator, an interlinear annotation mark, or a tag character.
+/// mark (U+200E, U+200F, U+061C), an invisible joiner, space or operator (U+200B to U+200D,
+/// U+2060 to U+2064, U+FEFF, U+180E), a soft hyphen, a variation selector (U+FE00 to U+FE0F,
+/// U+E0100 to U+E01EF), a line or paragraph separator, an interlinear annotation mark, or a tag
+/// character.
 fn hostile(c: char) -> bool {
     matches!(
         c,
         '\u{0}'..='\u{8}'
             | '\u{a}'..='\u{1f}'
             | '\u{7f}'..='\u{9f}'
+            | '\u{ad}'
             | '\u{61c}'
+            | '\u{180e}'
             | '\u{200b}'..='\u{200f}'
             | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
+            | '\u{fe00}'..='\u{fe0f}'
             | '\u{feff}'
             | '\u{fff9}'..='\u{fffb}'
             | '\u{e0000}'..='\u{e007f}'
+            | '\u{e0100}'..='\u{e01ef}'
     )
 }
 
@@ -269,6 +276,14 @@ mod tests {
             '\u{fffb}',
             '\u{e0001}',
             '\u{e007f}',
+            '\u{2060}',
+            '\u{2064}',
+            '\u{ad}',
+            '\u{fe00}',
+            '\u{fe0f}',
+            '\u{e0100}',
+            '\u{e01ef}',
+            '\u{180e}',
         ] {
             assert_eq!(
                 clean_text(&c.to_string()),
