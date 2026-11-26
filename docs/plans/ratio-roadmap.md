@@ -1,6 +1,7 @@
 # Plan: Ratio-side implementation roadmap
 
-Revision: 2026-11-27 (stage 4 merged as c834361; stage 5 in review; stage L added)
+Revision: 2026-11-26, end of week (stages 1-8 and 10 merged, spec draft 0.16; 11a in PR #13; C and 9
+converged; coordinator: the "Imperium Implementation" session sets order and priorities)
 
 Goals (each verified by the named check):
 
@@ -170,7 +171,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: 6 (7, then 8, then 9). Owned paths: built-in modules, `conformance/data/**`.
 - Acceptance checks: one conformance test per built-in with each row's failures and label
   propagation; stage 9 adds float determinism with fixed bit patterns.
-- Status: 7 done (PR #9, 4837678); 8 in review (draft 0.16); 9 in review
+- Status: 7 done (PR #9, 4837678); 8 done (PR #12, dfb3d8f; spec draft 0.16); 9 security review
+  converged (3 rounds), branch feat/wt-s9-data3 at ed6ad7a, takes the next free draft after C
 
 ## Stage 10: Frames (security review)
 
@@ -199,7 +201,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   `ratio check` but for the stage 8 and 9 built-ins and listed errata; `ratio check [--json]`
   with exit statuses 0, 1 and 2, `ratio --version` and `ratio help`, tested on the built
   binary; `bash scripts/check-rust.sh` and `scripts/ci/check-links.py` clean.
-- Status: in progress (branch feat/wt-sC-checker).
+- Status: security review converged (4 rounds); branch feat/wt-sC-checker; takes the next free
+  draft after 11a, with the 11a review notes and the Consul-as-harness erratum (example 7).
 
 ## Stage 11: Host, tape and concurrency (security review)
 
@@ -221,7 +224,9 @@ PC-4 and PC-9 in 11b).
   every dimension (the suite Imperium's `RatioHost::open_frame` must also pass, stage 13); the
   throwaway Imperium `RatioHost` spike's result against the candidate commit is recorded in the PR
   before merge (the spike code is never merged).
-- Status: pending. On merge: message "Imperium Implementation" (G6).
+- Status: in review: PR #13 (draft 0.17), security review converged (3 rounds plus final check);
+  merges after green CI and the Imperium spike result is recorded. On merge: message "Imperium
+  Implementation" (G6).
 
 ### Stage 11b: Control, rand, time, state
 
