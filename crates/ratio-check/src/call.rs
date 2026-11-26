@@ -146,17 +146,16 @@ impl Checker<'_> {
                 let Some(sig) = self.fn_sig(r) else {
                     return TypeId::ERROR;
                 };
-                if let Some(kind) = sig.traits.audited {
-                    // A function value would convert at whatever type it is called with, and
-                    // its calls would not be trust sites.
+                if let Some(why) = sig.traits.value_refusal(!sig.type_params.is_empty()) {
+                    // Every rule a built-in's attributes impose must hold for a value too;
+                    // these are enforced only where it is called, so it may only be called.
                     self.report(
                         origin,
                         Code::NotMonomorphic,
                         span,
                         format!(
-                            "`{}` must be called directly, not used as a value: each call is an \
-                             audited trust site at one known type",
-                            kind.name()
+                            "`{}` must be called directly, not used as a value: {why}",
+                            builtins::builtin_name(&name)
                         ),
                     );
                     return TypeId::ERROR;
@@ -173,10 +172,37 @@ impl Checker<'_> {
                     .map(|p| (*p, self.types.new_var(*p)))
                     .collect();
                 let ty = self.types.substitute(ty, &pairs);
-                // Instantiated by the expected type; when it does not fit, the caller reports
-                // the mismatch, so open parameters are not reported as well.
+                // Instantiated by the expected type. When it does not fit, the mismatch is
+                // reported here, at the instantiation with its open parameters: closing them
+                // to the error type first would make the value's type an error, which the
+                // caller would let through silently (`let d: fn(Json) -> Str = json.decode`
+                // would launder `Json` into `Str`).
                 let fits = expected.is_none_or(|want| self.types.subtype(&mut self.memo, ty, want));
-                self.close_vars(b, &pairs, &name, span, !fits);
+                if !fits && let Some(want) = expected {
+                    let shown = self.types.resolve(ty);
+                    self.mismatch(b, span, shown, want);
+                    self.close_vars(b, &pairs, &name, span, true);
+                    return TypeId::ERROR;
+                }
+                self.close_vars(b, &pairs, &name, span, false);
+                // The value-form rules: `@schema(T)` holds at the type it is named with, and a
+                // generic declaration named at a type holding a secret is checked against what
+                // it may do once its summary is known.
+                for (p, t) in &pairs {
+                    let pname = self.types.param_def(*p).name.clone();
+                    if sig.traits.schema.contains(&pname) {
+                        self.require_schema(
+                            b,
+                            *t,
+                            span,
+                            &format!("`{name}`'s type argument `{pname}`"),
+                        );
+                    }
+                }
+                if matches!(r.origin, Origin::Module(_)) {
+                    let targs = pairs.iter().map(|(_, t)| *t).collect();
+                    self.records.value_uses.push((b.module, span, r, targs));
+                }
                 self.types.resolve(ty)
             }
             ItemKind::Type(_) | ItemKind::Enum(_) => {
@@ -1043,9 +1069,10 @@ impl Checker<'_> {
         expected: Option<TypeId>,
     ) -> TypeId {
         let origin = b.origin();
-        let name = r
-            .and_then(|r| item_name(&self.item(r).kind))
-            .map_or_else(|| "this function".to_owned(), |i| i.name.clone());
+        let name = r.and_then(|r| item_name(&self.item(r).kind)).map_or_else(
+            || "this function".to_owned(),
+            |i| builtins::builtin_name(&i.name).to_owned(),
+        );
         // Type arguments: the turbofish's, or inference variables.
         let mut pairs: Vec<(ParamId, TypeId)> = Vec::with_capacity(sig.type_params.len());
         if type_args.is_empty() {

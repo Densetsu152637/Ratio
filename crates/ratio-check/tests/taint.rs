@@ -466,3 +466,157 @@ fn the_lint_and_the_analysis_stay_linear_on_hostile_bodies() {
     let last = checked.summary(ModuleId(0), 2000).unwrap();
     assert!(checked.approximate || last.trust_sites.len() == 2000);
 }
+
+/// Every attribute-driven rule of a built-in must hold when the built-in is used as a function
+/// value: each annotated built-in is either refused as a value (`C0036`) or its attributes are
+/// all of the kinds whose rules hold for values too.
+#[test]
+fn every_annotated_built_in_is_refused_as_a_value_or_covered() {
+    // Rules enforced only at a direct call: the built-in must be refused as a value.
+    const CALL_ONLY: &[&str] = &["audited", "loads", "secret_answers"];
+    // Rules that hold for values: effects, tools and purity count where a value is named;
+    // `@user` and `@local` only relax the lint and the sink summary; `@schema(T)` is checked
+    // at the type a value is named with; a secrecy sink without type parameters refuses
+    // secrets through its parameter types.
+    const VALUE_SAFE: &[&str] = &["pure", "effect", "tool", "user", "local", "schema"];
+    let rules = ratio_check::builtin_rules();
+    assert!(rules.len() > 40, "{}", rules.len());
+    let mut refused = 0;
+    for b in &rules {
+        let call_only = b.attrs.iter().any(|a| CALL_ONLY.contains(&a.as_str()))
+            || (b.generic && b.attrs.iter().any(|a| a == "secrecy_sink"));
+        for a in &b.attrs {
+            assert!(
+                CALL_ONLY.contains(&a.as_str())
+                    || VALUE_SAFE.contains(&a.as_str())
+                    || a == "secrecy_sink",
+                "`@{a}` on `{}` is not classified for function values",
+                b.name
+            );
+        }
+        assert_eq!(
+            call_only,
+            b.refused_as_value.is_some(),
+            "`{}` ({:?})",
+            b.name,
+            b.attrs
+        );
+        if call_only {
+            refused += 1;
+            let (_, checked) = check(&format!(
+                "fn f() -> Int {{\n  let v = {}\n  1\n}}\n",
+                b.name
+            ));
+            let codes: Vec<(Code, u32, u32)> = checked
+                .diagnostics
+                .iter()
+                .map(|d| (d.code, d.span.line, d.span.col))
+                .collect();
+            assert_eq!(codes, vec![(Code::NotMonomorphic, 2, 11)], "{}", b.name);
+        }
+    }
+    assert_eq!(
+        refused, 5,
+        "trust, as_task, declassify, session.ask, meta.harness"
+    );
+    // The `@schema(T)` rule at a value's type.
+    let (_, checked) = check("fn f() -> Int {\n  let e: fn(Image) -> Json = json.encode\n  1\n}\n");
+    let codes: Vec<Code> = checked.diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, vec![Code::NotSchemaable]);
+    // A value whose expected type does not fit its instantiation is refused where it is
+    // named, never typed as an error and let through (`fn(Json) -> Str` would launder).
+    let (_, checked) = check(
+        "fn f(j: Json) -> TrustedPrompt {\n  let d: fn(Json) -> Str = json.decode\n  prompt { system d(j) }\n}\n",
+    );
+    let codes: Vec<Code> = checked.diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, vec![Code::Mismatch]);
+}
+
+#[test]
+fn a_dotted_load_name_takes_the_longest_package_and_ambiguity_is_incomplete() {
+    let readings: Vec<String> = ratio_check::package_readings("user:a.b.c@^1")
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        readings,
+        vec!["user:a.b@^1".to_owned(), "user:a@^1".to_owned()]
+    );
+    let main = r#"
+pub harness run(x: Untrusted<Str>) -> Untrusted<Str> {
+  let h = meta.harness::<harness(Untrusted<Str>) -> Untrusted<Str>>("user:a.b.c")
+  h(x)
+}
+"#;
+    let a = "pub harness b(x: Untrusted<Str>) -> Untrusted<Str> {\n  let s = trust(x, because: \"a\")\n  x\n}\n";
+    let ab = "pub harness c(x: Untrusted<Str>) -> Untrusted<Str> {\n  x\n}\n";
+    let builtin = MemoryRegistry::new();
+    let name = QualifiedName::parse("user:app").unwrap();
+    // Only package `a` exists (harness `b.c`): it is followed, and the list is complete.
+    let registry = registry_with(&[("app", "main.ratio", main), ("a", "main.ratio", a)]);
+    let done = ratio_check::harnesses_check(&registry, &builtin, &name);
+    assert!(done.complete);
+    assert_eq!(done.trust_sites.len(), 1);
+    // `a.b` exists too: the longest reading (`a.b`, harness `c`) wins, as at run time, and
+    // the name is ambiguous, so the list is incomplete.
+    let registry = registry_with(&[
+        ("app", "main.ratio", main),
+        ("a", "main.ratio", a),
+        ("a.b", "main.ratio", ab),
+    ]);
+    let done = ratio_check::harnesses_check(&registry, &builtin, &name);
+    assert!(!done.complete);
+    assert_eq!(done.loaded_packages, vec!["user:a.b".to_owned()]);
+    assert_eq!(done.trust_sites.len(), 0);
+}
+
+#[test]
+fn recursive_enum_definitions_never_share_a_name() {
+    let (loaded, mut checked) = check(
+        "enum A_2 { L, N { k: [A_2] } }\nenum A { L, N { k: [A] } }\ntype R = { x: A_2, y: A }\n",
+    );
+    let t = alias(&loaded, &checked, "R");
+    let got = checked.schema(t).unwrap();
+    assert_eq!(
+        got,
+        concat!(
+            r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/A_2"},"y":{"$ref":"#/$defs/A"}},"required":["x","y"],"additionalProperties":false,"$defs":{"##,
+            r##""A_2":{"oneOf":[{"type":"object","properties":{"kind":{"const":"l"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"n"},"k":{"type":"array","items":{"$ref":"#/$defs/A_2"}}},"required":["kind","k"],"additionalProperties":false}]},"##,
+            r##""A":{"oneOf":[{"type":"object","properties":{"kind":{"const":"l"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"n"},"k":{"type":"array","items":{"$ref":"#/$defs/A"}}},"required":["kind","k"],"additionalProperties":false}]}}}"##
+        )
+    );
+    // The reverse order of declaration: `A` then `A_2` again get distinct names.
+    let (loaded, mut checked) = check(
+        "enum A { L, N { k: [A] } }\nenum B { L, N { k: [B] } }\ntype R = { x: A, y: A2 }\ntype A2 = A_2\nenum A_2 { L, N { k: [A_2] } }\n",
+    );
+    let t = alias(&loaded, &checked, "R");
+    let got = checked.schema(t).unwrap();
+    assert!(
+        got.contains(r#""$defs":{"A":"#) && got.contains(r#","A_2":"#),
+        "{got}"
+    );
+}
+
+#[test]
+fn regular_expressions_in_patterns_are_checked() {
+    for (pattern, ok) in [
+        ("^[a-z]+$", true),
+        (r"^(?:ab|c){2,3}\d*$", true),
+        (r"[\]]x", true),
+        ("(", false),
+        ("a)", false),
+        ("[a-", false),
+        ("*a", false),
+        ("a{3,1}", false),
+        ("(?=a)", false),
+        (r"\1", false),
+        ("a\\", false),
+    ] {
+        assert_eq!(
+            ratio_check::regex_problem(pattern).is_none(),
+            ok,
+            "{pattern}: {:?}",
+            ratio_check::regex_problem(pattern)
+        );
+    }
+}

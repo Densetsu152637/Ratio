@@ -16,14 +16,17 @@
 //!   `b?: B` or `b: B?` is not `required` and has `B`'s schema.
 //! - A unit-only enum is a `string` with the variant names in `snake_case`; another enum is a
 //!   `oneOf` of objects whose `kind` is the variant's name in `snake_case`, in declaration
-//!   order. An enum that contains itself is written once under `$defs` (by its name, with
-//!   `_2`, `_3`, … for a second enum of the same name) and referred to by `$ref`.
+//!   order. An enum that contains itself is written once under `$defs` and referred to by
+//!   `$ref`, named by its name, or, when an earlier definition took that name, the first of
+//!   `Name_2`, `Name_3`, … still free.
 //! - `Map<K, V>` is an `object` with `additionalProperties: V`; a key type other than text
 //!   adds `propertyNames` (`^-?[0-9]+$` for `Int`, the names for `Bool` and unit-only enums).
 //!
 //! **Type digests** are `sha256` over a canonical form that keeps the labels, so `Str` and
-//! `Untrusted<Str>` digest differently, and leaves out descriptions and refinements (which
-//! change the schema, not the values). The form is `ratio-type-1;` followed by the type's form
+//! `Untrusted<Str>` digest differently, and leaves out descriptions and refinements: a digest
+//! is a key for the *structure* of the values (state, caches), and a changed description or
+//! `@len` does not make stored values another type. `@range` bounds are written as the
+//! decimal literals of the source (`1.5`, `-3`), never reformatted. The form is `ratio-type-1;` followed by the type's form
 //! and then, for each enum met (numbered in the order first met, depth first, left to right),
 //! `;#n=` and its definition:
 //!
@@ -361,15 +364,14 @@ impl SchemaWriter<'_> {
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
-                let taken = self.defs.iter().filter(|(_, n)| {
-                    n == &base || n.strip_prefix(&base).is_some_and(|r| r.starts_with('_'))
-                });
-                let count = taken.count();
-                let name = if count == 0 {
-                    base
-                } else {
-                    format!("{base}_{}", count + 1)
-                };
+                // The first of `Name`, `Name_2`, `Name_3`, … no earlier definition took.
+                let used = |n: &str| self.defs.iter().any(|(_, d)| d == n);
+                let mut name = base.clone();
+                let mut k = 2usize;
+                while used(&name) {
+                    name = format!("{base}_{k}");
+                    k += 1;
+                }
                 self.defs.push((e, name));
             }
         }
@@ -848,10 +850,24 @@ impl Checker<'_> {
                                 ..
                             },
                         ],
-                    ) => {
-                        meta.pattern = plain(s);
-                        meta.pattern.is_some()
-                    }
+                    ) => match plain(s) {
+                        Some(p) => match regex_problem(&p) {
+                            None => {
+                                meta.pattern = Some(p);
+                                true
+                            }
+                            Some(why) => {
+                                self.report(
+                                    origin,
+                                    Code::NotSchemaable,
+                                    a.span,
+                                    format!("`@pattern` is not a valid regular expression: {why}"),
+                                );
+                                continue;
+                            }
+                        },
+                        None => false,
+                    },
                     _ => false,
                 },
                 "example" => match args.as_slice() {
@@ -891,6 +907,141 @@ impl Checker<'_> {
         }
         meta
     }
+}
+
+/// Why `p` is not a regular expression a schema validator and the standard library's `re`
+/// both read, if it is not: the conservative common subset of ECMAScript and RE2 syntax
+/// (alternation, groups including `(?:`, classes with ranges, the quantifiers `*`, `+`, `?`
+/// and `{m}`, `{m,}`, `{m,n}`, anchors and `\`-escapes of punctuation and the classes `d`,
+/// `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`, `t`). Anything else (look-around,
+/// back-references, named groups, an unbalanced bracket, a quantifier with nothing to repeat)
+/// is refused rather than guessed.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    reason = "one arm per token; the scanner's indexes"
+)]
+pub fn regex_problem(p: &str) -> Option<String> {
+    let chars: Vec<char> = p.chars().collect();
+    let mut i = 0;
+    let mut depth = 0usize;
+    // Whether the last item can take a quantifier.
+    let mut atom = false;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\\' => {
+                let Some(&e) = chars.get(i + 1) else {
+                    return Some("it ends with `\\`".to_owned());
+                };
+                if !(e.is_ascii_punctuation() || "dwsDWSbBnrt".contains(e)) {
+                    return Some(format!("`\\{e}` is not an escape both dialects read"));
+                }
+                atom = !matches!(e, 'b' | 'B');
+                i += 2;
+            }
+            '(' => {
+                if chars.get(i + 1) == Some(&'?') {
+                    if chars.get(i + 2) != Some(&':') {
+                        return Some("only `(?:` groups are allowed".to_owned());
+                    }
+                    i += 3;
+                } else {
+                    i += 1;
+                }
+                depth += 1;
+                if depth > 64 {
+                    return Some("groups are nested too deeply".to_owned());
+                }
+                atom = false;
+            }
+            ')' => {
+                if depth == 0 {
+                    return Some("a `)` closes no group".to_owned());
+                }
+                depth -= 1;
+                atom = true;
+                i += 1;
+            }
+            '[' => {
+                let mut j = i + 1;
+                if chars.get(j) == Some(&'^') {
+                    j += 1;
+                }
+                let start = j;
+                loop {
+                    match chars.get(j) {
+                        None => return Some("a `[` is not closed".to_owned()),
+                        Some(']') if j > start => break,
+                        Some('\\') => {
+                            let Some(&e) = chars.get(j + 1) else {
+                                return Some("it ends with `\\`".to_owned());
+                            };
+                            if !(e.is_ascii_punctuation() || "dwsDWSnrt".contains(e)) {
+                                return Some(format!(
+                                    "`\\{e}` is not an escape both dialects read"
+                                ));
+                            }
+                            j += 2;
+                        }
+                        Some('[') => {
+                            return Some("a `[` inside a class must be escaped".to_owned());
+                        }
+                        Some(_) => j += 1,
+                    }
+                }
+                atom = true;
+                i = j + 1;
+            }
+            ']' => return Some("a `]` opens no class (escape it as `\\]`)".to_owned()),
+            '*' | '+' | '?' => {
+                if !atom {
+                    return Some(format!("`{c}` has nothing to repeat"));
+                }
+                atom = false;
+                i += 1;
+                // A lazy quantifier.
+                if chars.get(i) == Some(&'?') {
+                    i += 1;
+                }
+            }
+            '{' => {
+                if !atom {
+                    return Some("`{` has nothing to repeat (escape it as `\\{`)".to_owned());
+                }
+                let Some(close) = chars[i..].iter().position(|x| *x == '}') else {
+                    return Some("a `{` is not closed".to_owned());
+                };
+                let inner: String = chars[i + 1..i + close].iter().collect();
+                let ok = match inner.split_once(',') {
+                    None => inner.parse::<u32>().is_ok(),
+                    Some((lo, "")) => lo.parse::<u32>().is_ok(),
+                    Some((lo, hi)) => match (lo.parse::<u32>(), hi.parse::<u32>()) {
+                        (Ok(lo), Ok(hi)) => lo <= hi,
+                        _ => false,
+                    },
+                };
+                if !ok {
+                    return Some(format!(
+                        "`{{{inner}}}` is not a repetition `{{m}}`, `{{m,}}` or `{{m,n}}`"
+                    ));
+                }
+                atom = false;
+                i += close + 1;
+            }
+            '}' => return Some("a `}` closes no repetition (escape it as `\\}`)".to_owned()),
+            '|' | '^' | '$' => {
+                atom = false;
+                i += 1;
+            }
+            _ => {
+                atom = true;
+                i += 1;
+            }
+        }
+    }
+    (depth > 0).then(|| "a `(` is not closed".to_owned())
 }
 
 /// The text of a string literal without interpolations.

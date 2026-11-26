@@ -65,11 +65,21 @@ fn ratio_blocks() -> Vec<(String, usize, String)> {
 
 /// Blocks that are statements, not a whole file: they are parsed inside `fn fragment() { … }`.
 /// Listed so that a block that stops being a fragment is noticed rather than silently wrapped.
-const FRAGMENTS: &[(&str, usize)] = &[
-    ("03-semantics.md", 432),
-    ("04-harnesses.md", 80),
-    ("05-thinking.md", 71),
+/// Each is named by its chapter and the start of its first line, not by a line number, so
+/// editing the chapter above a block does not break the test.
+const FRAGMENTS: &[(&str, &str)] = &[
+    ("03-semantics.md", "let report = try {"),
+    ("04-harnesses.md", "let review = reviewer(diff)"),
+    ("05-thinking.md", "let t = think.steps::<Answer>("),
 ];
+
+/// Whether the block `text` of chapter `file` is a listed fragment.
+fn is_fragment(file: &str, text: &str) -> bool {
+    let first = text.lines().next().unwrap_or("");
+    FRAGMENTS
+        .iter()
+        .any(|(f, start)| *f == file && first.starts_with(start))
+}
 
 #[test]
 fn every_ratio_block_in_the_specification_parses() {
@@ -79,7 +89,7 @@ fn every_ratio_block_in_the_specification_parses() {
     let mut fragments_seen = 0;
     for (file, line, text) in &blocks {
         let parsed = parse(text);
-        if FRAGMENTS.contains(&(file.as_str(), *line)) {
+        if is_fragment(file, text) {
             fragments_seen += 1;
             assert!(
                 !parsed.is_clean(),

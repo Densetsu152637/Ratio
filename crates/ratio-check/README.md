@@ -118,7 +118,18 @@ crate rather than a second one because its rules change which programs type (the
   are audited trust sites. `trust`'s `T` is the turbofish's, else `x`'s type with its trust
   labels removed (`Untrusted<Verdict>` gives `Verdict`), never what inference from the expected
   type would bind. Each converts only at a monomorphic type, and may only be called directly:
-  a type parameter in `T`, or naming one as a value, is `C0036`. Every call is recorded
+  a type parameter in `T`, or naming one as a value, is `C0036`.
+- **Built-ins as values.** Every rule a built-in's attributes impose holds for a function value
+  too. Those enforced only where it is called (`@audited`, `@loads`, `@secret_answers`, and
+  `@secrecy_sink` on a generic built-in) make the built-in callable only: naming it as a value
+  is `C0036` (so `let load: fn(Str) -> H = meta.harness` cannot load a harness no list names,
+  and `session.ask` cannot lose `secret: true`). The others hold for values: effects, tools and
+  purity count where a value is named, `@schema(T)` is checked at the type a value is named
+  with, and a non-generic secrecy sink refuses secrets by its parameter types.
+  `tests/taint.rs` enumerates the table and checks each annotated built-in is one or the other.
+  A generic value whose expected type does not fit its instantiation is refused where it is
+  named (`C0004`): stage 4 closed its open parameters to the error type first, which let
+  `let d: fn(Json) -> Str = json.decode` through as a laundering of `Json` into `Str`. Every call is recorded
   (`Checked::trust_sites`: kind, position, enclosing item, type, literal reason).
 - **Transitive trust sites and the summary.** The call graph has an edge from an item to every
   declaration its source names (as for purity, effects count where a function value is made or
@@ -134,10 +145,14 @@ crate rather than a second one because its rules change which programs type (the
   argument. A result computed from a statically secret argument is secret (interpolation and
   calls; not `()`, prompts, or `declassify`), and branching on a `Secret<Bool>` is allowed.
   `Secret<T>` relates only to `Secret<U>`, so a secret reaches no unlabelled position (`C0037`):
-  the built-ins marked `@secrecy_sink` refuse one even for a generic parameter, and a secret
-  passed for a generic parameter of a function that may write, run commands, delegate or reach
-  the network is refused at the call (its body cannot see the label). Everything else is the
-  run-time labels' job (stage 6).
+  the built-ins marked `@secrecy_sink` refuse one even for a generic parameter, and a generic
+  function that **may reach a secrecy sink** cannot be instantiated at a type holding a secret,
+  whether called, named at an expected function type, given by a turbofish or returned (its
+  body cannot see the label). "May reach a secrecy sink" is a summary bit (`Effects::SINK`)
+  propagated like the effects: set by `@secrecy_sink` built-ins and, failing closed, by every
+  effectful built-in not marked `@local` (a model may be hosted; an effect of unknown kind may
+  send its arguments anywhere) and by calling a harness value. Everything else is the run-time
+  labels' job (stage 6).
 - **Guarded-effect lint** (`C0039`, a warning; [`src/lint.rs`](src/lint.rs) states the rules):
   an effect that writes, runs a command, delegates, reaches the network or runs a model-chosen
   tool, every one of whose guards in its item is derived from model or tool output only.
@@ -145,15 +160,21 @@ crate rather than a second one because its rules change which programs type (the
   user's answers, locals assigned under derived guards, closure parameters, caught errors); a
   trusted conjunct (`if v.pass and approved`) is a guard of its own. Each item is walked until
   its derived locals settle, at most `MAX_ROUNDS` times, then every local counts as derived.
-  `@allow(model_guard)` on the item silences it (statements take no attributes).
+  `@allow(model_guard)` on the item silences it (statements take no attributes). `declassify`
+  is `@user` (the person approves it), so its result is as derived as its argument: the
+  person approves removing the label, not where the value came from.
 - **Schemas and digests** ([`src/schema.rs`](src/schema.rs) documents the canonical forms).
   `schema(t)` is the JSON Schema (draft 2020-12) of chapter 03's table, with the labels dropped
   and the record declarations' descriptions (`"…"` or `///`) and refinements (`@len`,
   `@range`, `@pattern`, `@example`, checked against their fields: `C0038`) added, written as
   canonical JSON (fixed key order, no whitespace); an enum that contains itself goes under
-  `$defs`. `digest(t)` is `sha256` (written out in [`src/sha256.rs`](src/sha256.rs), with the
+  `$defs`, by its name or the first `Name_2`, `Name_3`, … still free. A `@pattern` must be in
+  the subset of regular-expression syntax both JSON Schema validators (ECMAScript) and `re`
+  read (no look-around, back-references or named groups), else `C0038`; `@range` keeps the
+  decimal literals as written. `digest(t)` is `sha256` (written out in [`src/sha256.rs`](src/sha256.rs), with the
   standard's vectors) over a canonical form that keeps the labels (`Str` and `Untrusted<Str>`
-  differ) and leaves out descriptions and refinements. Records are structural, so equal
+  differ) and leaves out descriptions and refinements: it keys the structure of values (state,
+  caches), which a changed description or `@len` does not change. Records are structural, so equal
   records share the metadata of the first declaration lowered. A `state` type, a `format`
   type and the type arguments marked `@schema(T)` (`json.decode`, `json.encode`,
   `model.generate_as`) must be schema-able (`C0038`).
@@ -163,9 +184,11 @@ crate rather than a second one because its rules change which programs type (the
   harness its parameter and result schemas and whether a model may run it (`pub`, not an
   entry, every parameter schema-able and free of trusted text; otherwise "not runnable by
   models" with the reason). `harnesses_check(&registry, &builtin, &name)` loads and checks
-  through a registry and follows literal `meta.harness` names (the package is the name
-  without its last dotted part) to list the sites of everything the package can load, at most
-  `MAX_LOADED_PACKAGES` packages; a computed name or a package the registry lacks makes it
+  through a registry and follows literal `meta.harness` names to list the sites of everything
+  the package can load, at most `MAX_LOADED_PACKAGES` packages. A name is a package name, `.`
+  and the harness, and package names hold dots, so it follows the run-time rule: the longest
+  prefix that names a registered package wins (`package_readings` lists the candidates). A
+  computed name, a name no reading resolves, or one that two readings resolve makes it
   `complete: false`. `test` blocks against a scripted host need the interpreter.
 
 What stage 6 must carry at run time: the trust sites (kind, reason, site) to emit `ratio_trust`
@@ -204,7 +227,8 @@ with empty bodies, `@pure` where chapter 06's Needs column is `pure`. A declarat
 `@pure` counts as effectful (of an unknown kind), so one added carelessly fails closed. Stage 5's
 attributes say the rest: `@audited(trust | as_task | declassify)`, `@effect(write | command |
 network | delegate | any_tool | model)`, `@tool(name)`, `@secrecy_sink`, `@schema(T)`, `@user`
-(the result is the person's answer), `@secret_answers` and `@loads`. A name that is a Ratio
+(the result is the person's answer), `@secret_answers`, `@loads` and `@local` (its effects keep
+its arguments on the machine: not a secrecy sink). A name that is a Ratio
 keyword is written with a trailing `_` (`meta.harness_`, `agents.spawn`'s `harness_`), which
 the checker drops. The type-parameter names `S`
 (any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,

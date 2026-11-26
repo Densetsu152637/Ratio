@@ -44,10 +44,12 @@ pub use analysis::{Effects, Load, MAX_SITE_WORK, Summary, TrustSite};
 pub use builtins::TrustKind;
 pub use diag::{Code, Diagnostic};
 pub use lint::MAX_ROUNDS;
-pub use report::{HarnessCheck, HarnessInfo, PackageCheck, SiteInfo, harnesses_check};
+pub use report::{
+    HarnessCheck, HarnessInfo, PackageCheck, SiteInfo, harnesses_check, package_readings,
+};
 pub use schema::{
-    Digest, MAX_SCHEMA_BYTES, MAX_SCHEMA_DEPTH, SchemaError, canonical_form, digest, schema,
-    snake_case,
+    Digest, MAX_SCHEMA_BYTES, MAX_SCHEMA_DEPTH, SchemaError, canonical_form, digest, regex_problem,
+    schema, snake_case,
 };
 pub use sha256::{hex, sha256};
 pub use tables::{
@@ -242,4 +244,49 @@ pub fn check(loaded: &Loaded) -> Checked {
         std_names: Vec::new(),
         internal: Vec::new(),
     })
+}
+
+/// A built-in of the checker's table, for the test that every attribute-driven rule holds
+/// for function values too.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct BuiltinRules {
+    /// The name as a program writes it (`trust`, `meta.harness`).
+    pub name: String,
+    /// Its attributes' names, in order.
+    pub attrs: Vec<String>,
+    /// Whether it has type parameters.
+    pub generic: bool,
+    /// Why it may not be used as a function value, if it may not.
+    pub refused_as_value: Option<&'static str>,
+}
+
+/// Every built-in function of the table, with its attributes. For tests.
+#[doc(hidden)]
+#[must_use]
+pub fn builtin_rules() -> Vec<BuiltinRules> {
+    let mut internal = Vec::new();
+    let mut out = Vec::new();
+    for m in check::std_modules(&mut internal).iter().skip(1) {
+        for item in &m.module.items {
+            let ratio_syntax::ast::ItemKind::Fn(decl) = &item.kind else {
+                continue;
+            };
+            let traits = builtins::Traits::of(&item.attrs, &mut internal);
+            let plain = builtins::builtin_name(&decl.name.name);
+            let name = if m.name == "control" {
+                plain.to_owned()
+            } else {
+                format!("{}.{plain}", m.name)
+            };
+            let generic = !decl.type_params.is_empty();
+            out.push(BuiltinRules {
+                name,
+                attrs: item.attrs.iter().map(|a| a.name.name.clone()).collect(),
+                generic,
+                refused_as_value: traits.value_refusal(generic),
+            });
+        }
+    }
+    out
 }

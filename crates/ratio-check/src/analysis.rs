@@ -45,13 +45,17 @@ impl Effects {
     pub const MODEL: Effects = Effects(32);
     /// An effect of another kind (reads, engine state, the session).
     pub const OTHER: Effects = Effects(64);
+    /// May reach a secrecy sink (chapter 03): a built-in marked `@secrecy_sink`, and, failing
+    /// closed, every effectful built-in not marked `@local` (a model call may go to a hosted
+    /// model; an effect of unknown kind may send its arguments anywhere).
+    pub const SINK: Effects = Effects(128);
     /// What a harness value may do when called: anything.
-    pub const ALL: Effects = Effects(127);
+    pub const ALL: Effects = Effects(255);
     /// The kinds the guarded-effect lint watches (chapter 03: writes, commands, delegation,
     /// the network, and any tool).
     pub const GUARDED: Effects = Effects(1 | 2 | 4 | 8 | 16);
 
-    const NAMES: [(Effects, &'static str); 7] = [
+    const NAMES: [(Effects, &'static str); 8] = [
         (Effects::WRITE, "write"),
         (Effects::COMMAND, "command"),
         (Effects::NETWORK, "network"),
@@ -59,6 +63,7 @@ impl Effects {
         (Effects::ANY_TOOL, "any_tool"),
         (Effects::MODEL, "model"),
         (Effects::OTHER, "other"),
+        (Effects::SINK, "secrecy_sink"),
     ];
 
     /// The kind called `name` in the built-in table's `@effect(name)`.
@@ -149,6 +154,8 @@ pub(crate) struct Records {
     pub(crate) loads: Vec<(ModuleId, Span, Option<String>)>,
     /// Calls of harness values.
     pub(crate) harness_calls: Vec<(ModuleId, Span)>,
+    /// Generic declarations named as values: where, which, and their type arguments.
+    pub(crate) value_uses: Vec<(ModuleId, Span, ItemRef, Vec<TypeId>)>,
 }
 
 /// The analysis's results.
@@ -158,6 +165,7 @@ pub(crate) struct Results {
     pub(crate) loads: Vec<Load>,
     pub(crate) summaries: HashMap<(ModuleId, usize), Summary>,
     pub(crate) approximate: bool,
+    pub(crate) value_uses: Vec<(ModuleId, Span, ItemRef, Vec<TypeId>)>,
 }
 
 /// The index of the item of `starts` (sorted item start offsets) whose span holds `at`.
@@ -231,6 +239,13 @@ impl Checker<'_> {
             }
         }
         let mut records = std::mem::take(&mut self.records);
+        out.value_uses = std::mem::take(&mut records.value_uses)
+            .into_iter()
+            .map(|(m, span, r, targs)| {
+                let targs = targs.into_iter().map(|t| self.types.resolve(t)).collect();
+                (m, span, r, targs)
+            })
+            .collect();
         // In module and source order, each call once.
         records
             .trust_sites

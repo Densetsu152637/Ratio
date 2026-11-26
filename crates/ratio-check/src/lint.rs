@@ -12,7 +12,9 @@
 //!   or `match` whose condition is derived (implicit flow);
 //! - the result of a built-in that makes effects (model and tool output), unless its result
 //!   is the person's answer (`session.request_approval`, `session.ask`); of a harness; of a
-//!   function that makes effects; and of any call of a function value;
+//!   function that makes effects; and of any call of a function value (`declassify`'s result
+//!   is as derived as its argument: the person approves removing the label, not the value's
+//!   origin);
 //! - a local bound from a derived value, a `var` assigned one or assigned under a derived
 //!   condition, a pattern variable of a derived scrutinee, a closure's parameters (their
 //!   values come from wherever the closure is called), and a caught error.
@@ -46,6 +48,11 @@ use crate::check::{Checker, FnKind, ItemSig};
 use crate::diag::Code;
 use crate::tables::{ArgSource, Key, LocalId, Origin, PatRes, Res};
 use crate::types::Ty;
+
+/// Why a generic declaration instantiated at a secret is refused.
+const SECRET_INSTANCE: &str = "a generic function that may reach a secrecy sink cannot be \
+     instantiated at a type holding a secret: its body cannot see the label (`declassify` asks \
+     the user)";
 
 /// How many times an item is walked for its derived locals to settle.
 pub const MAX_ROUNDS: usize = 8;
@@ -133,6 +140,21 @@ impl Checker<'_> {
         for (module, span, message) in found {
             self.report(Origin::Module(module), Code::ModelGuard, span, message);
         }
+        // Generic declarations named as values at a type holding a secret.
+        for (module, span, r, targs) in &results.value_uses {
+            let may_sink = match r.origin {
+                Origin::Module(m) => results
+                    .summaries
+                    .get(&(m, r.index))
+                    .is_none_or(|s| s.effects.intersects(Effects::SINK)),
+                Origin::Std(_) => true,
+            };
+            if may_sink && targs.iter().any(|t| self.types.secret_inside(*t)) {
+                errors.push((*module, *span, SECRET_INSTANCE.to_owned()));
+            }
+        }
+        errors.sort_by_key(|(m, s, _)| (*m, s.start, s.end));
+        errors.dedup_by_key(|(m, s, _)| (*m, s.start, s.end));
         for (module, span, message) in errors {
             self.report(Origin::Module(module), Code::Secret, span, message);
         }
@@ -659,20 +681,22 @@ impl Checker<'_> {
                 ),
             ));
         }
-        if st.collect && effects.intersects(Effects::GUARDED) {
-            self.secret_into_generic(st, callee, args, lhs, info);
+        if st.collect && effects.intersects(Effects::SINK) {
+            self.secret_into_generic(st, span, callee, args, lhs, info);
         }
         derived
     }
 
     /// A statically secret value passed for a generic parameter of a declaration that may
-    /// write, run commands, delegate or reach the network is refused (`C0037`): the callee's
-    /// body is checked at its type parameter, which carries no label, so it cannot refuse the
-    /// sink itself. (A parameter declared `Secret<…>` is checked in the callee; the built-in
-    /// secrecy sinks refuse their own arguments.)
+    /// reach a secrecy sink ([`Effects::SINK`]) is refused (`C0037`): the callee's body is
+    /// checked at its type parameter, which carries no label, so it cannot refuse the sink
+    /// itself. A call whose type arguments hold a secret some other way (from the expected
+    /// type, a turbofish) is refused at the call. (A parameter declared `Secret<…>` is checked
+    /// in the callee; the built-in secrecy sinks refuse their own arguments.)
     fn secret_into_generic(
         &self,
         st: &mut St<'_>,
+        span: Span,
         callee: Option<&Expr>,
         args: &[ast::Arg],
         lhs: Option<Span>,
@@ -688,6 +712,7 @@ impl Checker<'_> {
             return;
         };
         let table = &self.tables[st.module.0];
+        let mut found = false;
         for (param, source) in sig.params.iter().zip(&info.args) {
             if !self.types.has_params(param.ty) {
                 continue;
@@ -708,16 +733,21 @@ impl Checker<'_> {
                 .get(&Key::from(at))
                 .is_some_and(|t| self.types.secret_inside(*t))
             {
+                found = true;
                 st.errors.push((
                     at,
                     format!(
                         "a secret cannot be passed for the generic parameter `{}` of a function \
-                         that may write, run commands, delegate or reach the network: it could \
-                         send the secret on (`declassify` asks the user)",
+                         that may reach a secrecy sink (a model, a tool, the network, a \
+                         command, a write, delegation): it could send the secret on \
+                         (`declassify` asks the user)",
                         param.name
                     ),
                 ));
             }
+        }
+        if !found && info.type_args.iter().any(|t| self.types.secret_inside(*t)) {
+            st.errors.push((span, SECRET_INSTANCE.to_owned()));
         }
     }
 }

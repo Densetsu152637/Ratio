@@ -245,22 +245,37 @@ pub struct PackageCheck {
     pub complete: bool,
 }
 
-/// The package a `meta.harness` name loads: the name without its last dotted part (the
-/// harness), or the whole name when it has none.
-fn package_of(name: &str) -> Option<QualifiedName> {
+/// The packages a `meta.harness` name may mean, longest first: a name is a package name
+/// followed by `.` and the harness, and a package name may itself hold dots
+/// (`user:critics.strict.judge` is package `critics.strict` and harness `judge`, or package
+/// `critics` and harness `strict.judge`). The runtime rule is that the longest prefix that
+/// names a registered package wins; the rest is the harness.
+#[must_use]
+pub fn package_readings(name: &str) -> Vec<QualifiedName> {
     let (body, range) = match name.split_once('@') {
         Some((b, r)) => (b, Some(r)),
         None => (name, None),
     };
-    let package = match body.rsplit_once('.') {
-        Some((p, _)) if !p.ends_with(':') && !p.is_empty() => p,
-        _ => body,
-    };
-    let text = match range {
-        Some(r) => format!("{package}@{r}"),
-        None => package.to_owned(),
-    };
-    QualifiedName::parse(&text).ok()
+    // Only the last `/`-separated part may hold the harness (after any `source:`).
+    let tail = body
+        .rfind('/')
+        .or_else(|| body.find(':'))
+        .map_or(0, |i| i + 1);
+    let mut out = Vec::new();
+    for (i, c) in body.char_indices().rev() {
+        if c != '.' || i <= tail || i + 1 >= body.len() {
+            continue;
+        }
+        let package = &body[..i];
+        let text = match range {
+            Some(r) => format!("{package}@{r}"),
+            None => package.to_owned(),
+        };
+        if let Ok(q) = QualifiedName::parse(&text) {
+            out.push(q);
+        }
+    }
+    out
 }
 
 /// Loads, checks and summarises the package `name`, and follows its `meta.harness` loads
@@ -285,24 +300,35 @@ pub fn harnesses_check(
     while next < queue.len() {
         let load = queue[next].clone();
         next += 1;
-        let Some(target) = load.as_deref().and_then(package_of) else {
+        let Some(load) = load else {
             complete = false;
             continue;
         };
-        let key = target.to_string();
-        if seen.contains(&key) {
-            continue;
-        }
         if seen.len() > MAX_LOADED_PACKAGES {
             complete = false;
             break;
         }
-        seen.push(key.clone());
-        let other = loader.load(&target);
-        if other.entry.is_none() {
+        // The longest reading that names a package wins, as at run time; a second reading
+        // that also names one makes the name ambiguous, so the list may miss what it loads.
+        let mut found: Vec<(QualifiedName, Loaded)> = Vec::new();
+        for reading in package_readings(&load) {
+            let other = loader.load(&reading);
+            if other.entry.is_some() {
+                found.push((reading, other));
+            }
+        }
+        if found.len() != 1 {
             complete = false;
+        }
+        if found.is_empty() {
             continue;
         }
+        let (target, other) = found.swap_remove(0);
+        let key = target.to_string();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key.clone());
         let mut other_checked = check(&other);
         let other_summary = other_checked.harness_check(&other);
         complete &= other_summary.clean;

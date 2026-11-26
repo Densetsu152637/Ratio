@@ -1,0 +1,43 @@
+// expect: check-error C0036 at 19:28
+// expect: check-error C0036 at 25:27
+// expect: check-error C0036 at 30:13
+// expect: check-error C0036 at 36:23
+// expect: check-error C0036 at 41:17
+
+// A built-in whose rule holds only where it is called (a trust site, a load listed by its
+// name, answers labelled from the questions written at the call) cannot be used as a
+// function value: `meta.harness` through a value would load a harness no list names, and
+// `session.ask` through one would lose `secret: true`.
+
+type H = harness(Untrusted<Str>) -> Untrusted<Str>
+
+fn apply<A, B>(f: fn(A) -> B, a: A) -> B {
+  f(a)
+}
+
+pub harness through_a_value(name: Untrusted<Str>) -> Untrusted<Str> {
+  let load: fn(Str) -> H = meta.harness
+  let h = load("user:evil.h")
+  h(name)
+}
+
+pub harness through_a_generic_call(name: Untrusted<Str>) -> Untrusted<Str> {
+  let h = apply::<Str, H>(meta.harness, "user:evil.h")
+  h(name)
+}
+
+fn ask_as_a_value() -> () {
+  let ask = session.ask
+  let answers = ask([{ question: "Token?", options: [], recommended: "", secret: true }])
+  let _ = tools.web_fetch(answers[0])
+}
+
+fn ask_through_apply() -> () {
+  let answers = apply(session.ask, [{ question: "Token?", options: [], recommended: "", secret: true }])
+  let _ = tools.web_fetch(answers[0])
+}
+
+fn as_task_as_a_value(x: Untrusted<Str>) -> Brief {
+  let convert = as_task
+  "no"
+}

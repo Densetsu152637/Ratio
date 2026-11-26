@@ -15,7 +15,8 @@
 //! guarded-effect lint and `harnesses.check`'s summary), `@secrecy_sink` the built-ins no
 //! statically secret value may reach, `@schema(T)` type parameters that must be schema-able,
 //! `@user` built-ins whose result is the person's answer, `@secret_answers` `session.ask`,
-//! and `@loads` `meta.harness`. A name that is a keyword in Ratio (`harness`) is written with
+//! `@loads` `meta.harness`, and `@local` effectful built-ins that keep their arguments on the
+//! machine (not secrecy sinks). A name that is a keyword in Ratio (`harness`) is written with
 //! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
 //! a keyword.
 //!
@@ -38,9 +39,9 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn result<T>(f: fn() -> T) -> Result<T> {}
 @pure fn assert(cond: Bool, message: Str = "assertion failed") -> () {}
 @pure fn assert_eq<T>(a: T, b: T, message: Str? = none) -> () {}
-@audited(trust) fn trust<T>(x: Untrusted<T>, because: Str) -> T {}
-@audited(as_task) fn as_task(x: Untrusted<Str>, because: Str) -> Brief {}
-@audited(declassify) @user fn declassify<T>(x: Secret<T>, because: Str) -> T {}
+@audited(trust) @local fn trust<T>(x: Untrusted<T>, because: Str) -> T {}
+@audited(as_task) @local fn as_task(x: Untrusted<Str>, because: Str) -> Brief {}
+@audited(declassify) @user @local fn declassify<T>(x: Secret<T>, because: Str) -> T {}
 "#,
     ),
     (
@@ -110,7 +111,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     (
         "tools",
         r#"
-@tool(read_file) fn read_file(path: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> FileText {}
+@tool(read_file) @local fn read_file(path: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> FileText {}
 @effect(write) @tool(write_file) @secrecy_sink fn write_file(path: Untrusted<Str>, content: Untrusted<Str>) -> Written {}
 @effect(write) @tool(edit_file) @secrecy_sink fn edit_file(path: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>) -> Written {}
 @effect(command) @tool(run_command) @secrecy_sink fn run_command(command: Untrusted<Str>, timeout: Duration = 120s, check: Bool = false) -> Untrusted<CommandResult> {}
@@ -125,8 +126,8 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     (
         "session",
         r"
-@user @secret_answers fn ask(questions: [Question]) -> [UserText] {}
-@user fn request_approval(summary: Str, detail: Untrusted<Str>? = none) -> Bool {}
+@user @secret_answers @local fn ask(questions: [Question]) -> [UserText] {}
+@user @local fn request_approval(summary: Str, detail: Untrusted<Str>? = none) -> Bool {}
 @secrecy_sink fn emit(name: Str, data: Json) -> () {}
 ",
     ),
@@ -200,6 +201,8 @@ pub(crate) struct Traits {
     pub(crate) secret_answers: bool,
     /// `@loads`: `meta.harness`, which loads a harness by name.
     pub(crate) loads: bool,
+    /// `@local`: its effects keep its arguments on the machine, so it is no secrecy sink.
+    pub(crate) local: bool,
 }
 
 impl Traits {
@@ -221,6 +224,7 @@ impl Traits {
                 ("secrecy_sink", []) => t.secrecy_sink = true,
                 ("secret_answers", []) => t.secret_answers = true,
                 ("loads", []) => t.loads = true,
+                ("local", []) => t.local = true,
                 ("audited", [kind]) => {
                     t.audited = match kind.as_str() {
                         "trust" => Some(TrustKind::Trust),
@@ -244,7 +248,31 @@ impl Traits {
         if !pure && t.effects.is_empty() {
             t.effects = Effects::OTHER;
         }
+        if t.secrecy_sink || (!pure && !t.local) {
+            t.effects = t.effects.union(Effects::SINK);
+        }
         t
+    }
+
+    /// Why the built-in may not be used as a function value, if it may not: every rule its
+    /// attributes impose must also hold for a value, and these are enforced only where it is
+    /// called (the call's arguments, its literal name, its written questions, its type
+    /// arguments at a generic secrecy sink). `None` when every rule also holds for a value:
+    /// effects, tools and purity count where a value is named, `@user` only relaxes the lint,
+    /// a secrecy sink without type parameters refuses secrets by its parameter types, and
+    /// `@schema(T)` is checked where the value is named.
+    pub(crate) fn value_refusal(&self, generic: bool) -> Option<&'static str> {
+        if self.audited.is_some() {
+            Some("each call is an audited trust site at one known type")
+        } else if self.loads {
+            Some("each load must be listed by the name it is called with")
+        } else if self.secret_answers {
+            Some("its answers are labelled from the questions written at the call")
+        } else if self.secrecy_sink && generic {
+            Some("it is a secrecy sink with type parameters, checked at each call")
+        } else {
+            None
+        }
     }
 }
 

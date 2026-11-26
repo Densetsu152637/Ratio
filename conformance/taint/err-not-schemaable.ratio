@@ -1,11 +1,12 @@
-// expect: check-error C0038 at 14:8
-// expect: check-error C0038 at 19:3
+// expect: check-error C0038 at 15:8
 // expect: check-error C0038 at 20:3
 // expect: check-error C0038 at 21:3
 // expect: check-error C0038 at 22:3
-// expect: check-error C0038 at 26:3
-// expect: check-error C0038 at 32:12
-// expect: check-error C0038 at 37:3
+// expect: check-error C0038 at 23:3
+// expect: check-error C0038 at 24:3
+// expect: check-error C0038 at 28:3
+// expect: check-error C0038 at 34:12
+// expect: check-error C0038 at 39:3
 
 // Types that must be schema-able (a `state` type, a `format` type, structured generation and
 // decoding) cannot hold handles, functions, prompts or images; schema attributes must fit
@@ -20,6 +21,7 @@ type Refined = {
   @range(0, 10) xs: [Int],
   @pattern(r"^a") count: Int,
   @shiny name: Str,
+  @pattern(r"(") unclosed: Str,
 }
 
 fn ask(p: Prompt) -> Untrusted<Bad> {
