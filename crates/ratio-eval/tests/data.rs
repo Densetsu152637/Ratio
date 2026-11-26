@@ -395,6 +395,13 @@ fn the_data_corpus_runs_as_expected() {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "ratio"))
+        // Other stages' built-ins have their files here too.
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            ["json.", "list.", "map."]
+                .iter()
+                .any(|m| name.starts_with(m))
+        })
         .collect();
     paths.sort();
     let mut failures = Vec::new();

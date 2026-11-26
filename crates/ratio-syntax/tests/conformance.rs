@@ -30,7 +30,9 @@
 //! stage 3, `resolve-ok`, `resolve-error` and `resolve-warning` (run by `ratio-names`'s own
 //! runner) and, from stage 4, `check-ok` and `check-warning` (with `check-error`, run by
 //! `ratio-check`'s runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
-//! (except `check-error` and `runtime-error` files that say otherwise with a parse expectation). The header ends at the first line that
+//! (except `check-error` and `runtime-error` files that say otherwise with a parse expectation).
+//! The data corpus (`conformance/data/`, run by `ratio-eval`) has its own header lines
+//! (`builtin:`, `case NAME:` and `labels NAME:`), which count the same way. The header ends at the first line that
 //! does not start with `// `; every header line must be one of these directives, so a misspelt
 //! one (`// token: …`) fails the file instead of being ignored.
 
@@ -118,7 +120,13 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             token_lines.push(tokens.trim());
         } else if let Some(tree) = rest.strip_prefix("tree: ") {
             tree_lines.push(tree.trim());
-        } else if rest.starts_with("fixture: ") {
+        } else if rest.starts_with("fixture: ")
+            || rest.starts_with("builtin: ")
+            || rest.starts_with("case ")
+            || rest.starts_with("labels ")
+        {
+            // `fixture:` is stage 11's; `builtin:`, `case` and `labels` are the data corpus's
+            // (stage 8, `ratio-eval`'s `tests/data.rs`).
             case.other_stage = true;
         } else if let Some(option) = rest.strip_prefix("option: ") {
             let option = option.trim();
@@ -138,7 +146,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             }
         } else {
             return Err(format!(
-                "{}: unknown header directive `{line}` (expect:, tokens:, tree:, option: or fixture:)",
+                "{}: unknown header directive `{line}` (expect:, tokens:, tree:, option:, fixture:, builtin:, case or labels)",
                 path.display()
             ));
         }

@@ -576,7 +576,7 @@ pub(crate) fn merge(heap: &Heap, target: Option<&Value>, patch: &Value) -> Resul
             }
         }
         if let Some(child) = descend {
-            if stack.len() as u32 > MAX_DEPTH {
+            if stack.len() > MAX_DEPTH as usize {
                 return Err(Fault::Depth);
             }
             stack.push(child);
