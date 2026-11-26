@@ -1,6 +1,6 @@
 # The Ratio specification
 
-Version: draft 0.16 (2026-11-30). Status: design; stages 1 to 8 and 10 of the implementation
+Version: draft 0.16 (2026-11-26). Status: design; stages 1 to 8 and 10 of the implementation
 (the token reader, the parser, modules and names, the type checker, schemas and taint, the IR
 and core interpreter, the `text` and `re` built-ins with the offload pool, the `json`, `list`
 and `map` built-ins, and frames) are built in this repository.

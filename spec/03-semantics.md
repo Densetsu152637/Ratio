@@ -99,8 +99,8 @@ literals, on a number, kept as the decimal literals written), `@pattern(r"…")`
 `@example(value)` (a literal); one that does not fit its field is a checker error. A
 `@pattern` must be in the regular-expression syntax both JSON Schema validators (ECMAScript) and
 `re` read: alternation, groups and `(?:…)`, classes, the quantifiers `*`, `+`, `?` and `{m,n}`,
-anchors, and `\`-escapes of punctuation and `d`, `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`,
-`t`; look-around, back-references and named groups are refused. A pattern means what ECMAScript says: `.` excludes `\n`, `\r`, U+2028 and U+2029; `\d` and `\w` are ASCII; `\s` is ECMAScript's white space (U+FEFF in, U+0085 out); a character outside the basic plane is one character (the `u` flag). `json.validate` refuses, as `Invalid`, the forms the two syntaxes read differently: `\b` and `\B`, `\D`, `\W` and `\S` inside a class, a class that starts with `]` or `^]`, `--` and a `-` next to a Perl class. The derived schema is written as
+anchors, and `\`-escapes of punctuation and `d`, `w`, `s`, `D`, `W`, `S`, `n`, `r`,
+`t` (not `\b` and `\B`, whose word characters differ between the two); look-around, back-references and named groups are refused. A pattern means what ECMAScript says: `.` excludes `\n`, `\r`, U+2028 and U+2029; `\d` and `\w` are ASCII; `\s` is ECMAScript's white space (U+FEFF in, U+0085 out); a character outside the basic plane is one character (the `u` flag). `json.validate` refuses, as `Invalid`, the forms of a schema it is given that the two syntaxes read differently: `\D`, `\W` and `\S` inside a class, a class that starts with `]` or `^]`, `--` and a `-` next to a Perl class. The derived schema is written as
 canonical JSON and is part of the IR hash: no whitespace; a schema object's keys in the fixed
 order `$ref`, `type`, `const`, `enum`, `anyOf`, `oneOf`, `properties`, `required`,
 `additionalProperties`, `propertyNames`, `prefixItems`, `items`, `pattern`, then a field's
