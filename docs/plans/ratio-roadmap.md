@@ -121,6 +121,19 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Owned paths: `spec/**`, `docs/design/performance-concurrency-review.md`.
 - Acceptance checks: G4; docs CI job green; each accepted proposal names its implementing stage.
 - Status: pending
+- Handoff notes:
+  - Stage 2R converged after 4 security-critic rounds (23 findings accepted, 0 rejected); the review is
+    `docs/design/performance-concurrency-review.md` (sha256 prefix 5908123c). Accepted PC-1..PC-9,
+    deferred PC-10..PC-15; stage 11 splits into 11a and 11b (see its Decisions table).
+  - Imperium's answers (2026-11-26, from its code at origin/experimental) to fold in as Host
+    requirements:
+    - unpriced models are admitted under a cost cap today; refusing them is new. Specify the refusal
+      unless the model is configured with an explicit price (a price of 0 counts as priced).
+    - drain-class calls need a finite bound: `run_command` is clamped 1–3600 s; MCP `timeout_s` has no
+      upper clamp; browser tools have no per-call bound. Specify a cap (at most 3600 s) on every
+      drain-class call; Imperium adds the clamps.
+    - no read-only command classifier exists. Specify it as a conservative allowlist owned by
+      Imperium (unknown means not read-only); until it exists, every command is not read-only.
 
 ## Stage 3: Modules and names
 
