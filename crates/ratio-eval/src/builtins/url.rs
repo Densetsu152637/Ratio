@@ -697,6 +697,21 @@ pub(super) fn decode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     }
 }
 
+/// A component percent-encoded straight into the text being built.
+fn push_encoded(cx: &mut Cx<'_>, out: &mut TextBuf, s: &str) -> Result<(), RtError> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(cx, char::from(b))?;
+        } else {
+            out.push(cx, '%')?;
+            out.push(cx, char::from(HEX[usize::from(b >> 4)]))?;
+            out.push(cx, char::from(HEX[usize::from(b & 15)]))?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn with_query(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (s, params) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels: Labels = s.labels | params.quick();
@@ -736,53 +751,46 @@ pub(super) fn with_query(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError>
     for (i, (k, _)) in existing.iter().enumerate() {
         index.entry(k.as_str()).or_insert(i);
     }
-    // Pass 1: which existing pairs a parameter replaces.
-    let mut replacement: Vec<Option<String>> = vec![None; existing.len()];
+    // The text: the existing pairs (the first of a replaced key takes the new value, its
+    // later pairs go), then the keys that were not there; each is encoded as it is written, so
+    // nothing is held but the text being built.
+    let mut out = TextBuf::new(labels);
+    out.push_str(cx, base)?;
+    let mut sep = '?';
+    for (i, (k, raw)) in existing.iter().enumerate() {
+        let first = index.get(k.as_str()).copied().unwrap_or(i);
+        let replacement = pm.get_entry(&Value::text(k)).map(|(_, v)| v);
+        if replacement.is_some() && i != first {
+            continue;
+        }
+        out.push(cx, sep)?;
+        sep = '&';
+        match replacement {
+            Some(v) => {
+                let Some(v) = v.as_text() else {
+                    return Err(raise_invalid(cx, "expected a map of text", labels));
+                };
+                push_encoded(cx, &mut out, k)?;
+                out.push(cx, '=')?;
+                push_encoded(cx, &mut out, v)?;
+            }
+            None => out.push_str(cx, raw)?,
+        }
+    }
     let mut cur = pm.cursor();
     while let Some((k, v)) = cur.next() {
         let (Some(k), Some(v)) = (k.as_text(), v.as_text()) else {
             return Err(raise_invalid(cx, "expected a map of text", labels));
         };
         work::add(1 + k.len() as u64);
-        if let Some(&i) = index.get(k) {
-            let mut pair = String::new();
-            encode_component(k, &mut pair);
-            pair.push('=');
-            encode_component(v, &mut pair);
-            replacement[i] = Some(pair);
-        }
-    }
-    // Pass 2: write the text.
-    let mut out = TextBuf::new(labels);
-    out.push_str(cx, base)?;
-    let mut sep = '?';
-    for (i, (k, raw)) in existing.iter().enumerate() {
-        // The first pair of a key stands for it; a later pair of a replaced key is dropped.
-        let first = index.get(k.as_str()).copied().unwrap_or(i);
-        let piece: &str = match &replacement[first] {
-            Some(r) if i == first => r,
-            Some(_) => continue,
-            None => raw,
-        };
-        out.push(cx, sep)?;
-        sep = '&';
-        out.push_str(cx, piece)?;
-    }
-    let mut cur = pm.cursor();
-    while let Some((k, v)) = cur.next() {
-        let (Some(k), Some(v)) = (k.as_text(), v.as_text()) else {
-            return Err(raise_invalid(cx, "expected a map of text", labels));
-        };
         if index.contains_key(k) {
             continue;
         }
-        let mut pair = String::new();
-        encode_component(k, &mut pair);
-        pair.push('=');
-        encode_component(v, &mut pair);
         out.push(cx, sep)?;
         sep = '&';
-        out.push_str(cx, &pair)?;
+        push_encoded(cx, &mut out, k)?;
+        out.push(cx, '=')?;
+        push_encoded(cx, &mut out, v)?;
     }
     out.push_str(cx, fragment)?;
     out.finish(cx)

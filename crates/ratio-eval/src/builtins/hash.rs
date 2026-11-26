@@ -26,7 +26,7 @@
 use std::fmt::Write as _;
 
 use super::blake3;
-use super::data3::{TextBuf, charged, raise_invalid, text_value};
+use super::data3::{TextBuf, charged, raise_invalid, text_value, too_long};
 use super::{Args, Resume, Task, TaskStep, arg, int, opt, text, weight};
 use crate::error::{Kind, RtError, raise};
 use crate::heap::Charge;
@@ -154,21 +154,27 @@ fn key_text(p: &Prepared, k: &Value) -> Option<String> {
     }
 }
 
+/// The memory of an object's sorted entries, charged **before** they are built: a slot and a
+/// string for each of `count` entries, and the characters of the keys (`key_weight`, a bound).
+fn entries_charge(cx: &Cx<'_>, count: u64, key_weight: u64) -> Result<Charge, RtError> {
+    charged(
+        cx,
+        count
+            .saturating_mul(cost::SLOT + cost::STR)
+            .saturating_add(key_weight),
+    )
+}
+
 /// An object's entries sorted by key (stable, so duplicate keys of a `Json` object keep their
-/// order), with their memory charged.
-fn entries(cx: &Cx<'_>, mut list: Vec<(String, Value)>, labels: Labels) -> Result<Frame, RtError> {
-    let bytes = list.iter().fold(0u64, |n, (k, _)| {
-        n.saturating_add(cost::SLOT + cost::STR + k.len() as u64)
-    });
-    let charge = charged(cx, bytes)?;
+/// order), holding the memory charge made for them.
+fn entries(mut list: Vec<(String, Value)>, charge: Charge) -> Frame {
     work::add((list.len() as u64).saturating_mul(crate::ops::log_work(list.len() as u64).max(1)));
     list.sort_by(|a, b| a.0.cmp(&b.0));
-    let _ = labels;
-    Ok(Frame::Entries {
+    Frame::Entries {
         it: list.into_iter(),
         first: true,
         _charge: charge,
-    })
+    }
 }
 
 /// Writes `v`: a scalar whole, or the opening of a container (pushing its frame).
@@ -231,7 +237,7 @@ fn open(
             out.push(cx, '[')
         }
         Repr::Record(r) => {
-            let list = r
+            let list: Vec<(String, Value)> = r
                 .layout
                 .names
                 .iter()
@@ -239,10 +245,13 @@ fn open(
                 .filter(|(_, x)| !matches!(x.repr, Repr::None))
                 .map(|(n, x)| (n.to_string(), x.clone()))
                 .collect();
-            stack.push(entries(cx, list, labels)?);
+            let charge = entries_charge(cx, list.len() as u64, 0)?;
+            stack.push(entries(list, charge));
             out.push(cx, '{')
         }
         Repr::Map(m) => {
+            // The map's weight bounds its keys' characters.
+            let charge = entries_charge(cx, m.len(), v.weight())?;
             let mut list = Vec::new();
             let mut cur = m.cursor();
             while let Some((k, x)) = cur.next() {
@@ -251,7 +260,7 @@ fn open(
                 };
                 list.push((key, x));
             }
-            stack.push(entries(cx, list, labels)?);
+            stack.push(entries(list, charge));
             out.push(cx, '{')
         }
         Repr::VariantP(vd) => {
@@ -269,7 +278,8 @@ fn open(
                     }
                 }
             }
-            stack.push(entries(cx, list, labels)?);
+            let charge = entries_charge(cx, list.len() as u64, 0)?;
+            stack.push(entries(list, charge));
             out.push(cx, '{')
         }
         Repr::Json(j) => match &j.node {
@@ -290,11 +300,12 @@ fn open(
                 out.push(cx, '[')
             }
             Json::Object(es) => {
+                let charge = entries_charge(cx, es.len() as u64, v.weight())?;
                 let list = es
                     .iter()
                     .map(|(k, x)| (k.as_text().unwrap_or("").to_owned(), x.clone()))
                     .collect();
-                stack.push(entries(cx, list, labels)?);
+                stack.push(entries(list, charge));
                 out.push(cx, '{')
             }
         },
@@ -399,10 +410,29 @@ struct Stable {
     since_check: u64,
     /// `short`: the number of hex digits wanted, and the labels of the count.
     short: Option<(usize, Labels)>,
+    /// Whether the steps for a refused text were debited (the refusal comes next).
+    refusal_paid: bool,
 }
 
 impl Task for Stable {
     fn resume(&mut self, cx: &mut Cx<'_>, _input: Resume) -> Result<TaskStep, RtError> {
+        // A canonical text over 16 MiB is refused, but first paid for as written.
+        if self.refusal_paid {
+            return Err(too_long(cx, self.canon.labels));
+        }
+        match self.run(cx) {
+            Err(_) if self.canon.out.refused().is_some() => {
+                self.refusal_paid = true;
+                let written = self.canon.out.refused().unwrap_or(0) as u64;
+                Ok(TaskStep::Charge(written.div_ceil(64)))
+            }
+            other => other,
+        }
+    }
+}
+
+impl Stable {
+    fn run(&mut self, cx: &mut Cx<'_>) -> Result<TaskStep, RtError> {
         loop {
             let covered = self.n_pre.saturating_add(SLACK).saturating_add(self.extra);
             if self.work > covered {
@@ -455,6 +485,7 @@ pub(super) fn stable(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtEr
         extra: 0,
         since_check: 0,
         short: None,
+        refusal_paid: false,
     }))
 }
 
@@ -474,6 +505,7 @@ pub(super) fn short(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtErr
         extra: 0,
         since_check: 0,
         short: Some((take, n.map_or(Labels::NONE, |n| n.labels))),
+        refusal_paid: false,
     }))
 }
 

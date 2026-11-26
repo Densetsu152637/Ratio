@@ -51,7 +51,11 @@ struct Parts<'a> {
 /// Splits `p`; the component list is charged first (an upper bound: one per separator).
 fn split<'a>(cx: &Cx<'_>, p: &'a str) -> Result<(Parts<'a>, crate::heap::Charge), RtError> {
     let seps = p.bytes().filter(|b| *b == b'/' || *b == b'\\').count() as u64;
-    let charge = charged(cx, 16u64.saturating_mul(seps.saturating_add(1)))?;
+    // The component list twice (split and normalized) and the text built from it.
+    let charge = charged(
+        cx,
+        (p.len() as u64).saturating_add(48u64.saturating_mul(seps.saturating_add(1))),
+    )?;
     work::add(p.len() as u64);
     let mut root = String::new();
     let mut rooted = false;

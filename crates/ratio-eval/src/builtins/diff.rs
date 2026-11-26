@@ -52,8 +52,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::data3::{TextBuf, charged, layout, raise_invalid, record, text_value};
-use super::{Args, Sizes, arg, int, list, new_list, new_text, opt, text};
+use super::data3::{TextBuf, charged, layout, raise_invalid, record, text_of, text_value};
+use super::{Args, Sizes, arg, int, list, new_list, opt, text};
 use crate::error::RtError;
 use crate::heap::cost;
 use crate::labels::Labels;
@@ -331,12 +331,7 @@ fn diff_entries(
         )
         .map_err(|f| cx.fault(f, labels))?
         .with_labels(labels);
-        let entry = record(
-            cx,
-            &l,
-            vec![kind, new_text(cx, token.to_owned(), labels)?],
-            labels,
-        )?;
+        let entry = record(cx, &l, vec![kind, text_of(cx, token, labels)?], labels)?;
         items.push(entry);
     }
     new_list(cx, items, labels)

@@ -108,6 +108,8 @@ fn scaled(v: &[f64]) -> (f64, f64) {
 }
 
 fn make(cx: &Cx<'_>, v: &[f64], labels: Labels) -> Result<Value, RtError> {
+    // The list of values is built from a buffer of one slot per component.
+    let _items = charged(cx, cost::SLOT.saturating_mul(v.len() as u64))?;
     new_list(
         cx,
         v.iter().map(|x| float_val(*x, Labels::NONE)).collect(),
@@ -314,6 +316,7 @@ pub(super) fn top_k(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let take = usize::try_from(want)
         .unwrap_or(usize::MAX)
         .min(scores.len());
+    let _out_charge = charged(cx, cost::SLOT.saturating_mul(take as u64))?;
     let mut out = Vec::with_capacity(take);
     for (score, i) in scores.into_iter().take(take) {
         out.push(

@@ -29,7 +29,7 @@
     reason = "chunks of a decoded slice, whose last chunk may be short"
 )]
 
-use super::data3::{TextBuf, charged, raise_invalid, text_value};
+use super::data3::{TextBuf, charged, raise_invalid, text_of, text_value};
 use super::{Args, arg, list, new_list, new_text, opt, text};
 use crate::error::RtError;
 use crate::heap::{Charge, cost};
@@ -306,7 +306,7 @@ impl<'a> Reader<'a> {
 
 fn field_value(cx: &Cx<'_>, f: Field<'_>, labels: Labels) -> Result<Value, RtError> {
     match f {
-        Field::Slice(t) => new_text(cx, t.to_owned(), labels),
+        Field::Slice(t) => text_of(cx, t, labels),
         Field::Built(b) => b.finish(cx),
     }
 }

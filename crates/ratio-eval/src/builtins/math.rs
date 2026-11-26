@@ -477,6 +477,7 @@ pub(super) fn softmax(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         *x /= total;
     }
     work::add(2 * e.len() as u64);
+    let _items_charge = charged(cx, cost::SLOT.saturating_mul(e.len() as u64))?;
     let items = e.into_iter().map(|x| float_val(x, Labels::NONE)).collect();
     new_list(cx, items, labels)
 }

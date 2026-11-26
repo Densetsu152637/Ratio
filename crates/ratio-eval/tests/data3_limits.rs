@@ -892,3 +892,43 @@ fn round(a: Str, b: Str, c: Int) -> Str { diff.apply(a, diff.unified(a, b, conte
         }
     }
 }
+
+/// Text built piece by piece stops at 16 MiB (`Invalid`) and is charged for what it wrote, as a
+/// result would be: the steps of the 16 MiB are debited before the refusal.
+#[test]
+fn text_over_16_mib_is_refused_and_paid_for() {
+    let p = prepared(
+        r#"
+fn render(s: Str) -> Int { text.len(template.render(r"{{#xs}}{{s}}{{/xs}}", { xs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], s: s })) }
+fn stable(s: Str) -> Int { text.len(hash.stable([s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s])) }
+fn csv(s: Str) -> Int { text.len(codec.csv_write([{ a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }, { a: s }])) }
+fn join(s: Str) -> Int { text.len(path.join([s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s])) }
+"#,
+    );
+    // Twenty copies of 1 MiB: 20 MiB would be written.
+    let mib = Value::text(&"x".repeat(1 << 20));
+    for name in ["render", "stable", "csv", "join"] {
+        let f = run(&p, name, vec![mib.clone()]);
+        let Outcome::Raised(e) = f.outcome else {
+            panic!("{name} returned")
+        };
+        assert_eq!(e.kind(&p), "Invalid", "{name}");
+        // At least what was written (about 16 MiB, 262,144 steps) was paid for.
+        assert!(
+            f.steps >= (16 << 20) / 64 - 100,
+            "{name} was charged only {} steps",
+            f.steps
+        );
+        assert!(f.heap_peak < 40 << 20, "{name}: peak {}", f.heap_peak);
+    }
+    // A budget that cannot pay for it raises Budget instead, still without finishing the text.
+    let tight = Limits {
+        steps: 100_000,
+        ..Limits::default()
+    };
+    let f = run_with(&p, "render", vec![mib], tight);
+    let Outcome::Raised(e) = f.outcome else {
+        panic!("returned")
+    };
+    assert_eq!(e.budget(&p).as_deref(), Some("steps"));
+}

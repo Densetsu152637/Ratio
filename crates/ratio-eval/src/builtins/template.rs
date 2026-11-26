@@ -42,7 +42,7 @@
 
 use std::collections::HashSet;
 
-use super::data3::{TextBuf, charged, raise_invalid};
+use super::data3::{TextBuf, charged, raise_invalid, too_long};
 use super::{Args, Resume, Sizes, Task, TaskStep, arg, new_list, new_text, sz, text, weight};
 use crate::error::{Kind, RtError, raise};
 use crate::heap::{Charge, cost};
@@ -255,6 +255,8 @@ struct Render {
     since_check: u64,
     /// Units the walk has paid for beyond the class's charge.
     extra: u64,
+    /// Whether the steps for a refused text were debited (the refusal comes next).
+    refusal_paid: bool,
 }
 
 /// The value one step into `v` under `key`: a record's field or a map's `Str` key, with the
@@ -339,6 +341,27 @@ impl Render {
 
 impl Task for Render {
     fn resume(&mut self, cx: &mut Cx<'_>, _input: Resume) -> Result<TaskStep, RtError> {
+        // A text over 16 MiB is refused, but first paid for as written.
+        if self.refusal_paid {
+            return Err(too_long(cx, self.out_labels()));
+        }
+        match self.run(cx) {
+            Err(_) if self.out.refused().is_some() => {
+                self.refusal_paid = true;
+                let written = self.out.refused().unwrap_or(0) as u64;
+                Ok(TaskStep::Charge(written.div_ceil(64)))
+            }
+            other => other,
+        }
+    }
+}
+
+impl Render {
+    fn out_labels(&self) -> Labels {
+        self.acc | self.tpl.labels
+    }
+
+    fn run(&mut self, cx: &mut Cx<'_>) -> Result<TaskStep, RtError> {
         if self.parsed.is_none() {
             let tpl = self.tpl.clone();
             self.parsed = Some(parse(cx, tpl.as_text().unwrap_or(""), tpl.labels)?);
@@ -388,32 +411,44 @@ impl Task for Render {
                         );
                     };
                     self.acc |= v.labels;
-                    let shown = match &v.repr {
-                        Repr::Str(s) => Some(s.as_str().to_owned()),
+                    // Text is written from where it is, never copied first.
+                    let written = match &v.repr {
+                        Repr::Str(s) => {
+                            self.out.push_str(cx, s.as_str())?;
+                            true
+                        }
                         Repr::Int(_)
                         | Repr::Float(_)
                         | Repr::Bool(_)
                         | Repr::Duration(_)
                         | Repr::Money(_)
-                        | Repr::Variant(..) => Some(crate::ops::show(cx.p, &v)),
+                        | Repr::Variant(..) => {
+                            let shown = crate::ops::show(cx.p, &v);
+                            self.out.push_str(cx, &shown)?;
+                            true
+                        }
                         Repr::Json(j) => match &j.node {
-                            Json::Str(s) => Some(s.as_str().to_owned()),
-                            Json::Int(_) | Json::Float(_) | Json::Bool(_) => {
-                                Some(crate::ops::show(cx.p, &v))
+                            Json::Str(s) => {
+                                self.out.push_str(cx, s.as_str())?;
+                                true
                             }
-                            _ => None,
+                            Json::Int(_) | Json::Float(_) | Json::Bool(_) => {
+                                let shown = crate::ops::show(cx.p, &v);
+                                self.out.push_str(cx, &shown)?;
+                                true
+                            }
+                            _ => false,
                         },
-                        _ => None,
+                        _ => false,
                     };
-                    let Some(shown) = shown else {
+                    if !written {
                         return Err(self.fail(
                             cx,
                             &format!(
                                 "template: `{name}` is not text or a scalar and cannot fill a tag"
                             ),
                         ));
-                    };
-                    self.out.push_str(cx, &shown)?;
+                    }
                     self.ip += 1;
                 }
                 Node::Open {
@@ -519,5 +554,6 @@ pub(super) fn render(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtEr
         work: 0,
         since_check: 0,
         extra: 0,
+        refusal_paid: false,
     }))
 }
