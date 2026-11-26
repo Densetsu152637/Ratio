@@ -578,8 +578,8 @@ and budgets become guesswork, and a forgotten task keeps spending after the turn
   name; `{ a, b }` binds those public items, and the module only with an alias. `pub` does not
   apply to imports. A path's components hold only ASCII letters, digits, `_`, `-` and `.`, none
   ending in a dot or naming a device (`con`); paths differing only in case are refused. A package
-  name is ASCII identifiers (letters, digits and `_`) joined by `.`, so every package can be
-  named in an import, and a plugin name one such identifier; each is at most 128 bytes and never
+  name is ASCII identifiers (letters, digits and `_`; not keywords) joined by `.`, so every
+  package can be named in an import, and a plugin name one such identifier; each is at most 128 bytes and never
   a device name.
 - `import std:debate`, `import user:critics.strict`, `import plugin:acme/review` import a
   registered package by **source-qualified name**; `@"^1.2"` pins a semver range (`^`, `~` or

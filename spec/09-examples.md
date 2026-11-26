@@ -20,7 +20,7 @@ they are callable from Ratio code but not offerable to models, and `harnesses.ch
 | 2 | `std:plan_execute_verify` | Planning, step execution with acceptance checks, re-planning, verification |
 | 3 | `std:self_consistency` | Sampling and voting, escalation on low agreement |
 | 4 | `user:debate` | Two harnesses on different models argue; a third judges |
-| 5 | `user:tree-of-thought` | Search over partial solutions with memoised evaluation |
+| 5 | `user:tree_of_thought` | Search over partial solutions with memoised evaluation |
 | 6 | `user:research` | Retrieval over memory, earlier sessions and the web, reranking, cited answers, verification |
 | 7 | `std:consul_escalation` | Roadmap item 64 |
 | 8 | `std:tdd_fix` | A test-driven code-fix subagent |
@@ -275,7 +275,7 @@ Best-first search over partial solutions. A model proposes next steps, another c
 partial solution, and evaluations are memoised so a node is never rated twice.
 
 ```ratio
-meta { name: "tree-of-thought", version: "1.0.0", description: "Best-first search over partial solutions" }
+meta { name: "tree_of_thought", version: "1.0.0", description: "Best-first search over partial solutions" }
 
 type Node = { steps: [Str], state: Str "What has been established so far" }
 type Proposals = { @len(1, 4) next: [Node] }

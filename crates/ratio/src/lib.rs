@@ -17,8 +17,8 @@ pub use ratio_syntax::{
 /// Its diagnostic codes are [`names::Code`] (`N`), apart from the syntax crate's [`Code`].
 pub use ratio_names as names;
 pub use ratio_names::{
-    Loaded, Loader, MemoryRegistry, PackageId, QualifiedName, Registry, RegistryError, RelPath,
-    Source,
+    Loaded, Loader, MemoryRegistry, PackageId, PackageName, PluginName, QualifiedName, Registry,
+    RegistryError, RelPath, Source,
 };
 
 /// The draft of the specification (`spec/` in this repository) this release implements.

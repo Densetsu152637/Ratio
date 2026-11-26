@@ -288,13 +288,15 @@ impl fmt::Display for QualifiedName {
     }
 }
 
-/// A word of a package or plugin name: an ASCII identifier that is not a Windows device name.
+/// A word of a package or plugin name: an ASCII identifier that is not a keyword (so it can be
+/// written in an `import`) or a Windows device name.
 fn is_word(word: &str) -> bool {
     let mut bytes = word.bytes();
     bytes
         .next()
         .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
         && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && ratio_syntax::Keyword::from_word(word).is_none()
         && !crate::path::is_device(word)
 }
 

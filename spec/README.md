@@ -10,7 +10,8 @@ token reader, the parser, and modules and names) are built in this repository.
 - Trust follows source: the rule is stated as the list it always was, without "at least as
   trusted" (chapter 03).
 - Import bindings, `pub` on imports, path characters, case conflicts, and package and plugin
-  names (ASCII identifiers, at most 128 bytes, no device names) are specified (chapter 03).
+  names (ASCII identifiers that are not keywords, at most 128 bytes, no device names) are
+  specified (chapter 03).
 - Version ranges are `^`, `~` or `=` with one to three numbers, checked against `meta.version`
   (chapter 03).
 - Package names are importable identifiers, so the built-in packages are renamed with
@@ -140,7 +141,7 @@ invariant that replies after a secret are labelled is stated and tested; shadowi
 defined.
 
 **Changes in draft 0.4** (kept for reference). Design review round 3: `run_harness` forces every argument untrusted
-for every source and refuses harnesses with trusted text in their parameters (`std:self_consistency`
+for every source and refuses harnesses with trusted text in their parameters (`std:self-consistency`
 now takes its question untrusted); with secrecy enabled, commands whose line references a secret
 path ask every time and are refused when unattended (best-effort, floor-style matching); labelled
 conversations get a user notice and three recovery paths, and labels follow forks, excerpts and

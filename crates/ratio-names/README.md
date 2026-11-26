@@ -57,7 +57,7 @@ same on every file system.
   `project:kit`, `authored:session/vote`, `authored:env/vote`. In an authored package's import,
   `authored:vote` looks only in the importer's own area; for the host's entry it looks in the
   session's area, then the environment's. Package and plugin names are words of ASCII letters,
-  digits and `_` joined by `.` (a plugin's name is one such word), at most 128 bytes,
+  digits and `_`, not keywords, joined by `.` (a plugin's name is one such word), at most 128 bytes,
   never a device name (`PackageName`, `PluginName`, `N0006`). `@"^1.2"` pins a range (`^`, `~` or `=`), checked
   against the `version` of the package's `meta` (`N0008`).
 - A **bare** name (`import debate`) looks in `std`, then `user`. A lower source never shadows a
