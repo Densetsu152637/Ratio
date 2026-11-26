@@ -686,7 +686,7 @@ fn unquote(p: Untrusted<Str>) -> Untrusted<Str> {
 
 `text.split_once(" -> ")` separates a rename's two paths, and the entry is kept whole when there
 is no arrow; both sides of a rename are checked, so renaming a test file away from the test
-pattern is caught too, and deleted test files (status ` D`) are listed like changed ones. Git
+pattern is caught too, and deleted test files (a `D` in the second status column) are listed like changed ones. Git
 quotes paths with unusual characters; `unquote` removes the quotes (escapes inside such a path
 are left as they are, which only makes the pattern miss exotic names, never match wrongly). The subagent runs `session.checkpoint`, a pseudo-tool its entry frame
 has; a frame without `session_checkpoint` in its tools would get `Denied`.
