@@ -181,14 +181,35 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 
 ## Stage 11: Host, tape and concurrency (security review)
 
-- Depends on: 10. Owned paths: `Host` trait, `ScriptedHost`, `TapeHost`, contract suite.
-- Acceptance checks: replay determinism under random completion orders; record-then-replay gives
-  identical event streams; replayed values keep labels and are untrusted; divergence tests; real
-  concurrency; every secrecy sink refuses a labelled value at the guard and at the unguarded host;
-  the contract suite's frame cases refuse a wider child scope in every dimension (the suite Imperium's
-  `RatioHost::open_frame` must also pass, stage 13); the throwaway Imperium `RatioHost` spike's result
-  against the candidate commit is recorded in the PR before merge (the spike code is never merged).
+Split into two PRs (draft 0.9, chapter 10 rows 11a and 11b; design PC-1, PC-2, PC-3, PC-7 in 11a,
+PC-4 and PC-9 in 11b).
+
+### Stage 11a: Host, tape and scheduler
+
+- Depends on: 10. Owned paths: `Host` trait (with `EffectCtx`, `tool_class`,
+  `conversation_digest`), `ScriptedHost`, `TapeHost`, the scheduler, contract suite.
+- Acceptance checks: replay determinism under random completion orders with sequenced, verified
+  ledgers, and replay of one tape under permuted resolution orders; effect keys with branch paths;
+  record-then-replay gives identical event streams; replayed values keep (and may gain) labels and
+  are untrusted; divergence tests (tape mutations, reply digest, tampered blobs); width with parked
+  branches and branch-path admission; cancellation classes, withdrawal, re-parenting and the drain
+  fence; the host-contract requirement that every `drain`-class tool declares a bound of at most
+  3600 s and is failed there; real concurrency; every secrecy sink refuses a labelled value at the
+  guard and at the unguarded host; the contract suite's frame cases refuse a wider child scope in
+  every dimension (the suite Imperium's `RatioHost::open_frame` must also pass, stage 13); the
+  throwaway Imperium `RatioHost` spike's result against the candidate commit is recorded in the PR
+  before merge (the spike code is never merged).
 - Status: pending. On merge: message "Imperium Implementation" (G6).
+
+### Stage 11b: Control, rand, time, state
+
+- Depends on: 11a. Owned paths: `control` (with `par_fold` and single-flight caches), `rand`,
+  `time`, `state`, their conformance files.
+- Acceptance checks: chapter 10 row 11b: `par_fold` in index and completion order, after `Stop` and
+  on a raise; single-flight caches (one producer, promotion, no deadlock, verified waits in
+  replay); labels kept by session caches and the `sees` refusal of labelled hits; per-branch `rand`
+  draws identical under permuted orders with no tape entries.
+- Status: pending.
 
 ## Stage 12: Model and think (security review)
 

@@ -69,9 +69,20 @@ pub harness turn(turn: Turn) -> Reply {
   library's version and the hashes of the built-in prompt texts it uses. The hash identifies a
   harness version exactly: evals record it, replay checks it, and the registry uses it to tell
   two copies of a version apart (chapter 06, `meta`).
+- **A prepared form.** At load, each package's canonical IR is lowered once into an executable
+  **prepared form** (names interned, record fields resolved to slots, locals to frame slots,
+  built-ins to direct references, site ids carried through). The prepared form is never
+  serialised or hashed, so changing how it is built changes no hash, effect key or `IR_VERSION`
+  (chapter 10).
 - **The interpreter** is an async tree walker in Rust. Pure evaluation runs on the agent's own
   task; each effect is an `await` on the host. It counts steps and heap bytes as it goes
-  (chapter 07, limits).
+  (chapter 07, limits). At every 1,000-step checkpoint it yields to the async runtime as well as
+  checking cancellation, so a long pure stretch never holds a runtime worker that other sessions
+  and the agent's own branches need. A pure built-in whose input exceeds an implementation
+  threshold (for example 64 KiB of text or 16,384 elements) runs on a bounded blocking pool while
+  its branch awaits it, with the same result, labels and charges; built-ins that take callbacks
+  never run there, so program code always stays on the agent's task. Values are `Send + Sync`
+  (shared by atomic reference counts) for that reason.
 - **The host** is a trait the engine implements (chapter 10). Every effect of every built-in goes
   through it, so the interpreter never touches the network, the file system, a process or a
   clock directly.
@@ -112,10 +123,12 @@ the same result, whatever the timing:
   `var`s, write package state or share a conversation (chapter 03), so there are no data races.
 - The only sources of variation are effects and scheduling choices. Effects: model calls, tool
   calls, agents, memory, user answers, the clock and timers (`time.now`, `time.since`,
-  `eval.timer`), randomness (`rand.*`), and cache lookups (`cached`, `memo`, `once`). Scheduling
-  choices: which `race` branch won and where each loser was cancelled, which `par` branch failed
-  first, and whether and where a `timeout` fired. All of them go through the host and onto the
-  tape.
+  `eval.timer`), the turn's random seed (every `rand.*` draw follows from it and the drawing
+  branch's position, chapter 06), and cache lookups (`cached`, `memo`, `once`). Scheduling
+  choices: which `race` branch won, where each cancelled branch was cancelled, which `par` branch
+  failed first, whether and where a `timeout` fired, every budget admission, refusal and reading,
+  every cache wait and promotion, and the order in which `par_fold` delivers outcomes by
+  completion. All of them go through the host and onto the tape.
 - Concurrent branches are combined in **program order**, never completion order: `par` returns a
   tuple in written order, `par_map` returns results by index.
 - Iteration over maps is in key order; sets do not exist (use `Map<K, Unit>`, ordered).
@@ -125,25 +138,89 @@ the same result, whatever the timing:
 **The effect tape.** Every effect is identified by an **effect key**:
 
 ```text
-key        = (frame path, site id, occurrence)
-frame path = one element per frame from the entry, each element = harness name @ call-site id
-             # occurrence of that call site in the parent frame, plus the branch index when the
-             call runs inside par, race or par_map: turn/critic@s41#0/b2
-site id    = the IR node's stable id (package IR hash + node index)
-occurrence = how many times this site has run in this frame (loops)
+key         = (frame path, branch path, site id, occurrence)
+frame path  = one element per frame from the entry: harness name @ call-site id # occurrence of
+              that call, each preceded by the branch path the call was made in
+branch path = one element per concurrent construct enclosing the effect within its frame, from
+              the frame's root: c<construct site id> # occurrence . b<branch index>
+site id     = the IR node's stable id (package IR hash + node index)
+occurrence  = how many times this site has run in this frame and branch path (loops)
+rendered    : turn/critic@s41#0/c12#0.b2/c30#1.b0
 ```
 
-The key depends only on the program and the data it computed, never on timing. In **record**
-mode the host writes `(key, request digest, response)` for each effect to the tape. In **replay**
-mode the host answers each effect from the tape by key, after checking that the request digest
-(a hash of the canonical request: model, prompt, sampling, tools; or tool name and arguments)
-matches. A mismatch is a `Replay` error naming the key and both digests; with
-`replay = "lenient"` it falls through to a live call instead and is listed in the run's output.
+Occurrences, of effect sites, of harness call sites and of concurrent constructs alike, count per
+`(frame, branch path, site)`. A **branch index** is the written position for `par { … }` and
+`race { … }`, and the list position for `par([…])`, `race([…])`, `par_map`, `par_map_settled` and
+`par_fold`; a built-in that runs callbacks or calls concurrently numbers its branches by the
+position of the item each runs (`model.generate_n` and `think.self_consistency` by sample,
+`think.best_of` by sample, `think.debate` by side within a round, `think.beam_search` by state
+within a level). Effects made by `par_fold`'s `step` carry the element `c<site>#<occurrence>.fold`.
+So the second attempt of a `retry` inside a `par_map` branch has the same key whichever branch
+finishes first.
 
-The tape is a JSON Lines file. In a session it is part of the journal (`ratio_effect` events,
-chapter 08); headless runs write and read it with `--ratio-tape` (chapter 08). The clock and the
-random seed are effects like any other, so `time.now()` and `rand.*` replay exactly; the session's
-random seed is drawn once per turn from the operating system and recorded.
+The key depends only on the program and the data it computed, never on timing. In **record**
+mode the host writes `(key, request digest, response)` to the tape for each **input-bearing**
+effect: one whose response the program reads, including a unit-returning effect that can be
+refused. Output-only effects that cannot fail (`log.*`, `trace.*`, `session.emit`,
+`session.stream`) get no entry. In **replay** mode the host answers each input-bearing effect from
+the tape by key, after checking that the request digest (a hash of the canonical request: model,
+prompt, sampling, tools; or tool name and arguments) matches. A mismatch is a `Replay` error
+naming the key and both digests; with `replay = "lenient"` it falls through to a live call instead
+and is listed in the run's output. Output-only effects are **suppressed** in replay: the program
+evaluates them, but they are not forwarded to the host, so a replay never streams, emits or logs
+to a live session again; the replay's own event stream (for `harnesses.replay` and the live view)
+is produced by the tape host and redacted as live events are. The tape ends each turn with a
+**reply digest**, the digest of the entry's returned `Reply` or `Report` or of its uncaught error,
+and replay compares it, so a divergence in an output-only effect is caught at the next
+input-bearing effect or at the end of the turn. A tape recorded with `--ratio-tape-mode strict`
+also holds a digest-only entry for each output-only effect, which replay checks where it happens.
+
+**The turn sequence.** In record mode the tape host gives every **scheduling event** of a turn one
+number from a single turn-global sequence, in the order the events happen:
+
+- **ledger events** (chapter 04): each budget admission with its reservation and the inputs of
+  its arithmetic, each refusal, each completion with its actual charge, each `budget_left()` or
+  `spent()` reading, and each branch's step total when the branch ends or is cancelled;
+- **cancellation events** (chapter 03): each cancelled branch's cancellation point, each
+  `aborted`, `abandoned`, `drained` and `withdrawn` call, and each re-parenting of an outstanding
+  drain;
+- **cache events** (chapter 06, `control`): each miss that starts a producer, each wait, each hit,
+  each producer's success, failure or cancellation, and each promotion;
+- **ordering events**: which `race` branch won, which `par` branch failed first, whether and where
+  a timeout fired, and `par_fold`'s deliveries in completion order.
+
+Replay checks the tape **against the tape only**. It replays the events in sequence order into a
+model built from recorded data alone (the ledgers, the table of cache producers, the wait-for
+graph) and verifies each event against that model, never against the replaying run's live state.
+The replaying run may resolve effects in any order; where the program needs an outcome (a refusal,
+a cancellation point, a cache value), it takes the recorded one. A failed check is a `Replay`
+divergence. So a crafted tape cannot make the recorded decisions inconsistent with each other or
+lift a limit on what the replay really consumes (chapter 07, T13).
+
+**Tape storage.** The tape is a JSON Lines file. In a session it is part of the journal
+(`ratio_effect` events, chapter 08); headless runs write and read it with `--ratio-tape`
+(chapter 08), and a headless tape file whose name ends in `.jsonl.zst` is zstd-compressed.
+
+- A response body above 1 KiB is stored once per tape, in a blob line named by its BLAKE3 digest,
+  and entries refer to it; in the journal, a `ratio_effect` whose body is already journalled (a
+  `tool_finished` payload, a conversation message) refers to that event instead of copying it.
+  Labels are stored with the reference. Loading a tape verifies every blob against its digest and
+  rejects the tape on a mismatch. In a headless tape a labelled body is never named by a plain
+  hash, which would reveal a low-entropy secret, only by the per-session redaction digest
+  (chapter 03).
+- A chat request's digest is `H(chain head, tools digest, options digest)`, where the chain head
+  is the conversation's chained digest `d(k) = H(d(k−1), H(message k with its labels))`, kept by
+  the engine per message (so a rollback restores it) and read through the host (chapter 10).
+  Digesting a chat request therefore costs O(1), whatever the conversation's length.
+- A replayed response carries the union of its recorded labels and the labels the source rules of
+  the replaying session set again (chapter 03, secrecy): a `read_file` of a path that now matches
+  `ratio.secret_paths` is labelled in replay even if it was not when recorded. Replay can add
+  labels, never remove them.
+
+The clock is an effect like any other, so `time.now()` replays exactly. The session's random seed
+is drawn once per turn from the operating system and recorded; each branch draws from its own
+generator seeded from it and the branch's position (chapter 06, `rand`), so `rand.*` draws need no
+tape entries and replay exactly.
 
 What replay does **not** promise: a live model call at temperature above zero gives different
 text on different runs. Replay reproduces a recorded run; it does not make sampling
@@ -209,7 +286,9 @@ engine checks two things around every entry call:
 **Stop and resume.** `session.control stop` cancels at the next effect boundary: a tool call in
 flight finishes, a model request in flight is cancelled, and the interpreter future is held, not
 dropped. `resume` continues it, re-sending the cancelled model request, exactly as the native
-loop does (`docs/03-agent-engine.md#stopping-a-session`).
+loop does (`docs/03-agent-engine.md#stopping-a-session`). Stop drains every tool call in flight
+whatever its cancellation class: the classes of chapter 03 apply only to cancellation inside the
+program.
 
 **Daemon restart mid-turn.** As today, the turn the restart cut off is reported failed. A later
 stage may instead **resume by replay**: re-run the entry with the recorded tape until the tape

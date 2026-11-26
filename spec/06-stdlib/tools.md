@@ -19,6 +19,34 @@ Secret-labelled arguments (chapter 03) are refused at the sinks listed there (`r
 A tool that is not offered in the session (web search turned off, no browser, no media backend, a
 remote runtime without `glob`) raises `NotFound` naming the tool.
 
+## Cancellation classes
+
+Every tool has a **cancellation class**, which decides what happens to a call in flight when the
+program cancels its branch (chapter 03). The host owns the table, the host contract tests check it
+(chapter 10), and a tool the table does not list is `drain`.
+
+| Class | Tools | On cancellation |
+| --- | --- | --- |
+| `abort` | `read_file`, `grep`, `glob`, `list_dir`; `web_search`, `web_fetch`; memory search and read; `run_command` only when the host's command classifier classified the command line as read-only; MCP tools that the **user's configuration** marks read-only | Stopped at once; the host acknowledges. A call that had already reached a remote server (`web_*`, MCP) is recorded `abandoned`, not `aborted`, because the remote side may still act on it |
+| `drain` | Everything else: `write_file` and `edit_file`, `run_command` and `run_background` not classified read-only, the browser and preview tools, media tools, plugin tools, MCP tools not marked read-only by the user, `agents.merge`, `tools.install_extension` and the other extension and configuration tools, memory writes, session control | Runs to completion (or to its deadline); its result is discarded. An outstanding drain holds back its frame's close, later `drain`-class calls in the frame tree and the end of the turn (the drain fence, chapter 03) |
+
+- A call waiting for an approval or a `tool.before` hook when it is cancelled is **withdrawn**,
+  whatever its class (chapter 03). `tools.call_tool`, `tools.dispatch` and `tools.dispatch_all`
+  take the class of the tool they run.
+- **Read-only commands.** The command classifier is a conservative allowlist owned by the host
+  (Imperium): a command line it does not recognise is not read-only. Until the host provides one,
+  no command is read-only, so every `run_command` is `drain` and is stopped only at its deadline.
+- **Read-only MCP tools.** Only the user's configuration can mark an MCP tool read-only. A server's
+  own annotations never make a tool `abort`: the server is not trusted to describe itself.
+- **A finite bound for every drain.** Every `drain`-class call finishes within at most 3600 s once
+  started: its own timeout argument, the call's deadline, or the host's declared maximum for that
+  tool, whichever is first, after which the host fails the call. A host tool that could run
+  forever would turn the drain fence into an unbounded wait, so this is a requirement of the host
+  contract, not a recommendation.
+- `tools.command_stop` and every effect in a `defer` block are exempt from the drain fence.
+- `session.control stop` is not cancellation: it drains every in-flight call whatever its class
+  (chapter 01).
+
 ## Files
 
 | Built-in | Signature | Semantics | Fails with | Needs |
@@ -34,10 +62,10 @@ remote runtime without `glob`) raises `NotFound` naming the tool.
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `tools.run_command` | `(command: Untrusted<Str>, timeout: Duration = 120s, check: Bool = false) -> Untrusted<CommandResult>` | Runs a shell line in the working folder under the session's isolation tier; `{ exit_code, stdout, stderr, timed_out }`. A non-zero exit is a normal result unless `check`, which raises `ToolFailed` | `Denied`, `Timeout` (only with `check`), `ToolFailed` (with `check`) | `tool:run_command` |
+| `tools.run_command` | `(command: Untrusted<Str>, timeout: Duration = 120s, check: Bool = false) -> Untrusted<CommandResult>` | Runs a shell line in the working folder under the session's isolation tier; `{ exit_code, stdout, stderr, timed_out }`. The host clamps `timeout` to 1 s to 3600 s, and the effective timeout is the smaller of that and the time left before the call's deadline (chapter 03). A non-zero exit is a normal result unless `check`, which raises `ToolFailed` | `Denied`, `Timeout` (only with `check`), `ToolFailed` (with `check`) | `tool:run_command` |
 | `tools.run_background` | `(command: Untrusted<Str>) -> Process` | Starts the command in the background (`run_command` with `background: true`) and returns its handle at once. The frame that started it owns it; it is stopped when that frame's scope ends unless returned or stored in a handle-holding value passed out | `Denied`, `ToolFailed` (eight already running) | `tool:run_command` |
 | `tools.command_output` | `(p: Process, since: Int? = none) -> Untrusted<ProcessOutput>` | Status (`running`, `exited { code }`, `stopped`) and output since the last read or byte `since`, at most 30,000 bytes; `next_since` continues | `NotFound` | `tool:command_output` |
-| `tools.command_stop` | `(p: Process) -> ()` | Stops the process and everything it started; waits up to 10 s | `NotFound` | `tool:command_stop` |
+| `tools.command_stop` | `(p: Process) -> ()` | Stops the process and everything it started; waits up to 10 s. Never waits behind the drain fence (below) | `NotFound` | `tool:command_stop` |
 
 ## Web and browser
 

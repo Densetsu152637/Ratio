@@ -121,7 +121,7 @@ by the frame's `sees` capability, a record of booleans:
 | `agents` | `agents.list()`, `agents.status()` reports, `agents.knowledge()` cards |
 | `system_default` | `context.system_default()` |
 | `state` | `state.get()` (writes need `state` and an entry's own frame or its `fork` frames) |
-| `secrets` | holding secret-labelled values: receiving them as arguments or results, and running effects whose results would carry the label (chapter 03) |
+| `secrets` | holding secret-labelled values: receiving them as arguments or results, running effects whose results would carry the label, and taking a cache hit (`cached`, `memo`, `once`) whose value is labelled (chapter 03) |
 
 Defaults: an entry's own frame sees everything; a `fork` frame inherits its caller's `sees`
 (it already holds the caller's conversation); a `fresh` or `none` frame sees nothing unless its
@@ -163,7 +163,7 @@ per dimension, at frame opening, and again by the engine at every effect.
 | Budgets | `min(requested, caller's remaining)` per budget kind | Spending debits every ancestor; unspent returns |
 | `sees` | Requested ∩ caller's | Defaults above |
 | Depth | Caller's depth + 1 ≤ `limits.depth` | Default limit 8 |
-| Width | ≤ caller's width | Concurrent branches in the frame tree |
+| Width | ≤ caller's width | Running branches in the frame tree; parked branches hold no slot (chapter 03) |
 | Attended | Caller's and requested | An unattended frame cannot ask the user anything. Frames of a subagent are never attended: a subagent asks its dispatcher by raising `Question` |
 | Memory writes | Only frames of the root agent's turn, and only if the caller has them | Subagents never write memory (`docs/17-memory.md#editing-and-forgetting-implemented`) |
 | Subagents | A subagent spawned from a frame is bounded by the frame: its tools, mode, rules, paths, location and `sees` are at most the frame's, and its budget is carved from the frame's | Chapter 06, `agents.spawn` |
@@ -181,6 +181,53 @@ spend is checked against the frame and all its ancestors, up to the session's ow
 (Imperium's `BudgetGate`, in `imperium-core`), before the effect runs; the effect is not started
 when it could not be paid for. When a frame's budget runs out, it raises `Budget { which }`, which
 only its caller can catch (chapter 03); the caller can then use a partial result or fall back.
+
+**Admission by bounded reservation.** "Could be paid for" means that the effect's admission charge
+can be **reserved** on the frame's ledgers and every ancestor's before it starts:
+
+- A tool call reserves one `tool_calls`.
+- A model call reserves one `model_calls`, its counted input tokens (`Host::count_tokens`,
+  chapter 10) and its **effective `max_tokens`**: the smallest of the requested `max_tokens` (when
+  set), the model's maximum output (from its card, or the window minus the input when the card
+  gives none) and the tokens every ledger can still reserve after the input. The request is sent
+  with the effective `max_tokens`, so no reply can overshoot any ancestor's cap, a child frame's
+  included, however many branches call models at once. Lowering `max_tokens` changes the request,
+  which is recorded and digested like any other request field.
+- Cost is reserved at the model card's prices for the input plus the effective output; local
+  models price at zero. A hosted model without an explicitly configured price (a configured price
+  of 0 counts as priced) is not admitted while any ledger it would be charged to (its frame's, an
+  ancestor's or the session's) has a cost cap, and
+  raises `Budget { which: cost }`, so an unpriced model can never overshoot a cost cap.
+- **A reply floor.** The effective `max_tokens` may not fall below a floor: the smallest of
+  `ratio.limits.min_reply_tokens` (chapter 07; default 256), the requested `max_tokens` (when set)
+  and the model's maximum output, so a call that asks for fewer tokens than the setting is never
+  held to it. When the effective `max_tokens` would fall below the floor, the admission waits while
+  other reservations in the frame tree are still held (they release as their effects complete);
+  if it is still below the floor once none is held, or if the input alone cannot be covered, the
+  effect is not started and raises `Budget { which }` in its branch. The wait may starve a branch
+  (siblings may take the released budget first) but cannot deadlock it, since it awaits only host
+  effects.
+
+Completion replaces the reservation with the actual charge. A drained call (chapter 03) keeps its
+reservation until it finishes. The `steps` ledger that concurrent branches share is kept the same
+way, and when it runs out the branch that reaches the limit raises `Budget { which: steps }`.
+
+**Budget decisions on the tape.** Which branch is refused, and where, depends on what its siblings
+have spent, which is timing. Every admission (with the inputs of its arithmetic: the counted input
+tokens and the card's maximum output, window and prices it used), every refusal, every completion
+with its actual charge, every `budget_left()` and `spent()` reading, and each branch's step total
+when the branch ends or is cancelled is therefore an event on the turn sequence (chapter 01),
+recorded in sequential and concurrent code alike. In replay the interpreter raises `Budget`
+exactly at the recorded refusals and steps exhaustion and returns the recorded readings, after
+verifying them from recorded data only: replay rebuilds every ledger by applying the recorded
+ledger events in sequence order and checks, at each event, that a recorded admission was
+coverable and its effective `max_tokens` follows from its recorded input count, card limits and
+prices (never from a live token count or the current model table); that a recorded refusal was not
+coverable; that a reading's `tokens`, `cost`, `model_calls` and `tool_calls` equal the rebuilt
+ledgers (its `wall` and `steps` depend on time and interleaving and are taken from the tape); that
+each branch's recomputed step total equals its recorded one; that the per-branch totals sum to no
+more than the configured limit; and that a recorded steps exhaustion falls where the
+sequence-ordered sum reaches the limit. A failed check is `Replay`.
 
 ## Recursion and depth
 

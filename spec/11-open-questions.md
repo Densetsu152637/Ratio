@@ -38,3 +38,17 @@ options, and the rules any permitted option needs.
 review; C only if real tasks need writes from harnesses inside programs, with its own review.
 
 **Decision pending:** the user's.
+
+## Deferred proposals
+
+The performance, parallelism and concurrency review that draft 0.9 carries out deferred six
+proposals. They are recorded here so they are not lost; none is part of the language.
+
+| Proposal | Summary | Revisit when |
+| --- | --- | --- |
+| Provider prefix-cache hints | A `GenOpts.prefix_cache: auto \| off` option; the host places cache breakpoints after the system message and leading `data` sections | Imperium exposes provider cache control (stage 12 with Imperium 13, if taken up) |
+| Eager tool execution while a reply streams | `model.loop` starts `abort`-class calls as soon as each call's arguments are complete in the stream | After parity (stage 23); it touches the engine's dispatch, hooks and the pairing invariant |
+| A lint for independent sequential effects | An info-level checker lint suggesting `par { … }` for consecutive effects that share no data and no conversation | The effect analysis of stages 4 and 5 exists |
+| Closure compilation of the prepared form | Compiling the prepared form (chapter 01) into Rust closures | Profiling shows the walker above 1 % of turn time (R2) |
+| Ropes for `Str` | O(log n) concatenation and character slicing | Long-text building is measured hot |
+| Named semaphores and branch priorities | A concurrency limit shared across `par` sites, and priority hints for speculative branches; would need syntax | Real harnesses need them after stage 23 |

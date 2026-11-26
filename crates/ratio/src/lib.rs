@@ -17,7 +17,7 @@ pub use ratio_syntax::{
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.8";
+pub const SPEC_DRAFT: &str = "0.9";
 
 /// The implementation stage reached (chapter 10's table): the parser.
 pub const STAGE: u32 = 2;
