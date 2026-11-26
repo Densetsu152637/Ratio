@@ -74,6 +74,7 @@ pub(crate) struct Parsed {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "the flags i, m, s, x and U")]
 struct Flags {
     i: bool,
     m: bool,
@@ -399,12 +400,12 @@ impl Parser {
 
     /// After `{`: `n}`, `n,}` or `n,m}`.
     fn counted(&mut self) -> R<(u32, Option<u32>)> {
-        let min = self.number()?;
+        let min = self.number();
         let Some(min) = min else {
             return self.err("a counted repetition such as `{2,5}`");
         };
         let max = if self.eat(',') {
-            self.number()?
+            self.number()
         } else {
             Some(min)
         };
@@ -423,7 +424,7 @@ impl Parser {
         Ok((min, max))
     }
 
-    fn number(&mut self) -> R<Option<u32>> {
+    fn number(&mut self) -> Option<u32> {
         self.skip_verbose();
         let mut n: Option<u32> = None;
         while let Some(d) = self.peek().and_then(|c| c.to_digit(10)) {
@@ -436,7 +437,7 @@ impl Parser {
             );
         }
         self.skip_verbose();
-        Ok(n)
+        n
     }
 
     /// After `\`.

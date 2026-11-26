@@ -33,6 +33,8 @@ mod heap;
 mod json;
 mod labels;
 mod machine;
+#[cfg(test)]
+mod offload_tests;
 mod ops;
 mod plist;
 mod pmap;

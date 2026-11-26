@@ -57,4 +57,4 @@ pub use ratio_eval::{
 pub const SPEC_DRAFT: &str = "0.13";
 
 /// The implementation stage reached (chapter 10's table): the IR and the core interpreter.
-pub const STAGE: u32 = 6;
+pub const STAGE: u32 = 7;

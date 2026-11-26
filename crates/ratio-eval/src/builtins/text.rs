@@ -758,7 +758,7 @@ fn fence(line: &str) -> Option<(char, usize, &str)> {
     Some((c, len, info))
 }
 
-/// `text.code_blocks`: the fenced code blocks of Markdown text (CommonMark fences of three or
+/// `text.code_blocks`: the fenced code blocks of Markdown text (`CommonMark` fences of three or
 /// more backticks or tildes, indented at most three spaces; an unclosed block runs to the
 /// end), as `{ lang?, code }` with the info string's first word as `lang`, only those of
 /// `lang` when it is given.
@@ -845,7 +845,7 @@ pub(super) fn quote(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             ok = o.push(rest).is_ok();
             break;
         };
-        ok = o.push(&rest[..at + 1]).is_ok();
+        ok = o.push(&rest[..=at]).is_ok();
         rest = &rest[at + 1..];
         let (slash, name) = match rest.strip_prefix('/') {
             Some(r) => ("/", r),

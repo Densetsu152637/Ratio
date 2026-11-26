@@ -181,7 +181,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn split(&self, body: u32, out: u32, greedy: bool) -> Inst {
+    fn split(body: u32, out: u32, greedy: bool) -> Inst {
         if greedy {
             Inst::Split(body, out)
         } else {
@@ -201,7 +201,7 @@ impl Compiler {
                 self.node(node)?;
                 self.emit(Inst::Jmp(l), 1)?;
                 let out = self.pc();
-                let s = self.split(l + 1, out, greedy);
+                let s = Self::split(l + 1, out, greedy);
                 self.patch(l, s);
             }
             Some(max) => {
@@ -212,7 +212,7 @@ impl Compiler {
                 }
                 let out = self.pc();
                 for s in splits {
-                    let inst = self.split(s + 1, out, greedy);
+                    let inst = Self::split(s + 1, out, greedy);
                     self.patch(s, inst);
                 }
             }

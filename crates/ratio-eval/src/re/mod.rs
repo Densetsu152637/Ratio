@@ -107,10 +107,8 @@ impl<'a> Matches<'a> {
             let (s, e) = (slots[0], slots[1]);
             if s == e && self.last_end == Some(e) {
                 // An empty match touching the last one: search again one character on.
-                match self.hay[e..].chars().next() {
-                    Some(c) => self.start = e + c.len_utf8(),
-                    None => return None,
-                }
+                let c = self.hay[e..].chars().next()?;
+                self.start = e + c.len_utf8();
                 continue;
             }
             self.start = e;

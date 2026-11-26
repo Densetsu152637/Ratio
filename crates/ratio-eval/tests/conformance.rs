@@ -94,7 +94,8 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
             break;
         };
         if let Some(a) = rest.strip_prefix("arg: ") {
-            case.args.push(argument(a).ok_or_else(|| format!("{file}: bad argument `{a}`"))?);
+            case.args
+                .push(argument(a).ok_or_else(|| format!("{file}: bad argument `{a}`"))?);
             continue;
         }
         let Some(expect) = rest.strip_prefix("expect: ") else {
