@@ -1,0 +1,12 @@
+// arg: "intro\n```rust\nfn a() {}\n```\n~~~\nplain\n~~~\n```py\nx"
+// expect: value ["[\"fn a() {}\",\"plain\",\"x\"]", "[\"rust\",\"-\",\"py\"]", "[\"x\"]", "[]"]
+// expect: labels secret secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.code_blocks(s).map(|b| b.code)),
+    text.show(text.code_blocks(s).map(|b| b.lang ?? "-")),
+    text.show(text.code_blocks(s, lang: "py").map(|b| b.code)),
+    text.show(text.code_blocks("none").map(|b| b.code)),
+  ]
+}

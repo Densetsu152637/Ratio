@@ -1,7 +1,8 @@
 # ratio-eval
 
 Ratio's core interpreter: the second half of stage 6 of the
-[implementation plan](../../spec/10-implementation.md). Hosts reach it through the
+[implementation plan](../../spec/10-implementation.md), and stage 7's data built-ins (`text`,
+`re`), cost classes and offload pool. Hosts reach it through the
 [`ratio` facade](../ratio/README.md) (`ratio::prepare`, `ratio::evaluate`, `ratio::interp`).
 
 ```rust
@@ -94,11 +95,95 @@ being evaluated per call, for at most `call_depth` calls). `Budget` and `Cancell
 `catch`; `defer` blocks run on every exit, in reverse order (the first error wins when one
 raises).
 
-`builtins::implemented()` lists the built-ins this stage carries, one or more per cost class:
-the pure functions of the checker's table, among them `text.repeat` (`output`: a negative count
-or a result over 16 MiB is refused before anything is built, with checked arithmetic) and
-`text.similarity` (`product`: two rows over the shorter text, charged to the heap, checking
-cancellation every checkpoint's worth of cells).
+`builtins::implemented()` lists the built-ins carried so far, with their cost classes: the pure
+functions of the checker's table, among them `text.repeat` (`output`: a negative count or a
+result over 16 MiB is refused before anything is built, with checked arithmetic) and
+`text.similarity` (`product`: two rows over the shorter text, charged to the heap before it
+runs, checking cancellation every checkpoint's worth of cells). A built-in's **working memory**
+(those rows, a regex VM's thread lists) is part of its sizes and charged to the heap before it
+runs, with its steps, and held until it finishes.
+
+## `text` and `re` (stage 7)
+
+Every `text` built-in of chapter 06 is carried (`src/builtins/text.rs`). Indexes and lengths
+count characters; every result carries the labels of every argument that shaped it (the text, a
+separator, a count, a width), including the messages of the errors they raise. No result is
+built past 16 MiB: the size is checked before building, or a capped writer stops at the limit
+and the refusal is charged for what it wrote. Choices the table leaves open: `text.find` treats
+a negative `from` as 0; `text.split` refuses a `limit` below 1 (`Invalid`); `text.pad_start`
+and `pad_end` cycle a multi-character `fill` and leave the text as is for an empty one;
+`text.wrap` treats a width below 1 as 1; `text.pad_start` and `pad_end` read only the fill
+characters they use and are charged for the fill as input; `text.split`, `lines`, `words` and
+`chars` count their parts first and refuse more than 1,000,000 (`Invalid`) before building
+any, charging the list's slots before they are filled; `text.lower` and `upper` check the
+result's size before building it; `text.parse_float` accepts surrounding whitespace, as
+`parse_int` does, and refuses `inf`, `NaN` and out-of-range values; `text.extract_json` tries
+at most the first 32 `{` or `[` positions (so it stays linear); `text.code_blocks` follows
+CommonMark fences (an unclosed block runs to the end); `text.quote` frames with a provisional
+`HARNESS_TAGS` list and preamble line until stage 12's shared framing vectors fix them.
+
+The `re` built-ins (`src/builtins/regex.rs`) run on a linear-time engine (`src/re/`): a parser
+for Rust `regex` syntax, a Thompson NFA and a Pike VM. Nothing backtracks. Supported: literals
+and escapes (`\n`, `\x7F`, `\x{…}`, `\u{…}`, `\U{…}`, escaped punctuation), `.`, classes
+(ranges, negation, nesting, `[:alpha:]`, `&&`, `--`, `~~`), `\d \w \s` and their negations
+(Unicode-aware: `\d` is `Nd`; `\w` is `Alphabetic`, `Nd`, connector punctuation, the join
+controls and the common combining-mark blocks, an approximation of Rust's `M`), the Unicode
+classes `Alphabetic`, `Lowercase`, `Uppercase`, `White_Space`, `Nd`, `N`, `Cc`, `Any` and
+`ASCII`, the anchors `^ $ \A \z \b \B`, capturing, non-capturing and named groups (`(?P<n>…)`,
+`(?<n>…)`), alternation, `* + ? {n} {n,} {n,m}` and their lazy forms (compiled as
+regex-automata compiles them, so a body that can match empty has Rust's priorities; `e{0}` and
+repetitions of nothing collapse in the parser, and every copy weighs at least 1), and the flags
+`i m s x U` (case-insensitivity uses the standard library's simple case mappings). Refused,
+with a message saying what (never matched differently): backreferences, lookaround, atomic
+groups, other Unicode classes (scripts, general categories such as `\pL`), byte mode
+`(?-u)`, CRLF mode `R`, `\Z`, `\<`, `\>`, `\b{…}`, octal escapes, `{,m}`, a repetition of a
+repetition (`a**`, which Rust accepts), a class range starting with a class (`[\d-z]`), counts
+above 1000, nesting deeper than 64, patterns over 4 KiB and programs over
+10,000 instructions of weight (`(a{1000}){1000}` is `Invalid` before it allocates much).
+Matching is leftmost-first, as Rust's; an iteration skips an empty match touching the last
+one. Spans (`start`, `end`) count characters. `Match`, `Captures` and `CodeBlock` are generic
+in the text type (`Match<S>`), so parts of untrusted text stay untrusted. Each call site keeps
+its compiled patterns (at most 32, keyed by site and pattern text, charged to the heap).
+
+**Charges.** The `re` built-ins are charged as `product`: before running, the text's characters
+plus one, times the program's weight times one plus the slots the search tracks (0 for
+`is_match`, 2 for spans, every group's for `captures` and for a replacement that names groups),
+plus the compile work (sixteen units per pattern character and the counted compile steps, one per
+node compiled with every repeated copy and parts that match nothing dropped first, charged on a
+cache hit as on a miss; a refused pattern is charged the work its refusal took) and the
+characters of the text and the replacement. The output is charged as it is built: one unit per
+element (a match record's three fields, a group, a named entry, a split part) and per character.
+A replacement template is resolved against the group names once per call, and captures share
+the group-name values. Searches and iterations check cancellation every checkpoint's worth of
+work. A search counts at most four
+times that work. Iterating (`find_all`, `captures_all`, `replace_all`, `split`) searches again
+from each match's end, which a pathological pattern can make quadratic (as in Rust's `regex`):
+work past four times the charge is debited as it is done, `Budget { which: steps }` when the
+steps left cannot pay, so no call runs unpaid. `limit` arguments must lie in `0..=1,000,000`.
+Chapter 06 lists `re` under `linear`; the difference is a proposed erratum.
+
+## The offload pool
+
+`Pool` (`src/pool.rs`) is a bounded set of worker threads the host's driver owns; each session
+gets a `PoolSession` (`Evaluation::offload_to`). A pure built-in without callbacks whose input
+passes the thresholds (`OFFLOAD_TEXT_BYTES`, 64 KiB of one text argument;
+`OFFLOAD_ELEMENTS`, 16,384 elements of one container; or `OFFLOAD_STEPS`, a charge before
+running of more than ten checkpoints, as for a heavy pattern over a short text; and the
+iterating `re` built-ins, which debit as they go, whenever the steps left exceed that) runs on a worker while `Machine::run`
+returns `Suspend::Wait`; the `Evaluation` future registers its waker with the job and the
+cancellation token and returns `Pending`, so the thread serves other sessions. The steps and the
+working memory are charged before dispatch exactly as inline, so results, labels and charges
+are identical above and below the threshold. Each session has at most `JOBS_IN_FLIGHT` (2) jobs
+in flight; further offloads wait in its queue. A cancelled evaluation stops waiting at once, but
+its job runs to its end and keeps its place, its steps (never refunded) and its heap (its
+arguments and working memory) until then. A job sees the cancellation at its next check (within
+a checkpoint's worth of work) and one still queued ends without running, so a cancelled job's
+unpaid work is bounded. Queued jobs hold their heap from submission; the per-session queue is
+bounded only by the session's waiting evaluations, an open item for stage 11a's scheduler.
+Charges per element (for every `linear` built-in, `text.split` as much as `re.find_all`) are
+calibrated at one unit an element, an open item for stage 24's measurements. No program code runs on a worker. Dropping the pool
+runs the queued jobs and joins every worker; a job submitted after that runs where it is
+submitted. Without a pool, everything runs inline.
 
 ## Tests
 
@@ -109,3 +194,15 @@ against models and the summary property (including labels a replay adds; the `ra
 restore is a stub until stage 11b); `tests/limits.rs` covers the cost classes, the heap ledger,
 call and value depth, hostile programs on a 256 KiB stack, cancellation, and a 5,000,000-step
 loop that lets a second session progress on a single-threaded executor.
+
+Stage 7: `tests/conformance.rs` also runs `conformance/data/`, one file per `text` and `re`
+built-in, with secret-labelled arguments (`// arg:`) and the labels of each result element
+(`// expect: labels`); `tests/data.rs` checks that every built-in's counted work (the debug-build
+`Machine::work_log`) stays within 8 × 64 units per charged step, that offloaded calls give the
+same values, labels, steps and heap peak as inline ones (at threshold 0 over the whole corpus,
+and at the default threshold), that a charge the steps left cannot pay raises `Budget` without
+running (`text.similarity`, `re.find_all`), that a quadratic iteration pays as it goes, and that
+ReDoS probes (`(a+)+$`, `(a|a)*b`, `(.*a){20}`, …) finish on 1 MiB of `a`s; `src/re/` and
+`src/pool.rs` unit-test the engine (syntax, refusals, the size limit) and the pool (the cap,
+shutdown, panics); `src/offload_tests.rs` checks that a cancelled branch's job keeps its place,
+steps and heap until it ends, and that a waiting evaluation is woken when its job finishes.

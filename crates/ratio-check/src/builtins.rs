@@ -21,8 +21,9 @@
 //! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
 //! a keyword.
 //!
-//! The table holds what the conformance programs need. Later stages (7 to 12) extend it module
-//! by module, and stage 7's `builtins.txt` check compares it with chapter 06.
+//! The table holds what the conformance programs need: from stage 7, every `text` and `re`
+//! built-in. Later stages (8 to 12) extend it module by module; `conformance/builtins.txt`
+//! (generated from chapter 06) is the list they work towards.
 
 use crate::analysis::Effects;
 use crate::types::{Bound, Handle, TypeId};
@@ -66,15 +67,65 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
         "text",
         r#"
 @pure fn len<S>(s: S) -> Int {}
+@pure fn is_empty<S>(s: S) -> Bool {}
+@pure fn lower<S>(s: S) -> S {}
 @pure fn upper<S>(s: S) -> S {}
 @pure fn trim<S>(s: S) -> S {}
+@pure fn trim_start<S>(s: S) -> S {}
+@pure fn trim_end<S>(s: S) -> S {}
 @pure fn contains<S>(s: S, part: S) -> Bool {}
+@pure fn starts_with<S>(s: S, prefix: S) -> Bool {}
+@pure fn ends_with<S>(s: S, suffix: S) -> Bool {}
+@pure fn find<S>(s: S, part: S, from: Int = 0) -> Int? {}
+@pure fn rfind<S>(s: S, part: S) -> Int? {}
+@pure fn count<S>(s: S, part: S) -> Int {}
+@pure fn slice<S>(s: S, start: Int, end: Int? = none) -> S {}
+@pure fn truncate<S>(s: S, max: Int, marker: Str = "…") -> S {}
+@pure fn split<S>(s: S, sep: S, limit: Int? = none) -> [S] {}
 @pure fn split_once<S>(s: S, sep: S) -> (S, S)? {}
+@pure fn lines<S>(s: S) -> [S] {}
+@pure fn words<S>(s: S) -> [S] {}
+@pure fn chars<S>(s: S) -> [S] {}
 @pure fn join<S>(parts: [S], sep: S = "") -> S {}
-@pure fn show<T>(v: T) -> Untrusted<Str> {}
+@pure fn replace<S>(s: S, from: S, to: S) -> S {}
+@pure fn replace_first<S>(s: S, from: S, to: S) -> S {}
 @pure fn repeat_<S>(s: S, n: Int) -> S {}
+@pure fn reverse<S>(s: S) -> S {}
+@pure fn pad_start<S>(s: S, width: Int, fill: Str = " ") -> S {}
+@pure fn pad_end<S>(s: S, width: Int, fill: Str = " ") -> S {}
+@pure fn before<S>(s: S, sep: S) -> S {}
+@pure fn after<S>(s: S, sep: S) -> S {}
+@pure fn before_last<S>(s: S, sep: S) -> S {}
+@pure fn after_last<S>(s: S, sep: S) -> S {}
+@pure fn strip_prefix<S>(s: S, prefix: S) -> S? {}
+@pure fn strip_suffix<S>(s: S, suffix: S) -> S? {}
+@pure fn trim_end_matches<S>(s: S, suffix: S) -> S {}
+@pure fn dedent<S>(s: S) -> S {}
+@pure fn indent<S>(s: S, prefix: Str = "  ") -> S {}
+@pure fn wrap<S>(s: S, width: Int = 80) -> S {}
+@pure fn number_lines<S>(s: S, start: Int = 1) -> S {}
+@pure fn show<T>(v: T) -> Untrusted<Str> {}
+@pure fn parse_int<S>(s: S) -> Int? {}
+@pure fn parse_float<S>(s: S) -> Float? {}
 @pure fn similarity<S>(a: S, b: S) -> Float {}
+@pure fn extract_json<S>(s: S) -> Json? {}
+@pure fn code_blocks<S>(s: S, lang: Str? = none) -> [CodeBlock<S>] {}
+@pure fn quote<S>(s: S, label: Str = "data") -> Untrusted<Str> {}
 "#,
+    ),
+    (
+        "re",
+        r"
+@pure fn is_match<S>(pattern: Str, s: S) -> Bool {}
+@pure fn find<S>(pattern: Str, s: S) -> Match<S>? {}
+@pure fn find_all<S>(pattern: Str, s: S, limit: Int = 1000) -> [Match<S>] {}
+@pure fn captures<S>(pattern: Str, s: S) -> Captures<S>? {}
+@pure fn captures_all<S>(pattern: Str, s: S, limit: Int = 1000) -> [Captures<S>] {}
+@pure fn replace<S>(pattern: Str, s: S, with_: S) -> S {}
+@pure fn replace_all<S>(pattern: Str, s: S, with_: S) -> S {}
+@pure fn split<S>(pattern: Str, s: S) -> [S] {}
+@pure fn escape(s: Str) -> Str {}
+",
     ),
     (
         "map",

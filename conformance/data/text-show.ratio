@@ -1,0 +1,7 @@
+// arg: 5
+// expect: value ["5", "[5,1]", "x"]
+// expect: labels secret secret none
+
+fn main(n: Int) -> [Untrusted<Str>] {
+  [text.show(n), text.show([n, 1]), text.show("x")]
+}

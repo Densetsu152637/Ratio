@@ -9,12 +9,21 @@
 //! when it returns (the machine does both, [`crate::machine`]). Callbacks charge their own
 //! steps as any code does.
 //!
-//! Stage 6 carries the framework and one or more built-ins of each class: the pure functions
-//! the checker's table declares (`control`, `list`, `text`, `map`, `json`, `math`), among them
-//! `text.repeat` (`output`) and `text.similarity` (`product`). Stages 7 to 9 add the rest of
-//! chapter 06 to this table.
+//! Stage 6 carried the framework and one or more built-ins of each class; stage 7 adds every
+//! `text` built-in (`text`) and the `re` built-ins (`regex`) over a linear-time engine
+//! (`crate::re`). Stages 8 and 9 add the rest of chapter 06 to this table.
+//!
+//! A built-in's working memory (a regex VM's thread lists, `text.similarity`'s rows) is part
+//! of its sizes and charged to the heap before it runs, with its steps; a pure built-in
+//! without callbacks whose input is large may run on the pool ([`crate::Pool`]) instead of
+//! inline, with the same result, labels and charges.
 
 use std::fmt::Debug;
+
+mod regex;
+mod text;
+
+pub(crate) use regex::{Compiled, ReCache};
 
 use crate::error::{Kind, RtError, raise, raise_with};
 use crate::heap::{Charge, cost};
@@ -56,13 +65,15 @@ impl Class {
 }
 
 /// The input sizes a charge is computed from: `n` (the input size, or `n₁`), `n2` and `c`
-/// for `product`, and the output size `m` for `output`.
+/// for `product`, and the output size `m` for `output`; and the bytes of working memory
+/// charged to the heap before the built-in runs.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Sizes {
     pub n: u64,
     pub n2: u64,
     pub c: u64,
     pub m: u64,
+    pub scratch: u64,
 }
 
 impl Sizes {
@@ -120,8 +131,16 @@ pub(crate) trait Task: Send + Debug {
 }
 
 type Args = [Option<Value>];
-type PureFn = fn(&mut Cx<'_>, &Args) -> Result<Value, RtError>;
+pub(crate) type PureFn = fn(&mut Cx<'_>, &Args) -> Result<Value, RtError>;
 type TaskFn = fn(&mut Cx<'_>, &Args) -> Result<Box<dyn Task>, RtError>;
+
+/// How a built-in's inputs are sized: from the arguments, or (`re`) from the arguments and
+/// the compiled pattern.
+#[derive(Clone, Copy)]
+pub(crate) enum Sizer {
+    Args(fn(&Args) -> Sizes),
+    Re(fn(&Args, &crate::re::Regex) -> Sizes),
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum Imp {
@@ -129,14 +148,54 @@ pub(crate) enum Imp {
     Task(TaskFn),
 }
 
-/// One built-in: its name as a program writes it, its class, how to size its inputs, and its
-/// implementation.
+/// One built-in: its name as a program writes it, its class, how to size its inputs, what
+/// else the machine must know ([`OFFLOAD`], [`REGEX`]), and its implementation.
 #[derive(Clone, Copy)]
 pub(crate) struct Builtin {
     pub name: &'static str,
     pub class: Class,
-    pub size: fn(&Args) -> Sizes,
+    pub size: Sizer,
+    pub flags: u8,
     pub imp: Imp,
+}
+
+/// May run on the pool when its input is large (pure, no callbacks).
+const OFFLOAD: u8 = 1;
+/// A `re` built-in: its first argument is a pattern, compiled before it is charged.
+const REGEX: u8 = 2 | OFFLOAD;
+/// A `re` built-in that iterates over matches, debiting its later work as it goes: with a
+/// pool, it is offloaded whenever the steps left could pay for a long run.
+const REGEX_ITER: u8 = 4 | REGEX;
+const NONE: u8 = 0;
+
+impl Builtin {
+    pub(crate) fn offloadable(&self) -> bool {
+        self.flags & OFFLOAD != 0 && matches!(self.imp, Imp::Pure(_))
+    }
+
+    pub(crate) fn regex(&self) -> bool {
+        self.flags & REGEX == REGEX
+    }
+
+    /// Whether it debits work as it goes (beyond what was charged before running).
+    pub(crate) fn debits_as_it_goes(&self) -> bool {
+        self.flags & REGEX_ITER == REGEX_ITER
+    }
+
+    /// The sizes of a call with these arguments (and pattern, for `re`). A pattern that did
+    /// not compile is charged the work its refusal took: the built-in raises `Invalid`.
+    pub(crate) fn sizes(&self, args: &Args, re: Option<&Compiled>) -> Sizes {
+        match (self.size, re) {
+            (Sizer::Args(f), _) => f(args),
+            (Sizer::Re(f), Some(Ok(re))) => f(args, re),
+            // A refused pattern is charged the work it took to refuse.
+            (Sizer::Re(_), Some(Err(refusal))) => Sizes {
+                c: refusal.work,
+                ..Sizes::default()
+            },
+            (Sizer::Re(_), None) => Sizes::default(),
+        }
+    }
 }
 
 impl Debug for Builtin {
@@ -180,6 +239,12 @@ fn s_map_key(a: &Args) -> Sizes {
         ..Sizes::default()
     }
 }
+fn s_three(a: &Args) -> Sizes {
+    Sizes::n(sz(a, 0).saturating_add(sz(a, 1)).saturating_add(sz(a, 2)))
+}
+fn s_first_third(a: &Args) -> Sizes {
+    Sizes::n(sz(a, 0).saturating_add(sz(a, 2)))
+}
 fn s_join(a: &Args) -> Sizes {
     Sizes::n(weight(a, 0).saturating_add(sz(a, 1)))
 }
@@ -204,6 +269,8 @@ fn s_repeat(a: &Args) -> Sizes {
         _ => Sizes::default(),
     }
 }
+/// `text.similarity`: the product of the lengths plus both, and two rows of counts over the
+/// shorter text with its characters as working memory.
 fn s_product(a: &Args) -> Sizes {
     let (n1, n2) = (sz(a, 0), sz(a, 1));
     Sizes {
@@ -211,8 +278,16 @@ fn s_product(a: &Args) -> Sizes {
         n2,
         c: n1.saturating_add(n2),
         m: 0,
+        scratch: n1
+            .min(n2)
+            .saturating_add(1)
+            .saturating_mul(SIMILARITY_CELL_BYTES),
     }
 }
+
+/// The working memory per character of the shorter text in `text.similarity`: the character
+/// and a count in each of two rows.
+const SIMILARITY_CELL_BYTES: u64 = 4 + 2 * 8;
 
 /// The output size of a `linear` built-in's result.
 pub(crate) fn output_size(v: &Value) -> u64 {
@@ -225,49 +300,97 @@ pub(crate) fn output_size(v: &Value) -> u64 {
 // ---- the table ----
 
 macro_rules! table {
-    ($($name:literal, $class:ident, $size:ident, $imp:expr;)*) => {
+    ($($name:literal, $class:ident, $size:expr, $flags:ident, $imp:expr;)*) => {
         pub(crate) const BUILTINS: &[Builtin] = &[
-            $(Builtin { name: $name, class: Class::$class, size: $size, imp: $imp },)*
+            $(Builtin { name: $name, class: Class::$class, size: $size, flags: $flags, imp: $imp },)*
         ];
     };
 }
 
+use Sizer::{Args as A, Re as R};
+use text as t;
+
 table! {
-    "fail", Const, s_none, Imp::Pure(fail);
-    "result", Const, s_none, Imp::Task(result);
-    "assert", Const, s_none, Imp::Pure(assert);
-    "assert_eq", Linear, s_weight_two, Imp::Pure(assert_eq);
-    "list.len", Const, s_none, Imp::Pure(list_len);
-    "list.get", Log, s_first, Imp::Pure(list_get);
-    "list.first", Const, s_none, Imp::Pure(list_first);
-    "list.push", Log, s_first, Imp::Pure(list_push);
-    "list.map", Linear, s_first, Imp::Task(list_map);
-    "list.filter", Linear, s_first, Imp::Task(list_filter);
-    "list.filter_map", Linear, s_first, Imp::Task(list_filter_map);
-    "list.fold", Linear, s_first, Imp::Task(list_fold);
-    "list.contains", Linear, s_weight_two, Imp::Pure(list_contains);
-    "list.sort_by", NLogN, s_first, Imp::Task(list_sort_by);
-    "list.take", Log, s_first, Imp::Pure(list_take);
-    "list.sum", Linear, s_first, Imp::Pure(list_sum);
-    "text.len", Const, s_none, Imp::Pure(text_len);
-    "text.upper", Linear, s_first, Imp::Pure(text_upper);
-    "text.trim", Linear, s_first, Imp::Pure(text_trim);
-    "text.contains", Linear, s_two, Imp::Pure(text_contains);
-    "text.split_once", Linear, s_two, Imp::Pure(text_split_once);
-    "text.join", Linear, s_join, Imp::Pure(text_join);
-    "text.show", Linear, s_weight_first, Imp::Pure(text_show);
-    "text.repeat", Output, s_repeat, Imp::Pure(text_repeat);
-    "text.similarity", Product, s_product, Imp::Pure(text_similarity);
-    "map.get", Log, s_map_key, Imp::Pure(map_get);
-    "map.set", Log, s_map_key, Imp::Pure(map_set);
-    "map.keys", Linear, s_first, Imp::Pure(map_keys);
-    "json.parse", Linear, s_first, Imp::Pure(json_parse);
-    "json.decode", Linear, s_weight_first, Imp::Pure(json_decode);
-    "json.get", Linear, s_two, Imp::Pure(json_get);
-    "json.encode", Linear, s_weight_first, Imp::Pure(json_encode);
-    "math.abs", Const, s_none, Imp::Pure(math_abs);
-    "math.min", Const, s_none, Imp::Pure(math_min);
-    "math.max", Const, s_none, Imp::Pure(math_max);
+    "fail", Const, A(s_none), NONE, Imp::Pure(fail);
+    "result", Const, A(s_none), NONE, Imp::Task(result);
+    "assert", Const, A(s_none), NONE, Imp::Pure(assert);
+    "assert_eq", Linear, A(s_weight_two), NONE, Imp::Pure(assert_eq);
+    "list.len", Const, A(s_none), NONE, Imp::Pure(list_len);
+    "list.get", Log, A(s_first), NONE, Imp::Pure(list_get);
+    "list.first", Const, A(s_none), NONE, Imp::Pure(list_first);
+    "list.push", Log, A(s_first), NONE, Imp::Pure(list_push);
+    "list.map", Linear, A(s_first), NONE, Imp::Task(list_map);
+    "list.filter", Linear, A(s_first), NONE, Imp::Task(list_filter);
+    "list.filter_map", Linear, A(s_first), NONE, Imp::Task(list_filter_map);
+    "list.fold", Linear, A(s_first), NONE, Imp::Task(list_fold);
+    "list.contains", Linear, A(s_weight_two), NONE, Imp::Pure(list_contains);
+    "list.sort_by", NLogN, A(s_first), NONE, Imp::Task(list_sort_by);
+    "list.take", Log, A(s_first), NONE, Imp::Pure(list_take);
+    "list.sum", Linear, A(s_first), NONE, Imp::Pure(list_sum);
+    "text.len", Const, A(s_none), NONE, Imp::Pure(text_len);
+    "text.is_empty", Const, A(s_none), NONE, Imp::Pure(t::is_empty);
+    "text.lower", Linear, A(s_first), OFFLOAD, Imp::Pure(t::lower);
+    "text.upper", Linear, A(s_first), OFFLOAD, Imp::Pure(text_upper);
+    "text.trim", Linear, A(s_first), OFFLOAD, Imp::Pure(text_trim);
+    "text.trim_start", Linear, A(s_first), OFFLOAD, Imp::Pure(t::trim_start);
+    "text.trim_end", Linear, A(s_first), OFFLOAD, Imp::Pure(t::trim_end);
+    "text.contains", Linear, A(s_two), OFFLOAD, Imp::Pure(text_contains);
+    "text.starts_with", Linear, A(s_two), OFFLOAD, Imp::Pure(t::starts_with);
+    "text.ends_with", Linear, A(s_two), OFFLOAD, Imp::Pure(t::ends_with);
+    "text.find", Linear, A(s_two), OFFLOAD, Imp::Pure(t::find);
+    "text.rfind", Linear, A(s_two), OFFLOAD, Imp::Pure(t::rfind);
+    "text.count", Linear, A(s_two), OFFLOAD, Imp::Pure(t::count);
+    "text.slice", Linear, A(s_first), OFFLOAD, Imp::Pure(t::slice);
+    "text.truncate", Linear, A(s_first_third), OFFLOAD, Imp::Pure(t::truncate);
+    "text.split", Linear, A(s_two), OFFLOAD, Imp::Pure(t::split);
+    "text.split_once", Linear, A(s_two), OFFLOAD, Imp::Pure(text_split_once);
+    "text.lines", Linear, A(s_first), OFFLOAD, Imp::Pure(t::lines);
+    "text.words", Linear, A(s_first), OFFLOAD, Imp::Pure(t::words);
+    "text.chars", Linear, A(s_first), OFFLOAD, Imp::Pure(t::chars);
+    "text.join", Linear, A(s_join), OFFLOAD, Imp::Pure(text_join);
+    "text.replace", Linear, A(s_three), OFFLOAD, Imp::Pure(t::replace);
+    "text.replace_first", Linear, A(s_three), OFFLOAD, Imp::Pure(t::replace_first);
+    "text.repeat", Output, A(s_repeat), OFFLOAD, Imp::Pure(text_repeat);
+    "text.reverse", Linear, A(s_first), OFFLOAD, Imp::Pure(t::reverse);
+    "text.pad_start", Output, A(t::s_pad), OFFLOAD, Imp::Pure(t::pad_start);
+    "text.pad_end", Output, A(t::s_pad), OFFLOAD, Imp::Pure(t::pad_end);
+    "text.before", Linear, A(s_two), OFFLOAD, Imp::Pure(t::before);
+    "text.after", Linear, A(s_two), OFFLOAD, Imp::Pure(t::after);
+    "text.before_last", Linear, A(s_two), OFFLOAD, Imp::Pure(t::before_last);
+    "text.after_last", Linear, A(s_two), OFFLOAD, Imp::Pure(t::after_last);
+    "text.strip_prefix", Linear, A(s_two), OFFLOAD, Imp::Pure(t::strip_prefix);
+    "text.strip_suffix", Linear, A(s_two), OFFLOAD, Imp::Pure(t::strip_suffix);
+    "text.trim_end_matches", Linear, A(s_two), OFFLOAD, Imp::Pure(t::trim_end_matches);
+    "text.dedent", Linear, A(s_first), OFFLOAD, Imp::Pure(t::dedent);
+    "text.indent", Linear, A(s_two), OFFLOAD, Imp::Pure(t::indent);
+    "text.wrap", Linear, A(s_first), OFFLOAD, Imp::Pure(t::wrap);
+    "text.number_lines", Linear, A(s_first), OFFLOAD, Imp::Pure(t::number_lines);
+    "text.show", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(text_show);
+    "text.parse_int", Linear, A(s_first), OFFLOAD, Imp::Pure(t::parse_int);
+    "text.parse_float", Linear, A(s_first), OFFLOAD, Imp::Pure(t::parse_float);
+    "text.similarity", Product, A(s_product), OFFLOAD, Imp::Pure(text_similarity);
+    "text.extract_json", Linear, A(s_first), OFFLOAD, Imp::Pure(t::extract_json);
+    "text.code_blocks", Linear, A(s_two), OFFLOAD, Imp::Pure(t::code_blocks);
+    "text.quote", Linear, A(s_two), OFFLOAD, Imp::Pure(t::quote);
+    "re.is_match", Product, R(regex::s_is_match), REGEX, Imp::Pure(regex::is_match);
+    "re.find", Product, R(regex::s_find), REGEX, Imp::Pure(regex::find);
+    "re.find_all", Product, R(regex::s_find), REGEX_ITER, Imp::Pure(regex::find_all);
+    "re.captures", Product, R(regex::s_captures), REGEX, Imp::Pure(regex::captures);
+    "re.captures_all", Product, R(regex::s_captures), REGEX_ITER, Imp::Pure(regex::captures_all);
+    "re.replace", Product, R(regex::s_replace), REGEX, Imp::Pure(regex::replace);
+    "re.replace_all", Product, R(regex::s_replace), REGEX_ITER, Imp::Pure(regex::replace_all);
+    "re.split", Product, R(regex::s_find), REGEX_ITER, Imp::Pure(regex::split);
+    "re.escape", Linear, A(s_first), OFFLOAD, Imp::Pure(regex::escape);
+    "map.get", Log, A(s_map_key), NONE, Imp::Pure(map_get);
+    "map.set", Log, A(s_map_key), NONE, Imp::Pure(map_set);
+    "map.keys", Linear, A(s_first), NONE, Imp::Pure(map_keys);
+    "json.parse", Linear, A(s_first), OFFLOAD, Imp::Pure(json_parse);
+    "json.decode", Linear, A(s_weight_first), NONE, Imp::Pure(json_decode);
+    "json.get", Linear, A(s_two), NONE, Imp::Pure(json_get);
+    "json.encode", Linear, A(s_weight_first), NONE, Imp::Pure(json_encode);
+    "math.abs", Const, A(s_none), NONE, Imp::Pure(math_abs);
+    "math.min", Const, A(s_none), NONE, Imp::Pure(math_min);
+    "math.max", Const, A(s_none), NONE, Imp::Pure(math_max);
 }
 
 /// The table index of the built-in a program calls `name`.
@@ -820,22 +943,44 @@ fn text_len(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn text_upper(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
-    new_text(cx, text(cx, s)?.to_uppercase(), s.labels)
+    let t = text(cx, s)?;
+    // An upper-cased text can be longer than its source (`ß` is `SS`): its size is checked
+    // before it is built.
+    let size: usize = t
+        .chars()
+        .map(|c| c.to_uppercase().map(char::len_utf8).sum::<usize>())
+        .sum();
+    cx.work += 2 * size as u64 + 1;
+    if size > crate::value::MAX_STR_BYTES {
+        return Err(raise(
+            cx.p,
+            Kind::Invalid,
+            "the upper-cased text is longer than 16 MiB",
+            s.labels,
+            cx.loc,
+        ));
+    }
+    new_text(cx, t.to_uppercase(), s.labels)
 }
 
 fn text_trim(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
-    new_text(cx, text(cx, s)?.trim().to_owned(), s.labels)
+    let t = text(cx, s)?;
+    cx.work += 2 * t.len() as u64 + 1;
+    new_text(cx, t.trim().to_owned(), s.labels)
 }
 
 fn text_contains(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (s, part) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
-    Ok(Value::bool(text(cx, s)?.contains(text(cx, part)?)).with_labels(s.labels | part.labels))
+    let (t, p) = (text(cx, s)?, text(cx, part)?);
+    cx.work += (t.len() + p.len()) as u64 + 1;
+    Ok(Value::bool(t.contains(p)).with_labels(s.labels | part.labels))
 }
 
 fn text_split_once(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (s, sep) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = s.labels | sep.labels;
+    cx.work += 2 * text(cx, s)?.len() as u64 + 1;
     let Some((a, b)) = text(cx, s)?.split_once(text(cx, sep)?) else {
         return Ok(Value::none().with_labels(labels));
     };
@@ -870,6 +1015,7 @@ fn text_join(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         }
         _ => bad = true,
     });
+    cx.work += 2 * out.len() as u64 + 1;
     if bad {
         return Err(raise(
             cx.p,
@@ -885,6 +1031,7 @@ fn text_join(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 fn text_show(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let v = arg(cx, args, 0)?;
     let shown = crate::ops::show(cx.p, v);
+    cx.work += shown.len() as u64 + 1;
     if shown.len() > crate::value::MAX_STR_BYTES {
         // The writer stopped just past the limit: what it rendered is charged before the
         // refusal, as a returned result's would be.
@@ -920,7 +1067,9 @@ fn text_repeat(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             cx.loc,
         ));
     }
-    new_text(cx, t.repeat(count), labels)
+    let repeated = t.repeat(count);
+    cx.work += repeated.len() as u64 + 1;
+    new_text(cx, repeated, labels)
 }
 
 /// The cells between cancellation checks in `text.similarity` (one checkpoint's worth of
@@ -946,23 +1095,8 @@ fn text_similarity(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     if longest == 0 {
         return Ok(Value::float(1.0).with_labels(labels));
     }
-    // The working memory: the shorter text's characters and two rows of counts.
-    let mut charge = Charge::none();
-    let bytes = (y.len() as u64)
-        .checked_add(1)
-        .and_then(|n| n.checked_mul(4 + 2 * 8))
-        .ok_or_else(|| {
-            raise(
-                cx.p,
-                Kind::Invalid,
-                "a text too long to compare",
-                labels,
-                cx.loc,
-            )
-        })?;
-    charge
-        .grow(cx.heap, bytes)
-        .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
+    // The working memory (the shorter text's characters and two rows of counts) was charged
+    // to the heap before the built-in ran ([`s_product`]).
     let mut prev: Vec<usize> = (0..=y.len()).collect();
     let mut cur = vec![0; y.len() + 1];
     let mut since_check = 0u64;
@@ -974,6 +1108,7 @@ fn text_similarity(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         }
         std::mem::swap(&mut prev, &mut cur);
         since_check += y.len() as u64 + 1;
+        cx.work += y.len() as u64 + 1;
         if since_check >= SIMILARITY_CHECK_CELLS {
             since_check = 0;
             if cx.cancel.is_cancelled() {
@@ -987,7 +1122,6 @@ fn text_similarity(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             }
         }
     }
-    drop(charge);
     #[allow(clippy::cast_precision_loss, reason = "a ratio of lengths")]
     let sim = 1.0 - prev[y.len()] as f64 / longest as f64;
     Ok(Value::float(sim).with_labels(labels))
