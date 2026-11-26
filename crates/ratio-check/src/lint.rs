@@ -47,7 +47,7 @@ use crate::analysis::{Effects, Results};
 use crate::check::{Checker, FnKind, ItemSig};
 use crate::diag::Code;
 use crate::tables::{ArgSource, Key, LocalId, Origin, PatRes, Res};
-use crate::types::{Ty, TypeId};
+use crate::types::{EnumId, Ty, TypeId};
 
 /// Why a generic declaration instantiated at a secret is refused.
 const SECRET_INSTANCE: &str = "a generic function that may reach a secrecy sink cannot be \
@@ -634,18 +634,41 @@ impl Checker<'_> {
     /// option, map, tuple, record, task or enum argument that holds one (`[fn() -> T]`,
     /// `Check<T>`'s `run`, `Stop`'s `until`). Deeper than [`MAX_FN_DEPTH`], it may.
     fn holds_fn(&self, t: TypeId, depth: usize) -> bool {
+        self.holds_fn_in(t, depth, &mut Vec::new())
+    }
+
+    /// [`Checker::holds_fn`], looking into each enum's variant payloads once (`seen` stops a
+    /// recursive enum; a payload's own type parameters are covered by the enum's arguments).
+    fn holds_fn_in(&self, t: TypeId, depth: usize, seen: &mut Vec<EnumId>) -> bool {
         if depth > MAX_FN_DEPTH {
             return true;
         }
+        let deeper = depth + 1;
         match self.types.get(t) {
             Ty::Fn(..) | Ty::Harness(..) => true,
             Ty::Option(a) | Ty::List(a) | Ty::Task(a) | Ty::Untrusted(a) | Ty::Secret(a) => {
-                self.holds_fn(*a, depth + 1)
+                self.holds_fn_in(*a, deeper, seen)
             }
-            Ty::Map(k, v) => self.holds_fn(*k, depth + 1) || self.holds_fn(*v, depth + 1),
-            Ty::Tuple(items) => items.iter().any(|i| self.holds_fn(*i, depth + 1)),
-            Ty::Record(fields) => fields.iter().any(|f| self.holds_fn(f.ty, depth + 1)),
-            Ty::Enum(_, args) => args.iter().any(|a| self.holds_fn(*a, depth + 1)),
+            Ty::Map(k, v) => {
+                self.holds_fn_in(*k, deeper, seen) || self.holds_fn_in(*v, deeper, seen)
+            }
+            Ty::Tuple(items) => items.iter().any(|i| self.holds_fn_in(*i, deeper, seen)),
+            Ty::Record(fields) => fields.iter().any(|f| self.holds_fn_in(f.ty, deeper, seen)),
+            Ty::Enum(id, args) => {
+                if args.iter().any(|a| self.holds_fn_in(*a, deeper, seen)) {
+                    return true;
+                }
+                if seen.contains(id) {
+                    return false;
+                }
+                seen.push(*id);
+                self.types
+                    .enum_def(*id)
+                    .variants
+                    .iter()
+                    .filter_map(|v| v.payload)
+                    .any(|p| self.holds_fn_in(p, deeper, seen))
+            }
             _ => false,
         }
     }

@@ -171,7 +171,8 @@ crate rather than a second one because its rules change which programs type (the
   function: `retry(go)`, but also `par([go])`, `race`, `fallback`, `think.debate`'s `sides`,
   `think.check`'s `Check.run`, `think.until`'s `Stop.until`, and a program's own
   `fs: [fn() -> ()]` or `{ run: fn() -> () }`, looking into lists, tuples and records written
-  out and through locals bound to them (`let fs = [go]`). Once a callee may call into its
+  out and through locals bound to them (`let fs = [go]`), and into enum payloads
+  (`Job.Run { f: go }`, recursive enums included). Once a callee may call into its
   arguments (a function value, or a declaration with a parameter that may hold a function),
   every argument counts by what it actually holds, a generic one (`each([go], invoke)`) and a
   pipe's left side (`go |> retry()`) included; a closure written at the call is linted in

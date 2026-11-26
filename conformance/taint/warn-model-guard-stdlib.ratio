@@ -1,29 +1,32 @@
-// expect: check-warning C0039 at 41:5
-// expect: check-warning C0039 at 48:13
-// expect: check-warning C0039 at 49:13
-// expect: check-warning C0039 at 50:13
-// expect: check-warning C0039 at 51:5
+// expect: check-warning C0039 at 44:5
+// expect: check-warning C0039 at 51:13
 // expect: check-warning C0039 at 52:13
-// expect: check-warning C0039 at 53:15
-// expect: check-warning C0039 at 71:5
-// expect: check-warning C0039 at 72:5
-// expect: check-warning C0039 at 73:13
-// expect: check-warning C0039 at 81:5
-// expect: check-warning C0039 at 120:15
-// expect: check-warning C0039 at 121:17
-// expect: check-warning C0039 at 122:17
-// expect: check-warning C0039 at 123:18
-// expect: check-warning C0039 at 124:5
-// expect: check-warning C0039 at 125:5
-// expect: check-warning C0039 at 126:14
-// expect: check-warning C0039 at 127:13
-// expect: check-warning C0039 at 128:13
-// expect: check-warning C0039 at 157:13
-// expect: check-warning C0039 at 158:5
-// expect: check-warning C0039 at 159:5
-// expect: check-warning C0039 at 160:15
+// expect: check-warning C0039 at 53:13
+// expect: check-warning C0039 at 54:5
+// expect: check-warning C0039 at 55:13
+// expect: check-warning C0039 at 56:15
+// expect: check-warning C0039 at 74:5
+// expect: check-warning C0039 at 75:5
+// expect: check-warning C0039 at 76:13
+// expect: check-warning C0039 at 84:5
+// expect: check-warning C0039 at 123:15
+// expect: check-warning C0039 at 124:17
+// expect: check-warning C0039 at 125:17
+// expect: check-warning C0039 at 126:18
+// expect: check-warning C0039 at 127:5
+// expect: check-warning C0039 at 128:5
+// expect: check-warning C0039 at 129:14
+// expect: check-warning C0039 at 130:13
+// expect: check-warning C0039 at 131:13
+// expect: check-warning C0039 at 160:13
 // expect: check-warning C0039 at 161:5
 // expect: check-warning C0039 at 162:5
+// expect: check-warning C0039 at 163:15
+// expect: check-warning C0039 at 164:5
+// expect: check-warning C0039 at 165:5
+// expect: check-warning C0039 at 190:5
+// expect: check-warning C0039 at 191:5
+// expect: check-warning C0039 at 192:5
 
 // The guarded-effect lint over the effectful modules: an install, an authored harness, a
 // delegation, a new session, a memory write, a merge and a script, each guarded only by what
@@ -160,5 +163,32 @@ fn piped_and_generic(p: Prompt) -> () {
     let all = fs |> par()
     each([go], invoke)
     apply2([go], runner)
+  }
+}
+
+// Function values in enum payloads, a recursive enum's included.
+enum Job { idle, Run { f: fn() -> () } }
+enum Chain { end, Step { run: fn() -> (), next: Chain } }
+
+fn run_job(j: Job) -> () {
+  if let Run { f } = j {
+    f()
+  }
+}
+
+fn run_chain(c: Chain) -> () {
+  if let Step { run, next } = c {
+    run()
+  }
+}
+
+fn in_payloads(p: Prompt) -> () {
+  let a = advice(p)
+  let go = || install()
+  let j = Job.Run { f: go }
+  if a.install {
+    run_job(Job.Run { f: go })
+    run_job(j)
+    run_chain(Chain.Step { run: go, next: Chain.end })
   }
 }
