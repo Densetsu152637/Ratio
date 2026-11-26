@@ -16,7 +16,9 @@
 //! ([`ir::Package::hash`]) and each expression its site id under [`IR_VERSION`]; [`prepare`]
 //! builds the executable prepared form (never hashed) and [`evaluate`] runs a pure entry as a
 //! future ([`interp`]), with secrecy labels on every value ([`Value`], [`Labels`]), steps, heap
-//! and call-depth limits ([`Limits`]), and effects suspended for the host (stage 11).
+//! and call-depth limits ([`Limits`]), and effects suspended for the host (stage 11). Stage 10,
+//! frames ([`frame`]): harness calls, entries and `with` blocks open frames attenuated from
+//! their caller's in every dimension, with budget ledgers that admit effects by reservation.
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -48,6 +50,13 @@ pub use ratio_eval::{
     CancelToken, Evaluation, Finished, Labels, Limits, Outcome, Prepared, RtError, Value, block_on,
     evaluate, prepare,
 };
+
+/// Stage 10: frames. A frame's scope and the pure attenuation functions a host mirrors
+/// ([`frame::attenuate`], [`frame::check_within`]), the budget ledgers with admission by
+/// reservation ([`frame::Ledgers`]), the frame context every effect carries
+/// ([`frame::FrameCtx`]), and evaluation in a host's session ([`evaluate_in`],
+/// [`frame::Session`]).
+pub use ratio_eval::{evaluate_in, frame};
 
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///

@@ -73,11 +73,21 @@ impl RtError {
     /// For a `Budget` error, which budget (`steps`, `heap`, `call_depth`).
     #[must_use]
     pub fn budget(&self, p: &Prepared) -> Option<String> {
+        self.payload_variant(p, "which")
+    }
+
+    /// For a `Denied` error, what refused (`attenuation`, `sees`, `secrecy`).
+    #[must_use]
+    pub fn denied_by(&self, p: &Prepared) -> Option<String> {
+        self.payload_variant(p, "by")
+    }
+
+    fn payload_variant(&self, p: &Prepared, field: &str) -> Option<String> {
         let kind = self.value.field("kind")?;
         let crate::value::Repr::VariantP(v) = &kind.repr else {
             return None;
         };
-        match v.payload.field("which")?.repr {
+        match v.payload.field(field)?.repr {
             crate::value::Repr::Variant(e, i, _) => Some(variant_name(p, e, i)),
             _ => None,
         }

@@ -559,6 +559,21 @@ impl Machine {
                     Labels::NONE,
                     req.loc,
                 )),
+                // So does a catchable error whose message or data is labelled.
+                (Some(req), Err(e))
+                    if e.class == ErrClass::Catchable && self.refuses_secret(&e.value) =>
+                {
+                    Err(raise(
+                        &self.p,
+                        Kind::Denied("sees"),
+                        &format!(
+                            "`{}` failed with a secret in a frame whose `sees` lacks `secrets`",
+                            req.builtin
+                        ),
+                        Labels::NONE,
+                        req.loc,
+                    ))
+                }
                 (_, r) => r,
             };
             self.mode = match result {
@@ -973,6 +988,8 @@ impl Machine {
     }
 
     fn call_builtin(&mut self, b: u16, args: &[Option<Value>], type_args: &[u32], loc: Loc) {
+        // Overrides apply to harness calls only; none may wait for a later call.
+        self.pending_override = None;
         let Some(builtin) = BUILTINS.get(b as usize).copied() else {
             return self.invalid("an unknown built-in", Labels::NONE, loc);
         };

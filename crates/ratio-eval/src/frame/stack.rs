@@ -239,10 +239,11 @@ impl FrameStack {
             ))
         };
         let node = self.ledgers.open(parent_node, scope.budget, scope.width);
+        // Every setting left out is inherited from the caller, except a harness's title,
+        // which defaults to its name (chapter 04).
         let settings = match kind {
             FrameKind::Entry | FrameKind::Harness => settings.over(&Settings {
                 title: None,
-                system: None,
                 ..(*parent_settings).clone()
             }),
             FrameKind::Block => settings.over(&parent_settings),

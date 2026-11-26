@@ -34,9 +34,8 @@ code always runs on the walk's own stack. Values are `Send + Sync`, and so is th
 brings real concurrency) and enforce the branch restriction: a `var` declared outside a branch
 cannot be assigned inside it. That is a program defect, not a recoverable error: it raises
 `Invalid` with the class `Fatal`, which no `catch`, `result` or sibling `race` branch can
-swallow. Harness calls, `with` blocks, call overrides, `with
-timeout`, tool sets and `state` raise `Unsupported` until frames (stage 10) and the host (stage
-11) exist.
+swallow. `with timeout` and `state` raise `Unsupported` until the host (stage 11) exists;
+harness calls, `with` blocks, call overrides and tool sets open frames (below).
 
 ## Values and secrecy labels
 
@@ -100,6 +99,74 @@ or a result over 16 MiB is refused before anything is built, with checked arithm
 `text.similarity` (`product`: two rows over the shorter text, charged to the heap, checking
 cancellation every checkpoint's worth of cells).
 
+## Frames
+
+Stage 10 (chapter 04). The frame model lives in [`src/frame/`](src/frame/mod.rs), inside this
+crate rather than a crate of its own: opening a frame reads configuration values, labels and
+the step counter of the machine, so it belongs with the evaluator, while its pure half (scopes,
+attenuation, ledgers) depends on nothing else here and is public as `ratio_eval::frame`
+(`ratio::frame` through the facade) for a host to mirror.
+
+**Opening a frame.** A harness call evaluates its arguments, then its call's overrides
+(`f(x) with { … }`) in the caller's frame, then binds its parameters and evaluates its declared
+`with { … }` with them bound (the IR lowers the declaration in the harness's own frame for
+that), and opens its frame; an entry that is a harness opens its frame from the host's
+`Session` the same way, and a `with { … } { … }` block opens a frame at its frame's depth
+around its body. The configuration record is read into a `Request` (overrides win field by
+field, and within `budget`, `limits`, `sees` and `permissions` sub-field by sub-field; `deny`
+and `ask` rules of both apply); a value that cannot be read exactly (a negative cap, a tool
+pattern with an inner `*`, a path with `..`, a width of 0) raises `Invalid`.
+
+**Attenuation.** `frame::attenuate(parent, room, request, kind)` gives the child's `Scope` as
+the meet of the parent's and the request in every dimension: tools (names and prefix patterns
+intersected exactly; a missing `need` tool is `Denied { by: attenuation }`, a missing `want`
+tool is dropped), the permission mode (`plan < ask < default < auto, accept_edits < full`),
+rules (the caller's plus the callee's `deny` and `ask`, never an `allow`), paths (folders
+intersected component-wise), location (`local` if either is; asking for `cloud` under `local`
+is refused), each budget cap (at most the request, the parent's cap and what the parent's
+ledgers have left), `sees` (fresh and `none` frames see nothing unless they ask; fork frames,
+blocks and entries inherit; asking beyond the caller is refused), depth (one more per harness
+call; past the limit, `Budget { which: depth }`), width, heap, attended (an unattended caller
+cannot open an attended frame), memory writes, and the context mode (`main` only in an entry's
+own frame). `frame::check_within(parent, child, kind)` is the independent check, a pure
+function of two scopes: the machine runs it on every frame it opens, and a host runs it
+against its own record of the parent (Imperium's `RatioHost::open_frame`), so a forged parent
+scope cannot widen a child.
+
+**`sees` and secrets.** A labelled argument entering a frame whose `sees` lacks `secrets`, a
+labelled result or error leaving a frame into one, and an effect answered with a labelled
+value (or a labelled error) in one, raise `Denied { by: sees }`. The ambient reads chapter 04
+gates (`session.turn`, `session.plan`, `memory.index`, …: `frame::gate`) are refused before
+the host is asked.
+
+**Budgets and the ledgers.** `frame::Ledgers` is the frame tree's ledgers, one node per frame
+under its caller's, behind one lock. An effect is admitted by reserving its charge on its
+frame's node and every ancestor's at once: a tool call one `tool_calls`; a model call one
+`model_calls`, its counted input and its effective `max_tokens` (the smallest of the requested
+`max_tokens`, the model's maximum output or window less the input, and what every ledger can
+still cover in tokens and in cost after the input), which the host sends. Below the reply
+floor (the smallest of `min_reply_tokens`, the request and the model's maximum, at least one)
+an admission waits while any reservation is held and is refused once none is; a hosted model
+without prices is refused under any cost cap on the path, and a `local` model or a price of 0
+counts as priced. Completion replaces the reservation with the actual charge, so unspent
+budget stays with the caller; every sum saturates towards "spent". The `steps` ledger is the
+same tree's: the machine keeps its frame's limit as an absolute step count and debits the
+ledgers at every frame boundary and effect. A `Budget` raised because a frame's own cap ran
+out (a harness's, or a `with` block's) passes every `catch` and `result` inside that frame and
+becomes catchable once it leaves it; the turn's never does. Running-branch slots
+(`acquire_slot`, `release_slot`) are the width's ledger for the scheduler (stage 11a): a
+parked branch gives its slot back.
+
+**What a host receives.** Every `EffectRequest` carries the `FrameCtx` (the frame path, its
+parent's path, its kind and harness, the attenuated `Scope`, the `Ledgers` and its node, and the
+settings: model, effort, thinking, sampling, system prompt and title, inherited where left out)
+and the branch path within the frame. Frame paths follow chapter 01: `turn/critic@s41#0`, each
+element preceded by the branch path the call was made in (`c12#0.b2/`); a `with` block is an
+element named `with`. `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions` are answered from the frame without the host; `question(text, options)`
+builds the `Question` error a callee raises to its caller, which propagates and is caught like
+any error (and is refused by `sees` like any other value).
+
 ## Tests
 
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`
@@ -109,3 +176,14 @@ against models and the summary property (including labels a replay adds; the `ra
 restore is a stub until stage 11b); `tests/limits.rs` covers the cost classes, the heap ledger,
 call and value depth, hostile programs on a 256 KiB stack, cancellation, and a 5,000,000-step
 loop that lets a second session progress on a single-threaded executor.
+
+Frames: `conformance.rs` also runs `conformance/frames/` (harness calls, configuration and
+overrides, attenuation of tools, modes, locations, `sees`, attended and context, scoped
+`steps` and depth budgets caught only outside their scope, questions, `meta`, frame paths);
+`tests/attenuation.rs` is the monotonicity property over random parents and requests in every
+dimension, with the check refusing a child widened in any dimension and a child of a forged
+parent; `tests/ledgers.rs` checks the effective `max_tokens` formula, the reply floor, unpriced
+models under cost caps, and that concurrent model calls never pass a token cap (in a frame or a
+child frame with a lower cap) under a deterministic interleaving harness and under threads;
+`tests/frames.rs` covers the `sees` refusals of labelled arguments, results and errors, the
+frame context effects carry, and harness entries in a host's session.
