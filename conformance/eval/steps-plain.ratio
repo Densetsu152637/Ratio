@@ -1,0 +1,5 @@
+// expect: value 3
+// expect: steps 5
+fn main() -> Int {
+  1 + 2
+}

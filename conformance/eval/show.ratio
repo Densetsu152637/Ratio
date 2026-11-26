@@ -1,0 +1,5 @@
+// expect: value ["3", "1.0", "true", "none", "[1,2]", "{\"a\":1}", "2s", "$3"]
+fn main() -> [Untrusted<Str>] {
+  let o: Int? = none
+  [text.show(3), text.show(1.0), text.show(true), text.show(o), text.show([1, 2]), text.show({ a: 1 }), text.show(2s), text.show($3)]
+}

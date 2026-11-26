@@ -1,0 +1,7 @@
+// expect: value ["1500ms", "2m", "$1.5", "$0.25", true]
+fn main() -> (Duration, Duration, Money, Money, Bool) {
+  let d = 500ms * 3
+  let m = 30s * 4
+  let price = $0.75 * 2
+  (d, m, price, $1 / 4, d < 2s)
+}

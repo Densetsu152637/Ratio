@@ -1,0 +1,5 @@
+// expect: value [1, 2, 3]
+// expect: steps 17
+fn main() -> [Int] {
+  [3, 1, 2].sort_by(|x| x)
+}

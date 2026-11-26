@@ -1,0 +1,6 @@
+// expect: value 2
+// expect: steps 14
+fn main() -> Int {
+  let xs = [1, 2, 3]
+  list.get(xs, 1) ?? 0
+}

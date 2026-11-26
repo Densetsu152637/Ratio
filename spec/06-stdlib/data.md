@@ -41,8 +41,8 @@ does.
 | Class | Work `w` | Built-ins |
 | --- | --- | --- |
 | `const` | 1 | `text.len`, `text.is_empty`, `list.len`, `list.is_empty`, `list.first`, `list.last`, `map.len`, `map.is_empty`, `json.type_of`; every `math` built-in on scalars (`abs`, `sign`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `trunc`, `to_float`, `sqrt`, `pow`, `exp`, `ln`, `log2`, `log10`, `is_nan`); `time.add`, `time.diff`, `time.date`, `time.duration`, `time.seconds`, `time.show` |
-| `log` | ⌈log2(n + 1)⌉ | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
-| `nlogn` | n · ⌈log2(n + 1)⌉ | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
+| `log` | ⌈log2(n + 1)⌉; for a map built-in, times the key's size \|k\|, since every comparison walks the key (so are `m[k]`, `k in m` and `m[k] = v`) | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
+| `nlogn` | n · ⌈log2(n + 1)⌉; `list.sort_by` adds W · ⌈log2(n + 1)⌉ for keys of total weight W | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
 | `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff` |
 | `output` | m | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
 | `linear` | n + m | Every other pure built-in of this page (for example `list.map`, `list.filter`, `text.split`, `text.contains`, `text.replace`, `json.parse`, `hash.stable`, `template.render`) |
@@ -54,7 +54,10 @@ before the built-in runs; when it exceeds the steps left, the built-in raises
 unpaid. A `linear` built-in's output part is debited when it returns.
 
 Text concatenation and string interpolation are charged `linear` in the result; build long text
-with `text.join` or a prompt rather than by repeated concatenation.
+with `text.join` or a prompt rather than by repeated concatenation. A prompt's `include` is
+charged `linear` in the sections and values it copies. Where a built-in compares or walks values
+(`list.contains`, `assert_eq`, `text.show`), their size is their weight (chapter 07, "Resource
+limits"), not their element count.
 
 **Charges never depend on representation state.** An implementation may update a uniquely owned
 value in place, but uniqueness depends on how long sibling branches hold references, which is

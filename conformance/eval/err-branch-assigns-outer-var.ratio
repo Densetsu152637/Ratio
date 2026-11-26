@@ -1,0 +1,9 @@
+// expect: runtime-error Invalid
+fn main() -> Int {
+  var n = 0
+  par {
+    { n = 1; 1 };
+    2
+  }
+  n
+}

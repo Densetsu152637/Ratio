@@ -11,7 +11,12 @@
 //! and taint, is part of the same check: the sinks, trust sites ([`Checked::trust_sites`] and
 //! the transitive [`Checked::summary`]), static secrets, the guarded-effect lint, schemas and
 //! type digests ([`Checked::schema`], [`Checked::digest`]), and `harnesses.check` as a library
-//! call ([`harnesses_check`]).
+//! call ([`harnesses_check`]). Stage 6, the IR and the core interpreter: [`lower`] turns a clean
+//! check into the Core IR ([`ir`]), whose canonical form gives each package its IR hash
+//! ([`ir::Package::hash`]) and each expression its site id under [`IR_VERSION`]; [`prepare`]
+//! builds the executable prepared form (never hashed) and [`evaluate`] runs a pure entry as a
+//! future ([`interp`]), with secrecy labels on every value ([`Value`], [`Labels`]), steps, heap
+//! and call-depth limits ([`Limits`]), and effects suspended for the host (stage 11).
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -32,12 +37,24 @@ pub use ratio_names::{
 pub use ratio_check as checker;
 pub use ratio_check::{Checked, PackageCheck, check, harnesses_check};
 
+/// Stage 6: the Ratio Core IR, its lowering, canonical serialisation and IR hash.
+pub use ratio_ir as ir;
+pub use ratio_ir::{IR_VERSION, LowerError, lower};
+
+/// Stage 6: the core interpreter (the prepared form, values with secrecy labels, the
+/// evaluator of the pure language).
+pub use ratio_eval as interp;
+pub use ratio_eval::{
+    CancelToken, Evaluation, Finished, Labels, Limits, Outcome, Prepared, RtError, Value, block_on,
+    evaluate, prepare,
+};
+
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.12";
+pub const SPEC_DRAFT: &str = "0.13";
 
-/// The implementation stage reached (chapter 10's table): schemas and taint.
-pub const STAGE: u32 = 5;
+/// The implementation stage reached (chapter 10's table): the IR and the core interpreter.
+pub const STAGE: u32 = 6;

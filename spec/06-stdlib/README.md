@@ -175,8 +175,8 @@ particular, a `ToolCall`'s name and id are what the model wrote, and a plan's te
 - Every rule a built-in imposes on its arguments also holds when it is used as a function value.
   A built-in whose rule can be checked only where it is called may only be called, never used as
   a value (the checker refuses naming one otherwise, `C0036`): every **trust site** (its type and
-  reason are fixed at the call), every **sink for secrets or harness names** whose rule depends
-  on the call's written arguments, and every **generic secrecy sink** (a secret type argument is
+  reason are fixed at the call), every **source or sink** whose rule depends on the call's
+  written arguments, and every **generic secrecy sink** (a secret type argument is
   visible only at the call). Today these are `trust`, `as_task` and `declassify` (trust sites),
   `session.ask` (its answers are labelled from the questions written at the call) and
   `meta.harness` (each load is listed by the name it is called with).

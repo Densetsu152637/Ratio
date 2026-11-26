@@ -1,0 +1,5 @@
+// expect: value 200
+// expect: steps 13
+fn main() -> Int {
+  text.len(text.repeat("ab", 100))
+}

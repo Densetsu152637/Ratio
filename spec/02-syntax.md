@@ -195,7 +195,7 @@ From lowest to highest binding:
 | 6 | `== != < <= > >= in is` | none | Comparison; `x in xs` membership; `x is Variant` enum test |
 | 7 | `.. ..=` | none | Ranges (`0..n` excludes `n`) |
 | 8 | `+ -` | left | Numbers, durations, money; `+` also joins strings and lists |
-| 9 | `* / %` | left | `/` on `Int` truncates toward zero; division by zero is `Invalid` |
+| 9 | `* / %` | left | `/` on `Int` truncates toward zero; division by zero is `Invalid`, for `Float` too |
 | 10 | `-` | prefix | Negation |
 | 11 | `f(…)`, `f::<T>(…)`, `.name`, `?.name`, `[i]`, `with {…}` | postfix, left | Call, call with type arguments, field or method, optional chaining, index, call overrides |
 

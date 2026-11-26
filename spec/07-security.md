@@ -239,14 +239,15 @@ examples on the eval suites (chapter 10, stage 24).
 | Limit | Default | Maximum | When exceeded |
 | --- | --- | --- | --- |
 | Interpreter steps | 5,000,000 | 100,000,000 | `Budget { which: steps }` |
-| Heap (live values) | 64 MiB | 512 MiB | `Budget { which: heap }` |
+| Heap (live values, with the prompt sections being built and the values the interpreter and its built-ins gather while they work) | 64 MiB | 512 MiB | `Budget { which: heap }` |
 | Call depth (nested function and closure calls) | 512 | 4,096 | `Budget { which: call_depth }` |
 | Frame depth (nested harness calls) | 8 | 32 | `Budget { which: depth }` |
 | Parser nesting (tree depth: brackets, blocks, expressions, types, patterns, and every link of an operator or `.` chain) | 128 | 256 | A check-time diagnostic |
 | Interpolation nesting inside strings | 4 | 8 | A check-time diagnostic |
 | JSON nesting (`json.parse`, decoding) | 128 | 256 | `Invalid` |
-| Single string | 16 MiB | 64 MiB | `Invalid` |
+| Single string (rendering a value as text stops where it would pass this) | 16 MiB | 64 MiB | `Invalid` |
 | Single list or map | 1,000,000 elements | 10,000,000 | `Invalid` |
+| Value nesting (lists of lists, records of records, closures capturing closures) | 256 | 256 | `Invalid` |
 | Package source | 256 KiB per file, 2 MiB per package (authored: 64 KiB) | — | Not loadable |
 | Package loading | 1024 files, 64 packages, 4096 registry calls per load (answers, failures included, remembered); at most 64 modules in one import chain, the entry counted; package and plugin names at most 128 bytes | — | Not loadable |
 | Concurrent branches (running; parked branches hold no slot, chapter 03) | 16 | 64 | Excess branches wait, and start in branch-path order |
@@ -271,7 +272,13 @@ so a chain of 128 or more terms exceeds the default limit; split it with `let` b
 
 Step accounting is deterministic (it depends only on the program and its data): pure built-ins
 are charged by cost class from the sizes of their inputs and outputs, never from representation
-state (chapter 06, `data`). Sequential code that exceeds its steps exceeds them identically in
+state (chapter 06, `data`). A **step** is one IR expression, statement or pattern node the
+interpreter enters, or one loop iteration; on top of those, a built-in is charged its cost class,
+`+` on text and interpolation `1 + ⌈m / 64⌉` for an `m`-character result, an interpolation with a
+format spec `1 + ⌈(n + m) / 64⌉` over its input's weight `n`, and comparing, testing membership
+in, or rendering containers and text is charged over the values' **weight** (one per scalar, the
+characters of text, field and variant names, and the weights of the elements), each before the
+work it pays for. A rendering refused as too long is charged for what it wrote. Sequential code that exceeds its steps exceeds them identically in
 replay. Concurrent branches share their frame's steps ledger, and which branch reaches the limit
 depends on timing, so each branch's step total and the exhaustion are events on the turn sequence,
 replayed as recorded and verified against the limit (chapter 04).

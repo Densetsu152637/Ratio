@@ -1,0 +1,8 @@
+// expect: value ["n=3, f=2.50, pad=[   ab], left=[ab   ], j=[1,\"x\"]", 7, true]
+fn main() -> (Str, Int, Bool) {
+  let n = 3
+  let f = 2.5
+  let s = "ab"
+  let t = "n={n}, f={f:.2}, pad=[{s:>5}], left=[{s:<5}], j={(1, "x"):json}"
+  (t, text.len("caf\u{e9} ab"), "b" in "abc" and "ab" < "b")
+}

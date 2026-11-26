@@ -156,14 +156,14 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Acceptance checks: one rejected program per sink and one accepted per allowed flow; property that
   generated programs never produce a `TrustedPrompt` or `task` section from untrusted sources; schema
   and digest snapshots; static `Secret<T>` labels where known.
-- Status: in review (branch feat/wt-s5-taint; spec draft 0.12)
+- Status: done (PR #7, squash-merged as f2f11a9; spec draft 0.12)
 
 ## Stage 6: IR and core interpreter (security review)
 
 - Depends on: 5. Owned paths: new IR and interpreter crates, `conformance/eval/**`.
 - Acceptance checks: `conformance/eval/`; IR hash stability snapshots across platforms; run-time label
   propagation tests for every operator; branch restrictions; steps, heap and call-depth limits.
-- Status: pending
+- Status: in review (branch feat/wt-s6-interp; spec draft 0.13; security review rounds 1 and 2 addressed)
 
 ## Stages 7, 8, 9: Data I, II, III
 

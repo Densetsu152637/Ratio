@@ -162,6 +162,8 @@ pub(crate) struct Checker<'a> {
     pub(crate) variant_index: HashMap<Origin, HashMap<String, Vec<EnumId>>>,
     /// Trust sites, `meta.harness` loads and harness-value calls, for the analysis.
     pub(crate) records: crate::analysis::Records,
+    /// The declaration of each enum, by [`EnumId`] (for stage 6's lowering).
+    pub(crate) enum_items: Vec<ItemRef>,
 }
 
 /// How deep on-demand checks of constants and prompts (and alias lowering) may nest.
@@ -206,6 +208,7 @@ impl<'a> Checker<'a> {
             demand_depth: 0,
             variant_index: HashMap::new(),
             records: crate::analysis::Records::default(),
+            enum_items: Vec::new(),
         }
     }
 
@@ -361,6 +364,8 @@ impl<'a> Checker<'a> {
                     variants,
                 ));
                 let r = ItemRef { origin, index };
+                debug_assert_eq!(self.enum_items.len(), id.0 as usize);
+                self.enum_items.push(r);
                 self.set_sig(r, ItemSig::Enum(id));
                 // `ContextMode`'s `none` (chapter 04) is a keyword, so its source cannot
                 // declare it; the prelude adds it here.

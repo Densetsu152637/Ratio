@@ -1,0 +1,4 @@
+// expect: runtime-error User
+fn main() -> Int {
+  raise fail("mine", "a failure of my own")
+}

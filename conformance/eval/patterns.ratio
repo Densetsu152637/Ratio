@@ -1,0 +1,24 @@
+// expect: value ["empty", "one 7", "pair 1 2", "many 1 [2,3]", "or", "bound 5", "rec 1"]
+type Pair = { a: Int, b: Int }
+
+fn describe(xs: [Int]) -> Str {
+  match xs {
+    [] => "empty",
+    [x] => "one {x}",
+    [x, y] => "pair {x} {y}",
+    [first, ..rest] => "many {first} {rest}",
+  }
+}
+
+fn kind(n: Int) -> Str {
+  match n {
+    1 | 2 => "or",
+    m @ 5 => "bound {m}",
+    _ => "other",
+  }
+}
+
+fn main() -> [Str] {
+  let { a, .. } = { a: 1, b: 2 }
+  [describe([]), describe([7]), describe([1, 2]), describe([1, 2, 3]), kind(2), kind(5), "rec {a}"]
+}

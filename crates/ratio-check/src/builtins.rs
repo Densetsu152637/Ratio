@@ -72,6 +72,8 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn split_once<S>(s: S, sep: S) -> (S, S)? {}
 @pure fn join<S>(parts: [S], sep: S = "") -> S {}
 @pure fn show<T>(v: T) -> Untrusted<Str> {}
+@pure fn repeat_<S>(s: S, n: Int) -> S {}
+@pure fn similarity<S>(a: S, b: S) -> Float {}
 "#,
     ),
     (

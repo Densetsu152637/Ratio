@@ -1,0 +1,12 @@
+// expect: value [11, 11, 21, [2, 4, 6]]
+fn adder(n: Int) -> fn(Int) -> Int {
+  |x| x + n
+}
+
+fn main() -> (Int, Int, Int, [Int]) {
+  var base = 10
+  let add = |x: Int| x + base
+  base = 20
+  let twice = fn(x: Int) -> Int { add(add(x)) - 10 }
+  (add(1), twice(1), adder(base)(1), [1, 2, 3].map(|x| x * 2))
+}

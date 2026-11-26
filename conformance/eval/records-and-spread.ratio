@@ -1,0 +1,12 @@
+// expect: value [{"x": 5, "y": 2, "tag": null}, {"x": 1, "y": 2, "tag": "t"}, true, false]
+type Point = { x: Int, y: Int, tag?: Str }
+
+fn moved(p: Point, dx: Int) -> Point {
+  { ..p, x: p.x + dx }
+}
+
+fn main() -> (Point, Point, Bool, Bool) {
+  let p: Point = { x: 1, y: 2 }
+  let q: Point = { x: 1, y: 2, tag: "t" }
+  (moved(p, 4), q, p == { x: 1, y: 2 }, p == q)
+}

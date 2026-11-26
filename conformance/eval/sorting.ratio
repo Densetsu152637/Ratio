@@ -1,0 +1,4 @@
+// expect: value [["b", 1], ["c", 1], ["a", 3]]
+fn main() -> [(Str, Int)] {
+  [("a", 3), ("b", 1), ("c", 1)].sort_by(|(name, n)| n)
+}

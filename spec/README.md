@@ -1,10 +1,29 @@
 # The Ratio specification
 
-Version: draft 0.12 (2026-11-27). Status: design; stages 1 to 5 of the implementation (the
-token reader, the parser, modules and names, the type checker, and schemas and taint) are built
-in this repository.
+Version: draft 0.13 (2026-11-27). Status: design; stages 1 to 6 of the implementation (the
+token reader, the parser, modules and names, the type checker, schemas and taint, and the IR and
+core interpreter) are built in this repository.
 
-**Changes in draft 0.12.** Errata from stage 5, schemas and taint. No grammar change.
+**Changes in draft 0.13.** Errata from stage 6, the IR and the core interpreter. No grammar
+change.
+
+- A step is defined: one IR expression, statement or pattern node entered, or one loop
+  iteration, plus the charges of built-ins, text building and walking values by their weight
+  (chapter 07); an `eval` conformance file runs `fn main()` with no arguments, and its
+  expectations are stated (chapter 10).
+- Division by zero is `Invalid` for `Float` too (chapter 02).
+- Chapter 07's limits add value nesting (256, `Invalid`), say the heap counts live values with
+  prompt sections and the values the interpreter gathers, and that rendering stops at the string
+  limit.
+- The interpreter enforces the branch restriction on `var`s, which the checker does not yet; a
+  violation is fatal, and no `catch`, `result` or `race` branch can swallow it (chapter 03).
+- Map built-ins and operators are charged by the key's size, `list.sort_by` by its keys'
+  weight, `include` by what it copies, and comparisons by weight (chapter 06, `data`).
+- `IR_VERSION` 1 is fixed at the first release; changes before it do not bump it (chapter 10).
+- Wording: `C0037` covers a generic function returned too (chapter 03); the call-only criterion
+  names every source or sink whose rule depends on the written arguments (chapter 06).
+
+**Changes in draft 0.12** (kept for reference). Errata from stage 5, schemas and taint. No grammar change.
 
 - Concatenating or interpolating a `Brief` with trusted text only gives a `Brief` (chapter 03).
 - `steps` sections are instruction positions, with `system`, `instruct`, `note` and `example`
@@ -27,8 +46,6 @@ in this repository.
   cannot name an argument, so `harness:` could not be written) (chapters 03, 06, 08).
 - `session.ask`'s questions are the shared `Question` record, whose `secret?: Bool` is `false`
   when absent (chapter 06).
-- A `meta.harness` name is the longest prefix that names a registered package, then the harness
-  (chapters 04, 06).
 - Chapter 10 adds the codes `C0035` to `C0039` and the `conformance/taint/` directory.
 - `session.start` names the package by `package:` too, and a parameter whose name is a reserved
   keyword (`prompt`, `type`) is passed only by position (chapter 06).
@@ -40,8 +57,9 @@ in this repository.
   (chapter 06).
 - Canonical JSON's key order is given (fixed order for schema keywords, field names by UTF-8
   bytes), and digest enums are numbered from 0 (chapter 03).
-- A `meta.harness` name's source is chosen before its longest package prefix; an ambiguous name
-  makes the `harnesses.check` listing incomplete (chapters 04, 06).
+- A `meta.harness` name's source is chosen first, then the longest prefix that names a
+  registered package, then the harness; an ambiguous name makes the `harnesses.check` listing
+  incomplete (chapters 04, 06).
 - Wording: chapter 10's `C0036` row.
 
 **Changes in draft 0.11** (kept for reference). Errata from stage 4, the type checker. One grammar change.

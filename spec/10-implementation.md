@@ -207,7 +207,8 @@ may change in any release.
 - **`ratio::IR_VERSION`** (an integer, from stage 6) changes whenever the canonical IR
   serialisation, the IR hash or the effect keys (frame and branch paths included) change. Harness
   hashes from another IR version are not comparable. The prepared form (chapter 01) is not
-  covered: it is never serialised or hashed.
+  covered: it is never serialised or hashed. `IR_VERSION` 1 is fixed at the first release
+  (`v0.1.0`); changes to the IR before it do not bump it.
 - **`ratio::TAPE_VERSION`** (an integer, from stage 11a) changes whenever the tape's file format
   changes (its header, entry encoding or label encoding). The first version covers the format of
   chapter 01: entries for input-bearing effects only, the numbered turn-sequence events, blob
@@ -389,6 +390,11 @@ file starts with expectation lines:
 // expect: steps 1042                           (the interpreter steps the run is charged, exactly)
 // fixture: model replies.json                  (scripted model replies for this file)
 ```
+
+An `eval` file runs its `fn main()` with no arguments, the default limits and no host (stage 6):
+`ok` and `value` say it returns (`value` with its result as compact JSON, object keys in any
+order), `runtime-error` names the kind it raises, and `steps` is the number of interpreter steps
+it is charged, as chapter 07 ("Resource limits") counts them.
 
 The token reader's expectations (stage 1) are:
 

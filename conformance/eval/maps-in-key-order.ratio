@@ -1,0 +1,11 @@
+// expect: value [{"a": 1, "b": 20, "c": 3}, ["a", "b", "c"], 20, true, [["a", 1], ["b", 20], ["c", 3]]]
+fn main() -> (Map<Str, Int>, [Str], Int, Bool, [(Str, Int)]) {
+  var m: Map<Str, Int> = { c: 3, a: 1 }
+  m["b"] = 2
+  m["b"] *= 10
+  var pairs: [(Str, Int)] = []
+  for (k, v) in m {
+    pairs = pairs.push((k, v))
+  }
+  (m, m.keys(), m["b"], "a" in m, pairs)
+}

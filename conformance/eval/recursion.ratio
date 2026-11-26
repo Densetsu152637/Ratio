@@ -1,0 +1,13 @@
+// expect: value [3628800, 55]
+fn fact(n: Int) -> Int {
+  if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+
+fn fib(n: Int) -> Int {
+  if n < 2 { return n }
+  fib(n - 1) + fib(n - 2)
+}
+
+fn main() -> (Int, Int) {
+  (fact(10), fib(10))
+}

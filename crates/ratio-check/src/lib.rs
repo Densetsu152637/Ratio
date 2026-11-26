@@ -87,8 +87,13 @@ pub struct Checked {
     /// Whether the trust-site lists of [`Checked::summary`] were cut short by
     /// [`MAX_SITE_WORK`] (then every item lists every site: a superset).
     pub approximate: bool,
+    /// The declaration of each enum, by [`EnumId`]: what stage 6's lowering names it by.
+    pub enum_items: Vec<ItemRef>,
     summaries: HashMap<(ModuleId, usize), Summary>,
     std_names: Vec<&'static str>,
+    /// The name each built-in source gives each of its items, by [`Origin::Std`] index and item
+    /// index (`None` for items that define no name).
+    std_items: Vec<Vec<Option<String>>>,
     internal: Vec<String>,
 }
 
@@ -136,6 +141,22 @@ impl Checked {
     #[must_use]
     pub fn std_names(&self) -> &[&'static str] {
         &self.std_names
+    }
+
+    /// The name a program writes for the built-in declaration `r`: `list.push`, or a bare
+    /// `fail` for the `control` functions and the prelude's items (`None` for a user item).
+    #[must_use]
+    pub fn builtin_name(&self, r: ItemRef) -> Option<String> {
+        let Origin::Std(s) = r.origin else {
+            return None;
+        };
+        let name = self.std_items.get(s)?.get(r.index)?.as_deref()?;
+        let module = *self.std_names.get(s)?;
+        Some(if module == "control" || module == "prelude" {
+            name.to_owned()
+        } else {
+            format!("{module}.{name}")
+        })
     }
 
     /// Problems in the checker's own built-in declarations: always empty unless the checker
@@ -188,8 +209,22 @@ fn check_on(loaded: &Loaded, max_depth: usize, fuel: u64) -> Checked {
         trust_sites: results.trust_sites,
         loads: results.loads,
         approximate: results.approximate,
+        enum_items: checker.enum_items,
         summaries: results.summaries,
         std_names: std.iter().map(|m| m.name).collect(),
+        std_items: std
+            .iter()
+            .map(|m| {
+                m.module
+                    .items
+                    .iter()
+                    .map(|item| {
+                        check::item_name(&item.kind)
+                            .map(|id| builtins::builtin_name(&id.name).to_owned())
+                    })
+                    .collect()
+            })
+            .collect(),
         internal: checker.internal,
     }
 }
@@ -240,8 +275,10 @@ pub fn check(loaded: &Loaded) -> Checked {
         trust_sites: Vec::new(),
         loads: Vec::new(),
         approximate: false,
+        enum_items: Vec::new(),
         summaries: HashMap::new(),
         std_names: Vec::new(),
+        std_items: Vec::new(),
         internal: Vec::new(),
     })
 }

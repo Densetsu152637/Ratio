@@ -1,0 +1,5 @@
+// expect: value "AB"
+// expect: steps 6
+fn main() -> Str {
+  text.upper("ab")
+}

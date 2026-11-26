@@ -23,9 +23,10 @@ harness answer(question: Str) -> Str {
 
 ## Status
 
-Specification draft 0.12. Stages 1 to 5 of the [implementation plan](spec/10-implementation.md)
-are built: the token reader, the parser, modules and names, the type checker, and schemas and
-taint. Ratio is a language in its own right: this repository holds its specification,
+Specification draft 0.13. Stages 1 to 6 of the [implementation plan](spec/10-implementation.md)
+are built: the token reader, the parser, modules and names, the type checker, schemas and
+taint, and the IR with the core interpreter (the pure language, with run-time secrecy labels;
+effects arrive with stage 11's host). Ratio is a language in its own right: this repository holds its specification,
 its implementation, its conformance suite and its releases. Imperium is a host: it depends on a
 release of the `ratio` library and implements its `Host` trait against the agent engine
 ([chapter 10](spec/10-implementation.md#the-repository-split-and-the-boundary) says which stages
@@ -40,8 +41,10 @@ belong to which repository).
 | [`crates/ratio-syntax/`](crates/ratio-syntax/README.md) | Package and library `ratio-syntax`: the token reader (stage 1), and the parser from stage 2 |
 | [`crates/ratio-names/`](crates/ratio-names/README.md) | Package and library `ratio-names`: modules and names (stage 3): sources, imports, source-qualified names, the `Registry` trait and name resolution |
 | [`crates/ratio-check/`](crates/ratio-check/README.md) | Package and library `ratio-check`: the type checker (stage 4) with schemas and taint (stage 5): types, subtyping, inference, exhaustiveness, constants, sinks, trust sites, secrets, schemas, type digests and `harnesses.check`, and the side tables later stages read |
+| [`crates/ratio-ir/`](crates/ratio-ir/README.md) | Package and library `ratio-ir`: the Core IR (stage 6): lowering, site ids, the canonical form and the IR hash |
+| [`crates/ratio-eval/`](crates/ratio-eval/README.md) | Package and library `ratio-eval`: the core interpreter (stage 6): the prepared form, labelled values, the evaluator and its limits |
 | `std/` | The built-in packages' sources (`std:default` and the rest), embedded by the `ratio` library; it arrives with stage 23 |
-| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/` and `taint/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
+| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/` and `eval/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
 | `scripts/` | The checks CI runs: `check-rust.sh`, and `ci/check-links.py` and `ci/check-license.py` |
 | `.github/workflows/` | `ci.yml` (every pull request and `main`) and `release.yml` (every `v*` tag) |
 

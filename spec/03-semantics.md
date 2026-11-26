@@ -255,7 +255,7 @@ label is known at check time (a `session.ask` question declared `secret: true`, 
 `declassify`); there, and only there, the checker also refuses a sink at load time. It also
 refuses (`C0037`) instantiating a generic function at a type holding a `Secret` when the callee
 may reach a secrecy sink (any effect not kept on the machine), whether it is called, named as a
-function value or given by a turbofish: inside the callee the type parameter carries no label,
+function value, given by a turbofish or returned: inside the callee the type parameter carries no label,
 so the sink there could not be refused. Everywhere else a sink violation is a run-time
 `Denied { by: secrecy }`.
 
@@ -461,7 +461,7 @@ type Error = {
 | `Cancelled` | The session was stopped for good, a `race` sibling won, a `par` sibling failed, or a `par_fold` stopped | No (observed by `defer`) |
 | `Assertion` | `assert` failed | Yes |
 | `NotFound` | A named thing does not exist (file, memory, agent, harness, model) | Yes |
-| `Invalid` | A bad argument, an out-of-range index, an integer overflow, a malformed regex | Yes |
+| `Invalid` | A bad argument, an out-of-range index, an integer overflow, a malformed regex | Yes, except a branch-restriction violation (below) |
 | `Unsupported` | The backend cannot do what was asked (logprobs on an endpoint without them) | Yes |
 | `Replay` | A replay run diverged from its tape | No |
 | `Question { question, options }` | A callee needs an answer it cannot get (chapter 04) | Yes |
@@ -519,6 +519,11 @@ any function or harness these call, the checker forbids, and the interpreter ref
 - `state.set`, `state.update` and `state.reset`;
 - appending to, or running a model on, a conversation that was not created inside the branch (for
   `step`, inside that `step` call).
+
+The checker does not yet refuse the first rule (`var`s assigned inside a branch); the interpreter
+does, at run time. A violation is a defect of the program, not a recoverable failure: its
+`Invalid` is fatal to the evaluation, and no `catch`, `result` or sibling `race` branch can
+swallow it.
 
 **Implementation model.** All branches of a frame tree run on the agent's own task as futures; the
 interpreter has no threads. Pure evaluation is cooperative, yielding at every 1,000-step
