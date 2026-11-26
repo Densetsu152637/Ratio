@@ -83,6 +83,17 @@ type Page = {
 }
 type McpResult = { text: Untrusted<Str>, content: [Json], is_error: Bool }
 
+// The shapes of `data` III (chapter 06, `diff`, `url`, `vec`; stage 9). The chapter names them
+// without declaring them, so they are provisional. The type parameter is the text type of the
+// inputs (`Str` or `Untrusted<Str>`): what comes out of untrusted text is untrusted.
+enum DiffOp { equal, insert, delete }
+type DiffLine<T> = { op: DiffOp, text: T }
+type Diff<T> = [DiffLine<T>]
+type DiffStats = { added: Int, removed: Int, unchanged: Int }
+type Url<T> = { scheme: T, host: T, port?: Int, path: T, query: Map<T, T>, fragment?: T }
+type Vector = [Float]
+
+
 // The session (chapter 06, session). A question with `secret: true` has a Secret answer.
 type Question = { question: Str, options: [Str], recommended: Str, secret?: Bool }
 

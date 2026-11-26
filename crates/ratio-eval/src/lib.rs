@@ -42,6 +42,7 @@ mod properties;
 pub mod sink;
 mod stack;
 mod value;
+pub mod work;
 
 use std::sync::Arc;
 

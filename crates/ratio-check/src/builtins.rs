@@ -99,8 +99,106 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn abs<Num>(x: Num) -> Num {}
 @pure fn min<Num>(a: Num, b: Num) -> Num {}
 @pure fn max<Num>(a: Num, b: Num) -> Num {}
+@pure fn sign<Num>(x: Num) -> Int {}
+@pure fn clamp<Num>(x: Num, lo: Num, hi: Num) -> Num {}
+@pure fn floor(x: Float) -> Int {}
+@pure fn ceil(x: Float) -> Int {}
+@pure fn round(x: Float, digits: Int = 0) -> Float {}
+@pure fn trunc(x: Float) -> Int {}
+@pure fn to_float(x: Int) -> Float {}
+@pure fn sqrt(x: Float) -> Float {}
+@pure fn pow<Num>(x: Num, y: Num) -> Num {}
+@pure fn exp(x: Float) -> Float {}
+@pure fn ln(x: Float) -> Float {}
+@pure fn log2(x: Float) -> Float {}
+@pure fn log10(x: Float) -> Float {}
+@pure fn is_nan(x: Float) -> Bool {}
+@pure fn mean<Num>(xs: [Num]) -> Float? {}
+@pure fn median<Num>(xs: [Num]) -> Float? {}
+@pure fn mode<T>(xs: [T]) -> T? {}
+@pure fn variance<Num>(xs: [Num], sample: Bool = true) -> Float? {}
+@pure fn stdev<Num>(xs: [Num], sample: Bool = true) -> Float? {}
+@pure fn percentile<Num>(xs: [Num], p: Float) -> Float? {}
+@pure fn softmax(xs: [Float], temperature: Float = 1.0) -> [Float] {}
+@pure fn argmax<Num>(xs: [Num]) -> Int? {}
+@pure fn argmin<Num>(xs: [Num]) -> Int? {}
+@pure fn entropy(ps: [Float]) -> Float {}
 ",
     ),
+    // Stage 9 (data III): hash, diff, template, vec, path, url and codec.
+    (
+        "hash",
+        r"
+@pure fn sha256<S>(s: S) -> Str {}
+@pure fn blake3<S>(s: S) -> Str {}
+@pure fn stable<T>(v: T) -> Str {}
+@pure fn short<T>(v: T, n: Int = 8) -> Str {}
+",
+    ),
+    (
+        "diff",
+        r#"
+@pure fn lines<S>(a: S, b: S) -> Diff<S> {}
+@pure fn words<S>(a: S, b: S) -> Diff<S> {}
+@pure fn unified<S>(a: S, b: S, context: Int = 3, from: Str = "a", to: Str = "b") -> S {}
+@pure fn apply<S>(text: S, patch: S) -> S {}
+@pure fn stats<T>(d: Diff<T>) -> DiffStats {}
+"#,
+    ),
+    (
+        "template",
+        r"
+@pure fn render<T>(tpl: Str, vars: T) -> Untrusted<Str> {}
+@pure fn names(tpl: Str) -> [Str] {}
+",
+    ),
+    (
+        "vec",
+        r"
+@pure fn dot(a: Vector, b: Vector) -> Float {}
+@pure fn norm(a: Vector) -> Float {}
+@pure fn normalize(a: Vector) -> Vector {}
+@pure fn cosine(a: Vector, b: Vector) -> Float {}
+@pure fn add(a: Vector, b: Vector) -> Vector {}
+@pure fn mean(vs: [Vector]) -> Vector? {}
+@pure fn top_k(query: Vector, vs: [Vector], k: Int = 5) -> [(Int, Float)] {}
+",
+    ),
+    (
+        "path",
+        r"
+@pure fn join<S>(parts: [S]) -> S {}
+@pure fn parent<S>(p: S) -> S? {}
+@pure fn name<S>(p: S) -> S {}
+@pure fn stem<S>(p: S) -> S {}
+@pure fn ext<S>(p: S) -> S? {}
+@pure fn normalize<S>(p: S) -> S {}
+@pure fn is_absolute<S>(p: S) -> Bool {}
+@pure fn relative_to<S>(p: S, base: S) -> S? {}
+",
+    ),
+    (
+        "url",
+        r"
+@pure fn parse<S>(s: S) -> Url<S>? {}
+@pure fn host<S>(s: S) -> S? {}
+@pure fn with_query<S>(s: S, params: Map<Str, S>) -> S {}
+@pure fn encode<S>(s: S) -> S {}
+@pure fn decode<S>(s: S) -> S? {}
+",
+    ),
+    (
+        "codec",
+        r#"
+@pure fn base64_encode<S>(s: S) -> S {}
+@pure fn base64_decode<S>(s: S) -> S? {}
+@pure fn hex_encode<S>(s: S) -> S {}
+@pure fn hex_decode<S>(s: S) -> S? {}
+@pure fn csv_parse<S>(s: S, header: Bool = true, delimiter: Str = ",") -> [Map<S, S>] {}
+@pure fn csv_write<S>(rows: [Map<Str, S>], delimiter: Str = ",") -> S {}
+"#,
+    ),
+    // End of stage 9's modules.
     (
         "model",
         r"

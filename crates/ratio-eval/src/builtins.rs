@@ -222,6 +222,25 @@ pub(crate) fn output_size(v: &Value) -> u64 {
     }
 }
 
+// ---- stage 9: math, hash, diff, template, vec, path, url and codec (data III) ----
+mod blake3;
+mod codec;
+mod data3;
+mod diff;
+mod fmath;
+mod hash;
+mod math;
+mod path;
+mod template;
+mod url;
+mod vec;
+
+use diff::{s_lines, s_words};
+use math::s_list;
+use template::s_template;
+use url::s_with_query;
+use vec::{s_top_k, s_vec, s_weight_two_lists};
+
 // ---- the table ----
 
 macro_rules! table {
@@ -266,6 +285,70 @@ table! {
     "json.get", Linear, s_two, Imp::Pure(json_get);
     "json.encode", Linear, s_weight_first, Imp::Pure(json_encode);
     "math.abs", Const, s_none, Imp::Pure(math_abs);
+    // ---- stage 9: math (the scalar built-ins are `const`; abs, min and max are above) ----
+    "math.sign", Const, s_none, Imp::Pure(math::sign);
+    "math.clamp", Const, s_none, Imp::Pure(math::clamp);
+    "math.floor", Const, s_none, Imp::Pure(math::floor);
+    "math.ceil", Const, s_none, Imp::Pure(math::ceil);
+    "math.round", Const, s_none, Imp::Pure(math::round);
+    "math.trunc", Const, s_none, Imp::Pure(math::trunc);
+    "math.to_float", Const, s_none, Imp::Pure(math::to_float);
+    "math.sqrt", Const, s_none, Imp::Pure(math::sqrt);
+    "math.pow", Const, s_none, Imp::Pure(math::pow);
+    "math.exp", Const, s_none, Imp::Pure(math::exp);
+    "math.ln", Const, s_none, Imp::Pure(math::ln);
+    "math.log2", Const, s_none, Imp::Pure(math::log2);
+    "math.log10", Const, s_none, Imp::Pure(math::log10);
+    "math.is_nan", Const, s_none, Imp::Pure(math::is_nan);
+    "math.mean", Linear, s_list, Imp::Pure(math::mean);
+    "math.variance", Linear, s_list, Imp::Pure(math::variance);
+    "math.stdev", Linear, s_list, Imp::Pure(math::stdev);
+    "math.softmax", Linear, s_list, Imp::Pure(math::softmax);
+    "math.argmax", Linear, s_list, Imp::Pure(math::argmax);
+    "math.argmin", Linear, s_list, Imp::Pure(math::argmin);
+    "math.entropy", Linear, s_list, Imp::Pure(math::entropy);
+    "math.median", NLogN, s_list, Imp::Pure(math::median);
+    "math.percentile", NLogN, s_list, Imp::Pure(math::percentile);
+    "math.mode", NLogN, s_list, Imp::Pure(math::mode);
+    // ---- end of stage 9's math ----
+    // ---- stage 9, continued: hash, diff, template, vec, path, url and codec ----
+    "hash.sha256", Linear, s_first, Imp::Pure(hash::sha256);
+    "hash.blake3", Linear, s_first, Imp::Pure(hash::blake3);
+    "hash.stable", Linear, s_weight_first, Imp::Pure(hash::stable);
+    "hash.short", Linear, s_weight_first, Imp::Pure(hash::short);
+    "diff.lines", Product, s_lines, Imp::Pure(diff::lines);
+    "diff.words", Product, s_words, Imp::Pure(diff::words);
+    "diff.unified", Product, s_lines, Imp::Pure(diff::unified);
+    "diff.apply", Linear, s_two, Imp::Pure(diff::apply);
+    "diff.stats", Linear, s_weight_first, Imp::Pure(diff::stats);
+    "template.render", Linear, s_template, Imp::Task(template::render);
+    "template.names", Linear, s_first, Imp::Pure(template::names);
+    "vec.dot", Linear, s_weight_two_lists, Imp::Pure(vec::dot);
+    "vec.norm", Linear, s_vec, Imp::Pure(vec::norm);
+    "vec.normalize", Linear, s_vec, Imp::Pure(vec::normalize);
+    "vec.cosine", Linear, s_weight_two_lists, Imp::Pure(vec::cosine);
+    "vec.add", Linear, s_weight_two_lists, Imp::Pure(vec::add);
+    "vec.mean", Linear, s_vec, Imp::Pure(vec::mean);
+    "vec.top_k", NLogN, s_top_k, Imp::Pure(vec::top_k);
+    "path.join", Linear, s_weight_first, Imp::Pure(path::join);
+    "path.parent", Linear, s_first, Imp::Pure(path::parent);
+    "path.name", Linear, s_first, Imp::Pure(path::name);
+    "path.stem", Linear, s_first, Imp::Pure(path::stem);
+    "path.ext", Linear, s_first, Imp::Pure(path::ext);
+    "path.normalize", Linear, s_first, Imp::Pure(path::normalize);
+    "path.is_absolute", Linear, s_first, Imp::Pure(path::is_absolute);
+    "path.relative_to", Linear, s_two, Imp::Pure(path::relative_to);
+    "url.parse", Linear, s_first, Imp::Pure(url::parse);
+    "url.host", Linear, s_first, Imp::Pure(url::host);
+    "url.with_query", Linear, s_with_query, Imp::Pure(url::with_query);
+    "url.encode", Linear, s_first, Imp::Pure(url::encode);
+    "url.decode", Linear, s_first, Imp::Pure(url::decode);
+    "codec.base64_encode", Linear, s_first, Imp::Pure(codec::base64_encode);
+    "codec.base64_decode", Linear, s_first, Imp::Pure(codec::base64_decode);
+    "codec.hex_encode", Linear, s_first, Imp::Pure(codec::hex_encode);
+    "codec.hex_decode", Linear, s_first, Imp::Pure(codec::hex_decode);
+    "codec.csv_parse", Linear, s_first, Imp::Pure(codec::csv_parse);
+    "codec.csv_write", Linear, s_weight_first, Imp::Pure(codec::csv_write);
     "math.min", Const, s_none, Imp::Pure(math_min);
     "math.max", Const, s_none, Imp::Pure(math_max);
 }

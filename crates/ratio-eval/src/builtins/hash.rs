@@ -1,0 +1,418 @@
+//! `hash` (chapter 06, `data`): digests.
+//!
+//! `sha256` and `blake3` hash the UTF-8 bytes of their text and return lower-case hex; both are
+//! `linear` in the characters hashed, so a 16 MiB text costs about a quarter of a million steps
+//! and its hashing is paid for before it runs. `stable` and `short` hash a value's **canonical
+//! JSON**: object keys sorted by text (records and maps and `Json` objects alike), no spaces,
+//! strings escaped as JSON does, `Int` as decimal, `Float` in its shortest round-trip form
+//! (`1.0`, `0.5`, `1e21`, `1.5e-7`), `none` as `null` and a field holding `none` left out (so
+//! an absent optional field and one set to `none`, which are equal values, hash alike),
+//! `Duration` and `Money` as their literal text, a unit variant as its name and a variant with
+//! a payload as an object with a `kind` key. Equal values hash equal on every machine and in
+//! every run. A function, a prompt, a range and a non-finite `Float` have no JSON form and are
+//! refused (`Invalid`).
+//!
+//! The canonical writer is iterative: a stack of frames as deep as the value, never the Rust
+//! stack. Each object's sorted entries are charged to the heap when the object is opened, and
+//! the text goes through a [`TextBuf`], which stops at 16 MiB. A digest carries the labels of
+//! everything in the value.
+
+#![allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "the exponent of a float is small, and the sign is checked"
+)]
+
+use std::fmt::Write as _;
+
+use super::blake3;
+use super::data3::{TextBuf, charged, raise_invalid, text_value};
+use super::{Args, arg, int, opt, text};
+use crate::error::RtError;
+use crate::heap::Charge;
+use crate::heap::cost;
+use crate::labels::Labels;
+use crate::machine::Cx;
+use crate::plist::Cursor;
+use crate::prepare::Prepared;
+use crate::value::{Json, MAX_DEPTH, Repr, Value};
+use crate::work;
+
+pub(super) fn sha256(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+    let s = arg(cx, args, 0)?;
+    let t = text(cx, s)?;
+    work::add(t.len() as u64);
+    text_value(
+        cx,
+        ratio_check::hex(&ratio_check::sha256(t.as_bytes())),
+        s.labels,
+    )
+}
+
+pub(super) fn blake3(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+    let s = arg(cx, args, 0)?;
+    let t = text(cx, s)?;
+    work::add(t.len() as u64);
+    text_value(cx, ratio_check::hex(&blake3::hash(t.as_bytes())), s.labels)
+}
+
+// ---- the canonical JSON ----
+
+/// What is being written: an open container and how far it has got.
+enum Frame {
+    /// A tuple's parts.
+    Items {
+        it: std::vec::IntoIter<Value>,
+        first: bool,
+    },
+    /// A list or a `Json` array.
+    List { cur: Cursor, first: bool },
+    /// An object's entries, sorted by key.
+    Entries {
+        it: std::vec::IntoIter<(String, Value)>,
+        first: bool,
+        _charge: Charge,
+    },
+}
+
+fn quote(cx: &mut Cx<'_>, out: &mut TextBuf, s: &str) -> Result<(), RtError> {
+    out.push(cx, '"')?;
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str(cx, "\\\"")?,
+            '\\' => out.push_str(cx, "\\\\")?,
+            '\n' => out.push_str(cx, "\\n")?,
+            '\r' => out.push_str(cx, "\\r")?,
+            '\t' => out.push_str(cx, "\\t")?,
+            '\u{8}' => out.push_str(cx, "\\b")?,
+            '\u{c}' => out.push_str(cx, "\\f")?,
+            c if u32::from(c) < 0x20 => {
+                let mut esc = String::new();
+                let _ = write!(esc, "\\u{:04x}", u32::from(c));
+                out.push_str(cx, &esc)?;
+            }
+            c => out.push(cx, c)?,
+        }
+    }
+    out.push(cx, '"')
+}
+
+/// The shortest round-trip text of a finite float, written from its shortest digits so that it
+/// does not depend on how the standard library formats a `Debug` float: `1.0`, `0.001`,
+/// `1e21`, `1.5e-7`. Positional notation for exponents `-5..16`, scientific otherwise.
+pub(super) fn float_text(f: f64) -> String {
+    let sci = format!("{f:e}");
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(m) => ("-", m),
+        None => ("", mantissa),
+    };
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let mut out = String::from(sign);
+    if (-5..16).contains(&exp) {
+        if exp >= 0 {
+            let int_len = exp as usize + 1;
+            if digits.len() <= int_len {
+                out.push_str(&digits);
+                out.extend(std::iter::repeat_n('0', int_len - digits.len()));
+                out.push_str(".0");
+            } else {
+                out.push_str(&digits[..int_len]);
+                out.push('.');
+                out.push_str(&digits[int_len..]);
+            }
+        } else {
+            out.push_str("0.");
+            out.extend(std::iter::repeat_n('0', (-exp - 1) as usize));
+            out.push_str(&digits);
+        }
+    } else {
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        let _ = write!(out, "e{exp}");
+    }
+    out
+}
+
+/// The text a map key is written as.
+fn key_text(p: &Prepared, k: &Value) -> Option<String> {
+    match &k.repr {
+        Repr::Str(s) => Some(s.as_str().to_owned()),
+        Repr::Int(i) => Some(i.to_string()),
+        Repr::Bool(b) => Some(b.to_string()),
+        Repr::Variant(e, i, _) => p
+            .enums
+            .get(*e as usize)
+            .and_then(|en| en.variants.get(*i as usize))
+            .map(|v| v.json.to_string()),
+        _ => None,
+    }
+}
+
+/// An object's entries sorted by key (stable, so duplicate keys of a `Json` object keep their
+/// order), with their memory charged.
+fn entries(cx: &Cx<'_>, mut list: Vec<(String, Value)>, labels: Labels) -> Result<Frame, RtError> {
+    let bytes = list.iter().fold(0u64, |n, (k, _)| {
+        n.saturating_add(cost::SLOT + cost::STR + k.len() as u64)
+    });
+    let charge = charged(cx, bytes)?;
+    work::add((list.len() as u64).saturating_mul(crate::ops::log_work(list.len() as u64).max(1)));
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    let _ = labels;
+    Ok(Frame::Entries {
+        it: list.into_iter(),
+        first: true,
+        _charge: charge,
+    })
+}
+
+/// Writes `v`: a scalar whole, or the opening of a container (pushing its frame).
+fn open(
+    cx: &mut Cx<'_>,
+    out: &mut TextBuf,
+    stack: &mut Vec<Frame>,
+    v: &Value,
+    labels: Labels,
+) -> Result<(), RtError> {
+    work::add(1);
+    let refuse = |cx: &Cx<'_>, what: &str| raise_invalid(cx, what, labels);
+    match &v.repr {
+        Repr::Unit | Repr::None => out.push_str(cx, "null"),
+        Repr::Bool(b) => out.push_str(cx, if *b { "true" } else { "false" }),
+        Repr::Int(i) => out.push_str(cx, &i.to_string()),
+        Repr::Float(f) if f.is_finite() => out.push_str(cx, &float_text(*f)),
+        Repr::Float(_) => Err(refuse(
+            cx,
+            "a Float that is not finite has no canonical JSON",
+        )),
+        Repr::Duration(d) => {
+            let t = crate::ops::duration_text(*d);
+            quote(cx, out, &t)
+        }
+        Repr::Money(m) => {
+            let t = crate::ops::money_text(*m);
+            quote(cx, out, &t)
+        }
+        Repr::Str(s) | Repr::Tool(s) => quote(cx, out, s.as_str()),
+        Repr::Variant(e, i, _) => {
+            let name =
+                cx.p.enums
+                    .get(*e as usize)
+                    .and_then(|en| en.variants.get(*i as usize))
+                    .map(|x| x.json.to_string());
+            match name {
+                Some(n) if cx.p.enums[*e as usize].unit_only => quote(cx, out, &n),
+                Some(n) => {
+                    out.push_str(cx, "{\"kind\":")?;
+                    quote(cx, out, &n)?;
+                    out.push(cx, '}')
+                }
+                None => Err(refuse(cx, "a variant of an unknown enum")),
+            }
+        }
+        Repr::Tuple(a) => {
+            let items = a.items.to_vec();
+            stack.push(Frame::Items {
+                it: items.into_iter(),
+                first: true,
+            });
+            out.push(cx, '[')
+        }
+        Repr::List(l) => {
+            stack.push(Frame::List {
+                cur: l.cursor(),
+                first: true,
+            });
+            out.push(cx, '[')
+        }
+        Repr::Record(r) => {
+            let list = r
+                .layout
+                .names
+                .iter()
+                .zip(r.items.iter())
+                .filter(|(_, x)| !matches!(x.repr, Repr::None))
+                .map(|(n, x)| (n.to_string(), x.clone()))
+                .collect();
+            stack.push(entries(cx, list, labels)?);
+            out.push(cx, '{')
+        }
+        Repr::Map(m) => {
+            let mut list = Vec::new();
+            let mut cur = m.cursor();
+            while let Some((k, x)) = cur.next() {
+                let Some(key) = key_text(cx.p, &k) else {
+                    return Err(refuse(cx, "a map key with no JSON form"));
+                };
+                list.push((key, x));
+            }
+            stack.push(entries(cx, list, labels)?);
+            out.push(cx, '{')
+        }
+        Repr::VariantP(vd) => {
+            let name =
+                cx.p.enums
+                    .get(vd.enum_ as usize)
+                    .and_then(|en| en.variants.get(vd.index as usize))
+                    .map(|x| x.json.to_string())
+                    .ok_or_else(|| refuse(cx, "a variant of an unknown enum"))?;
+            let mut list = vec![("kind".to_owned(), Value::text(&name))];
+            if let Repr::Record(r) = &vd.payload.repr {
+                for (n, x) in r.layout.names.iter().zip(r.items.iter()) {
+                    if !matches!(x.repr, Repr::None) {
+                        list.push((n.to_string(), x.clone()));
+                    }
+                }
+            }
+            stack.push(entries(cx, list, labels)?);
+            out.push(cx, '{')
+        }
+        Repr::Json(j) => match &j.node {
+            Json::Null => out.push_str(cx, "null"),
+            Json::Bool(b) => out.push_str(cx, if *b { "true" } else { "false" }),
+            Json::Int(i) => out.push_str(cx, &i.to_string()),
+            Json::Float(f) if f.is_finite() => out.push_str(cx, &float_text(*f)),
+            Json::Float(_) => Err(refuse(
+                cx,
+                "a Float that is not finite has no canonical JSON",
+            )),
+            Json::Str(s) => quote(cx, out, s.as_str()),
+            Json::Array(l) => {
+                stack.push(Frame::List {
+                    cur: l.cursor(),
+                    first: true,
+                });
+                out.push(cx, '[')
+            }
+            Json::Object(es) => {
+                let list = es
+                    .iter()
+                    .map(|(k, x)| (k.as_text().unwrap_or("").to_owned(), x.clone()))
+                    .collect();
+                stack.push(entries(cx, list, labels)?);
+                out.push(cx, '{')
+            }
+        },
+        Repr::Range(_) | Repr::Item(_) | Repr::Builtin(_) | Repr::Closure(_) | Repr::Prompt(_) => {
+            Err(refuse(
+                cx,
+                "a function, range or prompt has no canonical JSON",
+            ))
+        }
+    }
+}
+
+/// The canonical JSON of `v`.
+fn canonical(cx: &mut Cx<'_>, v: &Value, labels: Labels) -> Result<TextBuf, RtError> {
+    let mut out = TextBuf::new(labels);
+    let mut stack: Vec<Frame> = Vec::new();
+    open(cx, &mut out, &mut stack, v, labels)?;
+    while !stack.is_empty() {
+        if stack.len() > MAX_DEPTH as usize + 2 {
+            return Err(raise_invalid(
+                cx,
+                "values nested more than 256 deep",
+                labels,
+            ));
+        }
+        let Some(top) = stack.last_mut() else {
+            break;
+        };
+        // The next thing to write inside the top frame, with the separator it needs.
+        let step = match top {
+            Frame::Items { it, first } => it.next().map(|x| (std::mem::take(first), None, x)),
+            Frame::List { cur, first } => cur.next().map(|x| (std::mem::take(first), None, x)),
+            Frame::Entries { it, first, .. } => {
+                it.next().map(|(k, x)| (std::mem::take(first), Some(k), x))
+            }
+        };
+        if let Some((was_first, key, x)) = step {
+            if !was_first {
+                out.push(cx, ',')?;
+            }
+            if let Some(k) = key {
+                quote(cx, &mut out, &k)?;
+                out.push(cx, ':')?;
+            }
+            // Reading an element out of a container adds the container's own labels, which
+            // the digest carries already.
+            open(cx, &mut out, &mut stack, &x, labels)?;
+        } else {
+            let closer = if matches!(stack.pop(), Some(Frame::Entries { .. })) {
+                '}'
+            } else {
+                ']'
+            };
+            out.push(cx, closer)?;
+        }
+    }
+    Ok(out)
+}
+
+/// `"sha256:" + hex` of the canonical JSON of the value in argument 0.
+fn stable_digest(cx: &mut Cx<'_>, v: &Value) -> Result<(String, Labels), RtError> {
+    let labels = v.quick();
+    let buf = canonical(cx, v, labels)?;
+    let text = buf.finish(cx)?;
+    let bytes = text.as_text().unwrap_or("");
+    work::add(bytes.len() as u64);
+    Ok((
+        ratio_check::hex(&ratio_check::sha256(bytes.as_bytes())),
+        labels,
+    ))
+}
+
+pub(super) fn stable(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+    let v = arg(cx, args, 0)?;
+    let (hex, labels) = stable_digest(cx, v)?;
+    text_value(cx, format!("sha256:{hex}"), labels)
+}
+
+pub(super) fn short(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+    let v = arg(cx, args, 0)?;
+    let n = opt(args, 1);
+    let want = match n {
+        Some(n) => int(cx, n)?,
+        None => 8,
+    };
+    let (hex, labels) = stable_digest(cx, v)?;
+    let labels = labels | n.map_or(Labels::NONE, |n| n.labels);
+    // 0 to 64 hex digits: a count outside that is clamped.
+    let take = usize::try_from(want.clamp(0, 64)).unwrap_or(0);
+    text_value(cx, hex[..take].to_owned(), labels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::float_text;
+
+    #[test]
+    fn floats_are_written_from_their_shortest_digits() {
+        for (f, want) in [
+            (1.0, "1.0"),
+            (-1.0, "-1.0"),
+            (0.5, "0.5"),
+            (123.456, "123.456"),
+            (100.0, "100.0"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e16"),
+            (1.5e16, "1.5e16"),
+            (1e21, "1e21"),
+            (0.001, "0.001"),
+            (0.00001, "0.00001"),
+            (0.000_001, "1e-6"),
+            (1.5e-7, "1.5e-7"),
+            (-2.5e-10, "-2.5e-10"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (f64::MAX, "1.7976931348623157e308"),
+            (5e-324, "5e-324"),
+            (0.0, "0.0"),
+        ] {
+            assert_eq!(float_text(f), want);
+        }
+    }
+}

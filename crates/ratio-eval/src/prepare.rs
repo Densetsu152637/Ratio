@@ -249,6 +249,8 @@ pub(crate) struct Runtime {
     pub budget_kind: u32,
     pub denied_by: u32,
     pub result: u32,
+    /// `DiffOp`, the `op` of a `diff` entry (stage 9).
+    pub diff_op: u32,
     pub error: Arc<Layout>,
     pub site: Arc<Layout>,
 }
@@ -392,6 +394,7 @@ fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, Prepa
         budget_kind: find("BudgetKind")?,
         denied_by: find("DeniedBy")?,
         result: find("Result")?,
+        diff_op: find("DiffOp")?,
         error: Arc::new(Layout {
             names: ["data", "kind", "message", "site"]
                 .into_iter()
@@ -947,6 +950,7 @@ pub(crate) fn empty_for_tests() -> Prepared {
             budget_kind: 0,
             denied_by: 0,
             result: 0,
+            diff_op: 0,
             error: layout(),
             site: layout(),
         },
