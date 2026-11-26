@@ -39,6 +39,8 @@ mod pmap;
 mod prepare;
 #[cfg(test)]
 mod properties;
+#[allow(dead_code, reason = "wired up in the next step")]
+mod re;
 pub mod sink;
 mod stack;
 mod value;
