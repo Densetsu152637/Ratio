@@ -292,6 +292,15 @@ fn can_end_a_statement(kind: &TokenKind) -> bool {
     )
 }
 
+/// An attribute being read: `At` after its `@`, `Named` once it has a name, `Args(depth)` inside
+/// its parenthesised arguments.
+#[derive(Clone, Copy, PartialEq)]
+enum Attr {
+    At,
+    Named,
+    Args(usize),
+}
+
 /// The insertion property: in a clean read, an inserted `;` appears only where the innermost
 /// open delimiter is a block, a prompt body or the top level of the file (condition 1), only
 /// after a token that can end a statement (condition 2) or a `>` or `??` ending a type declaration
@@ -306,14 +315,6 @@ pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
     // `None` stands for a bracket, a parenthesis or an interpolation.
     let mut open: Vec<Option<BraceKind>> = Vec::new();
     let mut prev: Option<&TokenKind> = None;
-    // An attribute being read: `At` after its `@`, `Named` once it has a name, `Args(depth)`
-    // inside its parenthesised arguments.
-    #[derive(Clone, Copy, PartialEq)]
-    enum Attr {
-        At,
-        Named,
-        Args(usize),
-    }
     let mut attr: Option<Attr> = None;
     // Whether the current statement holds `type` or the prompt section word `format`.
     let mut type_or_format = false;

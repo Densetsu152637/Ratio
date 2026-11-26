@@ -78,7 +78,7 @@ fn every_ratio_block_in_the_specification_parses() {
     let mut problems = Vec::new();
     let mut fragments_seen = 0;
     for (file, line, text) in &blocks {
-        let parsed = parse(&text);
+        let parsed = parse(text);
         if FRAGMENTS.contains(&(file.as_str(), *line)) {
             fragments_seen += 1;
             assert!(
@@ -91,7 +91,7 @@ fn every_ratio_block_in_the_specification_parses() {
             }
         } else {
             for d in &parsed.diagnostics {
-                problems.push(d.render(&format!("{file}:{line}"), &text));
+                problems.push(d.render(&format!("{file}:{line}"), text));
             }
         }
     }
