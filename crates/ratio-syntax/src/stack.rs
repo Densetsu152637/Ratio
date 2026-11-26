@@ -19,6 +19,8 @@ pub(crate) const BIG_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// The depth a pass allows when it runs on the caller's stack: small enough for a 512 KiB
 /// stack (the smallest in use) in a debug build, where nested parentheses or `if` blocks
 /// overflowed it from 24 levels. `tests/parser.rs` runs every pass in this mode on such a stack.
+// Must stay at or below the token reader's own clamp; the 512 KiB fallback test in
+// `tests/parser.rs` guards it.
 pub(crate) const FALLBACK_DEPTH: usize = 12;
 
 /// Runs `work` on a thread with [`BIG_STACK_BYTES`] of stack, passing `true`; if no thread can be

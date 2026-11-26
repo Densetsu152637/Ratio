@@ -92,15 +92,13 @@ pub fn dump(module: &Module) -> String {
 
 /// [`dump`] on the current thread; `big` says it has the big stack (see [`crate::stack`]).
 pub(crate) fn dump_on(module: &Module, big: bool) -> String {
-    {
-        let mut d = Dump {
-            out: String::new(),
-            depth: 0,
-            max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
-        };
-        d.module(module);
-        d.out
-    }
+    let mut d = Dump {
+        out: String::new(),
+        depth: 0,
+        max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
+    };
+    d.module(module);
+    d.out
 }
 
 struct Dump {

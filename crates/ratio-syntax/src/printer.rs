@@ -83,20 +83,18 @@ pub fn print(module: &Module) -> String {
 
 /// [`print`] on the current thread; `big` says it has the big stack (see [`crate::stack`]).
 pub(crate) fn print_on(module: &Module, big: bool) -> String {
-    {
-        let mut p = Printer {
-            out: String::new(),
-            indent: 0,
-            flat: 0,
-            bol: true,
-            type_depth: 0,
-            open_head: false,
-            depth: 0,
-            max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
-        };
-        p.module(module);
-        p.out
-    }
+    let mut p = Printer {
+        out: String::new(),
+        indent: 0,
+        flat: 0,
+        bol: true,
+        type_depth: 0,
+        open_head: false,
+        depth: 0,
+        max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
+    };
+    p.module(module);
+    p.out
 }
 
 struct Printer {
