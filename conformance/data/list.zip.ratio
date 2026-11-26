@@ -1,0 +1,18 @@
+// builtin: list.zip, list.unzip, list.enumerate
+// case zip: value [[1, "a"], [2, "b"]]
+// case unzip: value [[1, 2], ["a", "b"]]
+// case enumerate: value [[0, "a"], [1, "b"]]
+// case empty: value [[], []]
+// labels zip_of(xs, ys): [1, 2, 3] | ["a", "b"] ; inner 0 1
+// labels unzip_of(xs): [1, 2] ; inner 0
+// labels enumerate_of(xs): ["a", "b"] ; inner 0
+fn zip() -> [(Int, Str)] { list.zip([1, 2, 3], ["a", "b"]) }
+fn unzip() -> ([Int], [Str]) { list.unzip([(1, "a"), (2, "b")]) }
+fn enumerate() -> [(Int, Str)] { ["a", "b"].enumerate() }
+fn empty() -> ([Int], [Int]) {
+  let xs: [(Int, Int)] = []
+  xs.unzip()
+}
+fn zip_of(xs: [Int], ys: [Str]) -> [(Int, Str)] { list.zip(xs, ys) }
+fn unzip_of(xs: [Int]) -> ([Int], [Int]) { list.unzip(xs.map(|x| (x, x + 1))) }
+fn enumerate_of(xs: [Str]) -> [(Int, Str)] { list.enumerate(xs) }

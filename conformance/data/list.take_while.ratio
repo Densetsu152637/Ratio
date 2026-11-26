@@ -1,0 +1,10 @@
+// builtin: list.take_while
+// case main: value [[1, 2], [], [1, 2, 3]]
+// case raises: error User
+// labels take_while(xs, t): [1, 2, 3] | 2 ; inner 0
+fn main() -> ([Int], [Int], [Int]) {
+  let xs = [1, 2, 3]
+  (list.take_while(xs, |x| x < 3), xs.take_while(|x| x > 5), xs.take_while(|x| x > 0))
+}
+fn raises() -> [Int] { [1].take_while(|x| raise fail("boom", "take_while")) }
+fn take_while(xs: [Int], t: Int) -> [Int] { list.take_while(xs, |x| x < t) }

@@ -1,8 +1,9 @@
 # ratio-eval
 
 Ratio's core interpreter: the second half of stage 6 of the
-[implementation plan](../../spec/10-implementation.md), and stage 7's data built-ins (`text`,
-`re`), cost classes and offload pool. Hosts reach it through the
+[implementation plan](../../spec/10-implementation.md), stage 7's data built-ins (`text`,
+`re`), cost classes and offload pool, and the `json`, `list` and `map` built-ins of stage 8
+([below](#stage-8-json-list-and-map)). Hosts reach it through the
 [`ratio` facade](../ratio/README.md) (`ratio::prepare`, `ratio::evaluate`, `ratio::interp`).
 
 ```rust
@@ -58,7 +59,7 @@ it; debug builds scan every value and assert that the summary covers the scan.
 Lists are persistent AVL ropes with leaves of up to 32 elements (O(log n) push, get, set, slice
 and concatenation); maps are persistent AVL trees in key order; records have a fixed, sorted
 layout; text caches its character count and an ASCII flag. Values nest at most 256 deep
-(`Invalid` beyond), so every walk and comparison of a value fits a small stack; dropping a value
+(`Invalid` beyond), so every walk and comparison of a value fits a small stack in a release build (in a debug build the frames of stage 6's recursive walks (`==` and order on lists and records, `json.encode`, `json.decode`) are larger and a 256 KiB stack may not hold a value nested near the limit; stage 8's JSON walks are iterative and are tested on 256 KiB in debug); dropping a value
 never recurses at all (every container frees its children through a work-list). Rendering a
 value as text (`text.show`, interpolation, the `json` spec) stops writing as soon as the text is
 longer than 16 MiB, and the result is refused; `text.show` is then charged for what it wrote
@@ -182,6 +183,87 @@ Charges per element (for every `linear` built-in, `text.split` as much as `re.fi
 calibrated at one unit an element, an open item for stage 24's measurements. No program code runs on a worker. Dropping the pool
 runs the queued jobs and joins every worker; a job submitted after that runs where it is
 submitted. Without a pool, everything runs inline.
+
+## Stage 8: `json`, `list` and `map`
+
+Every `json.*`, `list.*` and `map.*` built-in of chapter 06 (`data`): 14, 47 and 15 rows, in
+`src/builtins/` (`json.rs`, `list.rs`, `map.rs`; `util.rs` holds what they share, `validate.rs`
+the schema validator, `ecma.rs` its `pattern` front end), on stage 6's persistent lists
+(`plist.rs`) and maps (`pmap.rs`, with `probe` and `from_sorted` added), `Json` with labels
+(`json.rs`) and the charging framework. `jsonedit.rs` edits JSON (pointers, `set`, `merge`,
+`patch`, `diff`, rendering, equality and order); `schema.rs` derives `json.schema::<T>()`.
+
+**Charges** (the class's work `w`, charged `1 + ⌈w / 64⌉`, debited before the built-in runs
+from the arguments' sizes, with saturating arithmetic; `n` is a length, `W` a weight, `|k|` a
+key's weight, `L = ⌈log2(n + 1)⌉`):
+
+| Class | Built-ins and their `w` |
+| --- | --- |
+| `const` | `list.is_empty`, `list.last`, `map.len`, `map.is_empty`, `json.type_of` |
+| `log` | `list.insert`, `remove_at`, `drop`, `slice`: `L`; `list.concat`: `L` over both lengths; `map.has`, `remove`, `update`: `L · \|k\|` |
+| `nlogn` | `list.sort`, `unique`, `map.from`: `W · L` over the whole list (elements are compared whole); `list.unique_by`, `group_by`, `map.count_by`: `n · L`, then `W_keys · L` once the keys are known, as `list.sort_by` does |
+| `output` | `list.range`, `list.repeat`: the number of elements the arguments fix (at most 1,000,000, else `Invalid` before anything is built) |
+| `linear` | everything else; `n` is the length, or the weight where values are compared or walked (`list.flatten`, `index_of`, `min`, `max`, `map.merge`, `json.stringify`, `set`, `merge`, `equal`), and for `list.window` `n + windows · (L + 64)` since each window is a slice |
+| `product` | `json.diff` and, **as the specification's `linear` is unsound for them**, `json.validate` (the product of the instance's and the schema's weights: each pair of nodes may be visited) and `json.patch` (`(W_doc + W_ops) · W_ops`: each operation may copy a path through the document) |
+
+`json.schema::<T>()` has no arguments to size: its work is bounded by the type (an output of
+at most 1 MiB and a work budget) and its output is charged on return.
+
+**Labels.** Every result carries the labels of everything that decided it: a lookup or update
+the labels of every key on its path (`Map::probe`), a scan the labels of every callback result it
+examined (`find`, `any`, `take_while`, `partition`, ...), an order-dependent result (`sort`,
+`unique`, `min`, `index_of`, `json.diff`, `json.validate`) the labels anywhere in its inputs, a
+rebuilt JSON container its old labels, the pointer's or patch's, and its keys'. A failure's
+message carries the same labels.
+
+**Resources.** Every buffer proportional to an input is charged to the heap when it is made
+(`util::Gather`: one slot per element, charged up front when the size is known, at most
+1,000,000 elements); sorting uses a stable merge sort that cannot panic on an odd order;
+long loops check for cancellation every checkpoint's worth of work (`util::Pace`).
+`json.parse`, JSON equality and order, `merge`, `set`, `patch`, `diff` and rendering keep their
+nesting on an explicit stack; the recursive walks that remain (`json.validate`'s, and the
+derivation of `json.schema`) are bounded (192 levels of nesting, `$ref` hops counted apart, at
+most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 12
+levels, and on the large-stack worker the preparation pass uses (its counted work added to the
+caller's) beyond that. `json.validate` also counts its visits of a schema node to an instance
+node and raises `Budget { which: steps }` past four units a pair of nodes of its charge (plus a floor), so shared
+sub-schemas reached over and over (`$ref` into `allOf`) cannot do more work than was paid for;
+a failing or finished `json.schema` is charged one step for each unit of its derivation work. `json.stringify` stops writing at 16 MiB and is charged for
+what it wrote.
+
+**The work counters (one API for stages 7 to 9).** A built-in's work is counted in two places,
+and the machine adds them: `Cx::work`, which a body with a `Cx` increments directly (stage 7's
+text and `re` bodies), and the thread-local `work` module (`work::add(units)`), which code
+without a `Cx` (the persistent lists and maps, `ops::eq` and `cmp_natural`, `jsonedit`, the
+built-ins' own loops) calls. Around each **pure** built-in call, on whichever thread runs it
+(inline or on the pool), `run_pure` does `work::reset()`, runs the body, and returns
+`cx.work + work::total()` as `Ran::work`; `Machine::work_log()` (debug builds) records it with
+the call's steps as a `BuiltinWork { name, steps, work, offloaded }`. A test compares `work` with
+`64 × FACTOR × steps` per entry; stage 7's `tests/data.rs` and stage 8's `tests/data_limits.rs`
+both read that one log (`tests/support`'s `run_logged` gives it). New code in a built-in
+counts what it does with `work::add(n)` (one unit per element visited, node built or character
+compared; pace long loops with `Pace::tick`, which counts too), and a body that hands work to
+another thread (`json.validate`'s large-stack worker) adds that thread's `work::total()` back
+into its own counter before it returns. Release builds count nothing. Callbacks (tasks) are not
+logged: they have no single call to measure.
+
+**What the specification leaves open, and this stage decided.** `json.validate` reads the
+keywords `$ref` (into the same schema only), `type`, `enum`, `const`, the numeric, string, array
+and object keywords, `allOf`, `anyOf`, `oneOf`, `not` and `if/then/else`, and ignores the rest
+(`format`, `unevaluated*`, annotations); `pattern` goes through the
+linear-time `re` engine of stage 7 behind a front end (`ecma.rs`) that accepts only chapter 03's
+`@pattern` subset (`ratio_check::regex_problem`) and makes it mean what ECMAScript means: `.`
+stops at `\r`, U+2028 and U+2029, `\d` and `\w` are ASCII, `\s` is ECMAScript's white space,
+a character outside the basic plane is one character (the `u` flag); `\b`, `\B`, `\D`-style
+escapes inside a class and a class starting `]` or `^]` are refused (`Invalid`). Compiling and
+searching are debited as steps (never more than the steps left) before they run. A pointer is strict RFC 6901 (`~` is followed by `0` or
+`1`) and names at most 257 tokens. `list.insert` takes an index in `0..=len` and `remove_at` one in
+`0..len`: negative indexes are `Invalid`. `list.unique`, `unique_by`, `group_by`, `count_by` and
+`map.from` take keys equal when the natural order says so (so every `NaN` is one key).
+The natural order compares an `Int` with a `Float` through `f64`, so beyond 2^53 it is not transitive
+(a sort still terminates and never panics, but its order among such numbers is arbitrary).
+`json.keys` and `json.stringify` give an object's keys in the order the IR keeps (a record's
+fields are in name order). `json.stringify` returns `Untrusted<Str>`, as `text.show` does.
 
 ## Frames
 
@@ -416,6 +498,14 @@ end. Any failure raises `Replay`.
 
 ## Tests
 
+`tests/data_ii.rs` runs the `json.*`, `list.*` and `map.*` files of `conformance/data/`, one file per `json`, `list` and `map` row (values,
+failures, steps, and label propagation for each argument: `labels NAME: args`), and checks that
+the files cover the chapter's tables; `tests/data_limits.rs` holds the debug-build work counters
+against each built-in's charge, the refusal without running (`Budget { which: steps }`), the
+O(N log N) loops of pushes and sets, hostile nesting on a 256 KiB stack, cancellation and the
+heap; `tests/data_review.rs` holds the regressions of the security review (a bounded `$ref` walk, labels of `patch` paths and composite keys, ECMAScript patterns, linear record `==`); `tests/data_props.rs` compares the built-ins with `Vec` and `BTreeMap` models and
+round-trips random JSON through `diff`, `patch`, `set` and `get`; `tests/schema.rs` compares
+`json.schema` with the checker's own derivation byte for byte.
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`
 expectations); `tests/labels.rs` covers label propagation for every operator and built-in,
 `Json`, `declassify` and the sink check; `src/properties.rs` checks the persistent structures

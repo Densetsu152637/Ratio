@@ -1,0 +1,17 @@
+// builtin: list.min, list.max
+// case main: value [1, 3, "a", "c", 1.5, 2.5]
+// case empty: value [null, null]
+// labels least(xs): [3, 1, 2] ; inner 0
+// labels greatest(xs): [3, 1, 2] ; inner 0
+fn main() -> (Int?, Int?, Str?, Str?, Float?, Float?) {
+  let xs = [3, 1, 2]
+  let ss = ["b", "a", "c"]
+  let fs = [2.5, 1.5]
+  (list.min(xs), list.max(xs), ss.min(), ss.max(), fs.min(), fs.max())
+}
+fn empty() -> (Int?, Int?) {
+  let xs: [Int] = []
+  (xs.min(), xs.max())
+}
+fn least(xs: [Int]) -> Int? { list.min(xs) }
+fn greatest(xs: [Int]) -> Int? { list.max(xs) }

@@ -247,7 +247,7 @@ examples on the eval suites (chapter 10, stage 24).
 | JSON nesting (`json.parse`, decoding) | 128 | 256 | `Invalid` |
 | Single string (rendering a value as text stops where it would pass this) | 16 MiB | 64 MiB | `Invalid` |
 | Single list or map | 1,000,000 elements | 10,000,000 | `Invalid` |
-| Value nesting (lists of lists, records of records, closures capturing closures) | 256 | 256 | `Invalid` |
+| Value nesting (lists of lists, records of records, closures capturing closures; walks over a value fit a small stack in release builds, and the JSON walks of `data` in every build) | 256 | 256 | `Invalid` |
 | Package source | 256 KiB per file, 2 MiB per package (authored: 64 KiB) | — | Not loadable |
 | Package loading | 1024 files, 64 packages, 4096 registry calls per load (answers, failures included, remembered); at most 64 modules in one import chain, the entry counted; package and plugin names at most 128 bytes | — | Not loadable |
 | Configuration lists (`tools`, `need`, `want`, `paths`, `deny`, `ask` of one configuration record) | 256 entries | 256 | `Invalid`; opening a frame is charged a step per comparison its meets and checks make |

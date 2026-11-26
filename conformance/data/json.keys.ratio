@@ -1,0 +1,9 @@
+// builtin: json.keys
+// case main: value [["b", "a", "c"], [], [], []]
+// labels keys(k): "z"
+// labels keys_of(xs): [1, 2] ; inner-inert 0
+fn main() -> [[Untrusted<Str>]] {
+  [json.keys(json.parse(r"""{"b": 1, "a": {"x": 2}, "c": 3} """)), json.keys(json.parse("[1, 2]")), json.keys(json.parse("1")), json.parse(r"""{} """).keys()]
+}
+fn keys(k: Str) -> [Untrusted<Str>] { json.keys(json.encode(map.from([(k, 1)]))) }
+fn keys_of(xs: [Int]) -> [Untrusted<Str>] { json.keys(json.encode(map.from(xs.map(|x| ("k", x))))) }

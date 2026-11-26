@@ -299,14 +299,20 @@ fn implemented_data_built_ins_have_their_chapter_06_class() {
         })
         .collect();
     let implemented = ratio::interp::builtins::implemented();
-    // Every implemented `data` built-in (stage 6's and stage 7's) has its class; every `text`
-    // and `re` built-in of the chapter is implemented (stage 7).
+    // Every implemented `data` built-in has its class; every `text`, `re`, `json`, `list` and
+    // `map` built-in of the chapter is implemented (stages 7 and 8).
     let data = |n: &str| {
         ["text.", "re.", "list.", "map.", "json.", "math."]
             .iter()
             .any(|m| n.starts_with(m))
     };
-    let ours = |n: &str| n.starts_with("text.") || n.starts_with("re.");
+    let ours = |n: &str| {
+        n.starts_with("text.")
+            || n.starts_with("re.")
+            || n.starts_with("json.")
+            || n.starts_with("list.")
+            || n.starts_with("map.")
+    };
     let mut problems = Vec::new();
     for (name, class) in &implemented {
         if !data(name) {

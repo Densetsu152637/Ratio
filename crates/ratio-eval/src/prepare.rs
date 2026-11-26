@@ -239,6 +239,7 @@ pub(crate) struct PVariant {
 
 #[derive(Debug)]
 pub(crate) struct PEnum {
+    pub name: Arc<str>,
     /// The type parameters, in declared order.
     pub params: Vec<String>,
     pub variants: Box<[PVariant]>,
@@ -261,8 +262,11 @@ pub(crate) struct Runtime {
     pub budget_kind: u32,
     pub denied_by: u32,
     pub result: u32,
+    pub json_type: u32,
     pub error: Arc<Layout>,
     pub site: Arc<Layout>,
+    /// `Violation { message, pointer }` (`json.validate`).
+    pub violation: Arc<Layout>,
     /// The prelude enums the program holds, by name (for the values `meta` reports).
     pub prelude_enums: HashMap<String, u32>,
 }
@@ -379,6 +383,7 @@ fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, Prepa
         .enums
         .iter()
         .map(|e| PEnum {
+            name: Arc::from(e.name.as_str()),
             params: e.params.clone(),
             unit_only: e.unit_only(),
             variants: e
@@ -406,6 +411,10 @@ fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, Prepa
         budget_kind: find("BudgetKind")?,
         denied_by: find("DeniedBy")?,
         result: find("Result")?,
+        json_type: find("JsonType")?,
+        violation: Arc::new(Layout {
+            names: ["message", "pointer"].into_iter().map(Arc::from).collect(),
+        }),
         error: Arc::new(Layout {
             names: ["data", "kind", "message", "site"]
                 .into_iter()
@@ -992,6 +1001,8 @@ pub(crate) fn empty_for_tests() -> Prepared {
             budget_kind: 0,
             denied_by: 0,
             result: 0,
+            json_type: 0,
+            violation: layout(),
             error: layout(),
             site: layout(),
             prelude_enums: HashMap::new(),

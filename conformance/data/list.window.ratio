@@ -1,0 +1,13 @@
+// builtin: list.window
+// case main: value [[1, 2], [2, 3], [3, 4]]
+// case whole: value [[1, 2, 3]]
+// case too_wide: value []
+// case zero: error Invalid
+// labels window(xs, size): [1, 2, 3] | 2 ; inner 0
+// labels refused(xs, size): [1, 2, 3] | 0
+fn main() -> [[Int]] { list.window([1, 2, 3, 4], 2) }
+fn whole() -> [[Int]] { [1, 2, 3].window(3) }
+fn too_wide() -> [[Int]] { [1, 2].window(3) }
+fn zero() -> [[Int]] { list.window([1], 0) }
+fn window(xs: [Int], size: Int) -> [[Int]] { list.window(xs, size) }
+fn refused(xs: [Int], size: Int) -> [[Int]] { list.window(xs, size) }

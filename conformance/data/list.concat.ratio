@@ -1,0 +1,12 @@
+// builtin: list.concat
+// case main: value [1, 2, 3, 4]
+// case operator: value [1, 2, 3]
+// case with_empty: value [1, 2]
+// labels concat(xs, ys): [1, 2] | [3, 4] ; inner 0 1
+fn main() -> [Int] { list.concat([1, 2], [3, 4]) }
+fn operator() -> [Int] { [1, 2] + [3] }
+fn with_empty() -> [Int] {
+  let blank: [Int] = []
+  blank.concat([1, 2]).concat(blank)
+}
+fn concat(xs: [Int], ys: [Int]) -> [Int] { list.concat(xs, ys) }

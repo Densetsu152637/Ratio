@@ -66,6 +66,11 @@ fn programs() -> Vec<(String, Arc<Prepared>, Vec<Value>)> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "ratio"))
+        // Stage 8's files (`json.*`, `list.*`, `map.*`) are run by `data_ii.rs`.
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            name.starts_with("text-") || name.starts_with("re-")
+        })
         .collect();
     paths.sort();
     paths

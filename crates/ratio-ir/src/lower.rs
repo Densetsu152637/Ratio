@@ -59,7 +59,7 @@ fn internal<T>(what: impl Into<String>) -> Res_<T> {
 }
 
 /// The prelude enums the interpreter builds values of itself (errors and results).
-pub const RUNTIME_ENUMS: [&str; 4] = ["ErrorKind", "BudgetKind", "DeniedBy", "Result"];
+pub const RUNTIME_ENUMS: [&str; 5] = ["ErrorKind", "BudgetKind", "DeniedBy", "Result", "JsonType"];
 
 /// The prelude enums the frame readers (`meta.frame`, `meta.permissions`) build values of
 /// (stage 10). Like [`RUNTIME_ENUMS`], they are in every program; the canonical form names only

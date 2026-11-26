@@ -1,0 +1,10 @@
+// builtin: list.flatten
+// case main: value [1, 2, 3, 4]
+// case empty_inner: value [1]
+// labels flat(xss): [[1, 2], [3]]
+fn main() -> [Int] { list.flatten([[1, 2], [], [3, 4]]) }
+fn empty_inner() -> [Int] {
+  let blank: [Int] = []
+  [[1], blank, blank].flatten()
+}
+fn flat(xss: [[Int]]) -> [Int] { list.flatten(xss) }

@@ -1,0 +1,13 @@
+// builtin: list.first, list.last
+// case main: value [1, 3, null, null]
+// labels head(xs): [1, 2, 3] ; inner 0
+// labels tail(xs): [1, 2, 3]
+// labels empty_head(xs): [1]
+fn main() -> [Int?] {
+  let xs = [1, 2, 3]
+  let blank: [Int] = []
+  [list.first(xs), list.last(xs), list.first(blank), blank.last()]
+}
+fn head(xs: [Int]) -> Int? { list.first(xs) }
+fn tail(xs: [Int]) -> Int? { list.last(xs) }
+fn empty_head(xs: [Int]) -> Int? { list.first(xs.take(0)) }

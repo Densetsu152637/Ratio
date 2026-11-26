@@ -1,0 +1,34 @@
+// builtin: json.diff
+// case objects: value [{"op": "add", "path": "/c", "value": 4}, {"op": "replace", "path": "/b", "value": 3}]
+// case equal: value []
+// case arrays: value [[{"op": "add", "path": "/2", "value": 4}], [{"op": "remove", "path": "/1"}, {"op": "remove", "path": "/1"}], [{"op": "replace", "path": "/1", "value": 9}]]
+// case type_change: value [{"op": "replace", "path": "", "value": [1]}]
+// case escaped: value [{"op": "replace", "path": "/a~1b/c~0d", "value": 2}]
+// case round_trips: value [true, true, true, true, true, true, true, true]
+// labels diff(n): 5
+// labels diff_in(xs): [1, 2] ; inner 0
+fn d(a: Str, b: Str) -> Json { json.diff(json.parse(a), json.parse(b)) }
+fn objects() -> Json { d(r"""{"a":1,"b":2} """, r"""{"a":1,"b":3,"c":4} """) }
+fn equal() -> Json { d(r"""{"a":[1,{"b":2}]} """, r"""{"a":[1,{"b":2}]} """) }
+fn arrays() -> [Json] { [d("[1,2,3]", "[1,2,4,3]"), d("[1,2,3]", "[1]"), d("[1,2,3]", "[1,9,3]")] }
+fn type_change() -> Json { d(r"""{"a":1} """, "[1]") }
+fn escaped() -> Json { d(r"""{"a/b":{"c~d":1}} """, r"""{"a/b":{"c~d":2}} """) }
+fn trips(a: Str, b: Str) -> Bool {
+  let x = json.parse(a)
+  let y = json.parse(b)
+  json.equal(json.patch(x, json.diff(x, y)), y)
+}
+fn round_trips() -> [Bool] {
+  [
+    trips(r"""{"a":1,"b":[1,2,3]} """, r"""{"a":2,"b":[1,3]} """),
+    trips("[1,2,3,4,5]", "[0,1,2,9,4,5,6]"),
+    trips(r"""[{"a":1},{"b":2}] """, r"""[{"a":1,"c":3}] """),
+    trips("null", "[1]"),
+    trips(r"""{"a":{"b":{"c":[1,{"d":2}]}}} """, r"""{"a":{"b":{"c":[1,{"d":3}],"e":true}}} """),
+    trips("[]", "[[1],[2]]"),
+    trips(r"""{"x":[[1,2],[3]]} """, r"""{"x":[[3],[1,2]]} """),
+    trips(r""""a" """, r""""b" """),
+  ]
+}
+fn diff(n: Int) -> Json { json.diff(json.parse(r"""{"a": 1} """), json.encode(map.from([("a", n)]))) }
+fn diff_in(xs: [Int]) -> Json { json.diff(json.parse("[]"), json.encode(xs)) }

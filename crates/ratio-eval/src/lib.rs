@@ -45,6 +45,7 @@ pub mod frame;
 mod heap;
 pub mod host;
 mod json;
+mod jsonedit;
 mod labels;
 mod machine;
 #[cfg(test)]
@@ -56,14 +57,15 @@ mod pool;
 mod prepare;
 #[cfg(test)]
 mod properties;
-
 mod re;
 pub mod rng;
+mod schema;
 pub mod scripted;
 pub mod sink;
 mod stack;
 pub mod tape;
 mod value;
+pub mod work;
 
 #[cfg(feature = "host-tests")]
 pub mod host_tests;
