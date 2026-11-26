@@ -296,7 +296,7 @@ fn generate(rng_seed: u64) -> Program {
          fn pick<T>(a: T, b: T, c: Bool) -> T {{ if c {{ a }} else {{ b }} }}\n\
          fn keep<T>(x: T) -> T {{ x }}\n\
          fn apply<T, U>(f: fn(T) -> U, x: T) -> U {{ f(x) }}\n\
-         fn case(web: Untrusted<Str>, task: Task, user: UserText, v: Untrusted<Verdict>, n: Int, flag: Bool) -> {ret} {{\n\
+         fn case(web: Untrusted<Str>, task: TaskInput, user: UserText, v: Untrusted<Verdict>, n: Int, flag: Bool) -> {ret} {{\n\
          {body}  prompt {{\n{sections}  }}\n}}\n"
     );
     Program {

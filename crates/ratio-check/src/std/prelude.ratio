@@ -15,7 +15,7 @@ enum PayloadKind { ci_log, pr_comment, issue, review, page, other }
 type Attachment = { name: Untrusted<Str>, kind: Str, text?: Untrusted<Str>, image?: Image, path?: Untrusted<Str>, bytes: Int }
 type Reply = { text: Untrusted<Str>, status: ReplyStatus }
 enum ReplyStatus { done, step_limit, question, stopped }
-type Task = { brief: Brief, title: Untrusted<Str>, access: Access, profile?: AgentProfile, follow_up: Bool }
+type TaskInput = { brief: Brief, title: Untrusted<Str>, access: Access, profile?: AgentProfile, follow_up: Bool }
 type Report = { text: Untrusted<Str>, ok: Bool, question?: Untrusted<Str> }
 enum Access { read, write }
 type AgentProfile = { name: Str, file_instructions?: TrustedPrompt, spawn_prompt?: Untrusted<Str>, workflow?: Str }

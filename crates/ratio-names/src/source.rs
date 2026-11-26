@@ -86,9 +86,10 @@ impl fmt::Display for Source {
     }
 }
 
-/// A package name: dot-separated words (`critics.strict`). Each word is ASCII letters, digits,
-/// `_` and `-`, starts with a letter or `_`, and is not a Windows device name (`con`), so a
-/// name means one folder on every file system; [`Registry::find`](crate::Registry::find) only
+/// A package name: dot-separated words (`critics.strict`). Each word is an ASCII identifier
+/// (letters, digits and `_`, starting with a letter or `_`), so every name can be written in an
+/// `import`, and is not a Windows device name (`con`), so a name means one folder on every file
+/// system; [`Registry::find`](crate::Registry::find) only
 /// ever receives one of these.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PackageName(String);
@@ -107,8 +108,8 @@ impl PackageName {
             Ok(PackageName(text.to_owned()))
         } else {
             Err(format!(
-                "`{text}` is not a package name (words of ASCII letters, digits, `_` and `-`, \
-                 joined by `.`; no device names)"
+                "`{text}` is not a package name (ASCII identifiers joined by `.`, at most \
+                 128 bytes, no device names)"
             ))
         }
     }
@@ -125,8 +126,8 @@ impl fmt::Display for PackageName {
     }
 }
 
-/// A plugin's name: one word of ASCII letters, digits, `_` and `-`, starting with a letter or
-/// `_`, at most 128 bytes, and not a Windows device name. Only [`PluginName::parse`] makes one.
+/// A plugin's name: one ASCII identifier (letters, digits and `_`, starting with a letter or
+/// `_`), at most 128 bytes, and not a Windows device name. Only [`PluginName::parse`] makes one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PluginName(String);
 
@@ -141,7 +142,8 @@ impl PluginName {
             Ok(PluginName(text.to_owned()))
         } else {
             Err(format!(
-                "`{text}` is not a plugin name (one word of ASCII letters, digits, `_` and `-`;                  no device names)"
+                "`{text}` is not a plugin name (one ASCII identifier, at most 128 bytes, \
+                 no device names)"
             ))
         }
     }
@@ -286,15 +288,15 @@ impl fmt::Display for QualifiedName {
     }
 }
 
-/// A word of a package or plugin name: an ASCII letter or `_`, then ASCII letters, digits, `_`
-/// or `-` (the built-in packages' names have hyphens: `std:consul-escalation`), and not a
-/// Windows device name.
+/// A word of a package or plugin name: an ASCII identifier that is not a keyword (so it can be
+/// written in an `import`) or a Windows device name.
 fn is_word(word: &str) -> bool {
     let mut bytes = word.bytes();
     bytes
         .next()
         .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && ratio_syntax::Keyword::from_word(word).is_none()
         && !crate::path::is_device(word)
 }
 

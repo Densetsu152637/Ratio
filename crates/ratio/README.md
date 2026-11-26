@@ -17,8 +17,8 @@ is chapter 08's `harnesses.check` as a library call: the package's summary (writ
 network, delegation, tools), every trust site it can reach through imports and `meta.harness`
 loads, and which harnesses a model may run. `Checked::schema` and `Checked::digest` give a
 type's JSON Schema and type digest. It also names the specification draft (`SPEC_DRAFT`) and
-the stage reached (`STAGE`, 5). The `Host` trait,
-the checker and the interpreter join it in later stages; chapter 10 of the
+the stage reached (`STAGE`, 5). The `Host` trait and
+the interpreter join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`

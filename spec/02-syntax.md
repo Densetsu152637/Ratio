@@ -240,7 +240,10 @@ name_path       = IDENT , { "." , IDENT } ;
                   (* std:debate, user:critics.strict, plugin:acme/review @"^1", authored:session/vote *)
 
 type_decl       = "type" , IDENT , [ type_params ] , "=" , type ;
-enum_decl       = "enum" , IDENT , [ type_params ] , "{" , variant , { "," , variant } , [ "," ] , "}" ;
+enum_decl       = "enum" , IDENT , "{" , variant , { "," , variant } , [ "," ] , "}" ;
+                  (* no type parameters: only built-in enums (Result<T>, Fold<A>, chapter 06)
+                     may be generic; the parser reads parameters after the name so that the
+                     checker can refuse them by name, C0033 *)
 variant         = IDENT , [ record_type ] ;
 type_params     = "<" , IDENT , { "," , IDENT } , ">" ;
 const_decl      = "const" , IDENT , [ ":" , type ] , "=" , expr ;
@@ -418,7 +421,10 @@ section         = "system" , expr
     (`effort: high`, `context: fresh`, `mode: plan`); names from the prelude and imports do not
     block this, so `fail` matches `Verdict.fail` even though `fail(…)` is also a function. Where
     the expected type is `ToolSet` or `ToolName`, a bare identifier that is not a local binding
-    names a tool (`tools: [read_file, grep]`). Everywhere else the qualified form is needed
+    names a tool (`tools: [read_file, grep]`). `ContextMode`'s variant `none` is spelt like the
+    keyword: where a `ContextMode` is expected (including the optional configuration field
+    `context`), `none` is that variant; where a `ContextMode?` is, it is the absent value, and
+    a pattern names the variant `ContextMode.none`. Everywhere else the qualified form is needed
     (`Effort.high`).
 
 ### Constants

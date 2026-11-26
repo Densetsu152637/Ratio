@@ -3,7 +3,7 @@
 
 // Untrusted text on either side of an `example` (few-shot pairs are instructions).
 
-fn ask(sample: Untrusted<Str>, task: Task) -> Prompt {
+fn ask(sample: Untrusted<Str>, task: TaskInput) -> Prompt {
   prompt {
     instruct "Classify."
     example sample -> "positive"

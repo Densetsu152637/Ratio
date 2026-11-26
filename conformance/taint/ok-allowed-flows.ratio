@@ -25,7 +25,7 @@ prompt review(patch: Untrusted<Str>, files: [Untrusted<FileText>]) {
   format Verdict
 }
 
-prompt delegated(t: Task, issue: UserText) {
+prompt delegated(t: TaskInput, issue: UserText) {
   task t.brief
   task "Also: {t.brief}"
   task issue
@@ -64,7 +64,7 @@ fn notice(conv: Conversation, reply: Untrusted<Str>) -> () {
 }
 
 fn spawn(brief: Untrusted<Str>) -> Task<Report> {
-  agents.spawn(brief, "std:tdd-fix")
+  agents.spawn(brief, "std:tdd_fix")
 }
 
 fn generic_untrusted<T>(x: T) -> Untrusted<Str> {

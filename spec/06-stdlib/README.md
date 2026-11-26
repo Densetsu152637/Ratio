@@ -16,10 +16,10 @@ module has its own page.
 | `session` | [session.md](session.md) | The user, approvals, notifications, plans, checkpoints, branches | 22 |
 | `state` | [session.md](session.md#state-package-state) | The package's declared state | 4 |
 | `data` | [data.md](data.md) | Text, regex, JSON, lists, maps, math, random, time, hashing, diff, templates, vectors, paths, URLs, codecs (15 submodules) | 213 |
-| `control` | [control.md](control.md) | Retry, timeouts, races, fan-out, rate limits, caches, assertions, errors, budgets, logging, tracing | 29 |
+| `control` | [control.md](control.md) | Retry, timeouts, races, fan-out, rate limits, caches, assertions, errors, budgets, logging, tracing | 30 |
 | `eval` | [eval.md](eval.md) | Tests, metrics, fixtures, the record and replay seam | 14 |
 | `meta` | [meta.md](meta.md) | Introspection of tools, models, harnesses, frames and permissions; loading harnesses by name | 20 |
-| **Total** | | | **478** |
+| **Total** | | | **479** |
 
 ## How entries are written
 
@@ -37,7 +37,7 @@ Each built-in has one row:
 | Needs | Meaning |
 | --- | --- |
 | `pure` | No effect. Costs interpreter steps only. Never asks, never fails for permission |
-| `effect` | A recorded effect with no authority (clock, randomness, logging, events). Never asks |
+| `effect` | An effect with no authority (clock, randomness, logging, events). Never asks. On the tape when the program reads its result (chapter 01); `rand.*` draws follow from the recorded seed |
 | `engine` | Reads engine state (the frame, the conversation, agent records, the model table). Never asks |
 | `model` | One or more model calls (the row says how many). Charged to `tokens`, `cost` and `model_calls`; subject to the frame's model location. Never asks, except that a session budget configured to ask before spending asks as it does for any model call |
 | `tool:<name>` | Dispatched as (or, for a **pseudo-tool** in italics such as `tool:`*`session_checkpoint`*, decided as if it were) Imperium's tool `<name>` through the engine's own path: permission profile, frame tool set, rules (deny over ask over allow), safety floor, permission mode, `tool.before` and `tool.after` hooks, approval, events. Decided exactly as a model's direct call of that tool would be; reads run without asking unless a rule says otherwise |
@@ -79,8 +79,10 @@ enum PayloadKind { ci_log, pr_comment, issue, review, page, other }
 type Attachment = { name: Untrusted<Str>, kind: Str, text?: Untrusted<Str>, image?: Image, path?: Untrusted<Str>, bytes: Int }
 type Reply = { text: Untrusted<Str>, status: ReplyStatus }
 enum ReplyStatus { done, step_limit, question, stopped }
-type Task = { brief: Brief, title: Untrusted<Str>, access: Access, profile?: AgentProfile, follow_up: Bool }
+type TaskInput = { brief: Brief, title: Untrusted<Str>, access: Access, profile?: AgentProfile, follow_up: Bool }
 type Report = { text: Untrusted<Str>, ok: Bool, question?: Untrusted<Str> }
+type Question = { question: Str, options: [Str], recommended: Str, secret?: Bool }
+                                            // session.ask; an absent `secret` is false
 enum Access { read, write }
 type AgentProfile = {
   name: Str,                                // the agent file's name (engine-validated kebab-case)
@@ -140,7 +142,12 @@ enum StepStatus { pending, in_progress, done, blocked, skipped }
 
 // Results and stopping
 enum Result<T> { Ok { value: T }, Err { error: Error } }
-type Scored<T> = { value: T, score: Float, reasons?: Untrusted<Str> }
+type Scored<T> = { value: T, score: Float, reasons?: Untrusted<Str>, samples?: Int }   // samples: set by think.best_of
+enum Fold<A> { Next { acc: A }, Stop { acc: A } }                  // par_fold (control)
+enum FoldOrder { index, completion }
+type Folded<A> = { value: A, delivered: Int, stopped: Bool }
+enum StreamStop { done, until, max_tokens }                        // model.stream
+type Streamed = { text: Str, stopped: StreamStop }
 // Stop: chapter 05
 ```
 
@@ -161,6 +168,11 @@ particular, a `ToolCall`'s name and id are what the model wrote, and a plan's te
   and grant rules (`docs/05-tools-and-isolation.md#isolation-tiers`); Ratio never resolves a path
   against the file system itself.
 - Every built-in that makes model calls says how many in its row, as `model ×n`.
+- Every rule a built-in imposes on its arguments also holds when it is used as a function value.
+  The built-ins whose rules hold only where they are called, `trust`, `as_task`, `declassify`
+  (audited trust sites), `session.ask` (answers labelled from the questions written at the call)
+  and `meta.harness` (each load listed by its name), may only be called, never used as values;
+  the checker refuses naming one otherwise.
 
 ## Built-in prompts
 

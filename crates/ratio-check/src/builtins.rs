@@ -147,7 +147,7 @@ fn notice(conv: Conversation, text: Str, data: Untrusted<Str>? = none) -> () {}
     (
         "agents",
         r"
-@effect(delegate) @tool(spawn_agent) @secrecy_sink fn spawn(brief: Untrusted<Str>, harness_: Str? = none, agent: Str? = none, model: ModelRef? = none, tier: Tier? = none, location: Location? = none, tags: [Str] = [], effort: Effort? = none, access: Access = read, knowledge: Str? = none, title: Str? = none, single_call: Bool = false, budget: Budget? = none) -> Task<Report> {}
+@effect(delegate) @tool(spawn_agent) @secrecy_sink fn spawn(brief: Untrusted<Str>, package: Str? = none, agent: Str? = none, model: ModelRef? = none, tier: Tier? = none, location: Location? = none, tags: [Str] = [], effort: Effort? = none, access: Access = read, knowledge: Str? = none, title: Str? = none, single_call: Bool = false, budget: Budget? = none) -> Task<Report> {}
 @effect(delegate) @tool(steer_agent) @secrecy_sink fn steer(task: Task<Report>, text: Untrusted<Str>) -> () {}
 @effect(delegate) @tool(queue_agent) @secrecy_sink fn queue(task: Task<Report>, text: Untrusted<Str>) -> () {}
 @effect(delegate) @tool(ask_agent) @secrecy_sink fn ask(agent: Str, question: Untrusted<Str>, timeout: Duration = 300s) -> Untrusted<Str> {}
@@ -341,7 +341,7 @@ pub(crate) enum Primitive {
     Untrusted,
     /// `Secret<T>`.
     Secret,
-    /// `Task<T>` (the handle; `Task` without arguments is the shared record type).
+    /// `Task<T>`, the handle (the shared record is `TaskInput`).
     Task,
 }
 

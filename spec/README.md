@@ -1,9 +1,124 @@
 # The Ratio specification
 
-Version: draft 0.8 (2026-11-26). Status: design; stages 1 and 2 of the implementation (the
-token reader and the parser) are built in this repository.
+Version: draft 0.12 (2026-11-27). Status: design; stages 1 to 5 of the implementation (the
+token reader, the parser, modules and names, the type checker, and schemas and taint) are built
+in this repository.
 
-**Changes in draft 0.8.** Errata from the stage 2 parser. Chapter 02: a `>` that closes a generic
+**Changes in draft 0.12.** Errata from stage 5, schemas and taint. No grammar change.
+
+- Concatenating or interpolating a `Brief` with trusted text only gives a `Brief` (chapter 03).
+- `steps` sections are instruction positions, with `system`, `instruct`, `note` and `example`
+  (chapter 03).
+- `trust`'s `T`, unless a turbofish gives it, is the argument's type with its trust labels
+  removed (chapter 03).
+- `trust`, `as_task`, `declassify`, `session.ask` and `meta.harness` may only be called, never
+  used as function values: every rule a built-in imposes must hold for values too (chapters 03,
+  06).
+- The guarded-effect lint is silenced with `@allow(model_guard)` on the enclosing item, since
+  statements take no attributes (chapter 03).
+- The schema table gives `()` (`null`), map keys other than text (`propertyNames`), the `kind`
+  constant's spelling (`snake_case`), that an optional field does not take `null`, and `$defs`
+  for an enum that contains itself; schema attributes are checked against their fields,
+  `@pattern` is the regular-expression syntax ECMAScript and `re` share, `@range` keeps its
+  decimal literals, and the schema is canonical JSON (chapter 03).
+- Type digests key the structure of values: their canonical form is given, keeps the labels and
+  leaves out descriptions and refinements (chapter 03).
+- `agents.spawn`, `agents.delegate` and `agents.map` name the package by `package:` (a keyword
+  cannot name an argument, so `harness:` could not be written) (chapters 03, 06, 08).
+- `session.ask`'s questions are the shared `Question` record, whose `secret?: Bool` is `false`
+  when absent (chapter 06).
+- A `meta.harness` name is the longest prefix that names a registered package, then the harness
+  (chapters 04, 06).
+- Chapter 10 adds the codes `C0035` to `C0039` and the `conformance/taint/` directory.
+
+**Changes in draft 0.11** (kept for reference). Errata from stage 4, the type checker. One grammar change.
+
+- Enums a program declares take no type parameters: `enum_decl` loses `[ type_params ]`, and
+  only built-in enums (`Result<T>`, `Fold<A>`) may be generic (chapters 02, 03). An enum's type arguments relate by
+  how its payloads use each parameter (chapter 03).
+- A `prompt` declaration's type, `TrustedPrompt` or `Prompt`, is inferred; it has no written
+  result type (chapter 05).
+- The shared record `Task` is renamed `TaskInput`, so it no longer shares its name with the
+  handle `Task<T>` (chapters 01, 03, 04, 06, 07, 08, 09).
+- `ContextMode`'s variant `none` is read where a `ContextMode` is expected; where a
+  `ContextMode?` is, `none` is the absent value (chapters 02, 04).
+- A required record field may stand where it is declared optional, and spread against a declared
+  record type takes only its fields (chapter 03).
+- A pattern other than a binding, `_` or `none` matched against `T?` matches a present value
+  (chapter 03).
+- Chapter 10 adds the `C` codes (`C0001` to `C0034`) and the `check-ok`, `check-error` and
+  `check-warning` expectations of `conformance/types/`.
+
+**Changes in draft 0.10** (kept for reference). Errata from stage 3, modules and names. No grammar change.
+
+- Bare names resolve to `std`, then `user` only; plugin, project and authored packages need their
+  qualified name (chapters 03, 08).
+- Trust follows source: the rule is stated as the list it always was, without "at least as
+  trusted" (chapter 03).
+- Import bindings, `pub` on imports, path characters, case conflicts, and package and plugin
+  names (ASCII identifiers that are not keywords, at most 128 bytes, no device names) are
+  specified (chapter 03).
+- Version ranges are `^`, `~` or `=` with one to three numbers, checked against `meta.version`
+  (chapter 03).
+- Package names are importable identifiers, so the built-in packages are renamed with
+  underscores: `std:consul_escalation`, `std:plan_execute_verify`, `std:self_consistency`,
+  `std:tdd_fix` (chapters 08, 09, 10).
+- Inside an authored package's import, `authored:<name>` means the importer's own area only
+  (chapter 07).
+- A warning (`N0021`) for shadowing `trust`, `as_task` or `declassify` (chapter 03).
+- Chapter 07 adds the package-loading limits (1024 files, 64 packages, 4096 registry calls per
+  load, 64 modules per import chain, 128-byte names); chapter 10 adds the `N` codes and the
+  `conformance/names/` worlds.
+
+**Changes in draft 0.9** (kept for reference). The accepted proposals of the performance, parallelism and concurrency
+review (`docs/design/performance-concurrency-review.md`, proposals PC-1 to PC-9; PC-10 to PC-15
+deferred). No grammar change.
+
+- Effect keys gain a **branch path**, so keys no longer depend on completion order (chapter 01).
+- One **turn sequence** numbers every scheduling event (ledger, cancellation, cache and ordering
+  events); replay verifies it against the tape alone (chapter 01).
+- Budgets admit effects by **bounded reservation** with an effective `max_tokens` and a reply
+  floor (`ratio.limits.min_reply_tokens`, default 256); a hosted model (any location other than
+  `local`) without an explicitly configured price is refused under a cost cap, while a `local`
+  model's price of 0 counts as priced; budget decisions and readings are sequenced and
+  verified in replay (chapters 04, 07).
+- Every cancelled branch's cancellation point is recorded, whatever cancelled it (chapter 03).
+- Width counts **running** branches only; parked branches release their slot, so nested fan-out
+  cannot deadlock; waiting branches start in branch-path order (chapters 03, 04, 06 `control`).
+- Tools have **cancellation classes** (`abort`, `drain`); pending approvals are withdrawn
+  atomically; outstanding drains are re-parented and held by a **drain fence**; every host call
+  carries a deadline; every `drain` call has a finite bound of at most 3600 s (chapters 03, 06
+  `tools`, 07 T17, 10).
+- New built-in `par_fold` and the types `Fold`, `FoldOrder`, `Folded` (chapter 06 `control` and
+  README; `control` 30 built-ins, 479 in all).
+- `cached`, `memo` and `once` are **single-flight**, with recorded and verified waits;
+  session caches keep labels, a labelled hit is refused without `sees.secrets`, and headless
+  tapes record labelled cache keys only by redaction digest (chapters 01, 03, 04, 06 `control`).
+- Pure data built-ins are charged by **cost class** (including `product` for `text.similarity`,
+  `diff.*` on lines or words, and `json.diff`), debited before running from the input sizes, with
+  required representations and label summaries (chapters 01, 06 `data`, 07).
+- The interpreter yields every 1,000 steps, offloads large built-ins to a bounded pool (heap
+  accounted before dispatch), uses
+  `Send` values and a prepared form that is never hashed (chapters 01, 07).
+- Tapes: entries for input-bearing effects only, suppressed output effects and an end-of-turn
+  reply digest, a `full` recording mode, content-addressed blobs, chained conversation digests,
+  zstd files, and replayed labels that can only be added (chapters 01, 03, 08).
+- Per-branch random generators: `rand` draws need no tape entries (chapter 06 `data`).
+- `model.stream` gains `until` and returns `Streamed`; `think.self_consistency` and
+  `think.best_of` gain `early_stop` (`best_of` refuses it without `good_enough`) (chapters 05,
+  06 `model`, `think`, README).
+- Chapter 08 states Imperium's host requirements: the class table, a conservative read-only
+  command allowlist (stage 17; until then no command is read-only), read-only MCP tools from user
+  configuration only, drain clamps, atomic withdrawal, and refusal of unpriced hosted models
+  (from stage 13).
+- Chapter 10: the `Host` sketch gains `EffectCtx`, `tool_class` and `conversation_digest`;
+  `TAPE_VERSION` notes; ownership rows; stage 11 splits into **11a** (trait, tape, keys,
+  scheduler) and **11b** (`control`, `par_fold`, single-flight caches, `rand`, `time`, `state`),
+  and stages 6 to 14, 17 and 19 carry the new work and tests; the `steps` expectation.
+- Chapter 07 adds limit rows (reply floor, pool jobs, drain bound) and threat T17, and widens
+  T8, T10 and T13; chapter 11 lists the deferred proposals.
+
+**Changes in draft 0.8** (kept for reference). Errata from the stage 2 parser. Chapter 02: a `>` that closes a generic
 argument list ends a statement at a line end inside a type declaration or a prompt `format`
 section (insertion condition 2); a block head's `{` must be on the head's line (`P0008`); the
 parser takes the token reader's brace kind as disambiguation rule 1's decision (`P0003` when it
@@ -158,7 +273,7 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | R5 | **Static types with local inference**, structural records and tagged enums, one dynamic escape (`Json`) that must be decoded through a schema; types double as generation schemas | 03 |
 | R6 | **Taint typing**: every string an effect returns is `Untrusted` unless it is an engine identifier; it may flow anywhere except instruction positions; `task` sections take only `Brief`; `trust` and `as_task` are monomorphic, audited and gated by `ratio.trust`; guarantees cover explicit flows | 03, 07 |
 | R7 | **Exceptions with a closed set of error kinds**, `try … catch` as an expression, `result()` to reify; cancellation and the budget that ran out cannot be swallowed by the scope they stop | 03 |
-| R8 | **Structured concurrency only** (`par`, `par_map`, `race`, `timeout`); no detached tasks except engine subagents, which the engine owns | 03 |
+| R8 | **Structured concurrency only** (`par`, `par_map`, `par_fold`, `race`, `timeout`); no detached tasks except engine subagents, which the engine owns; cancellation by tool class, with a drain fence | 03 |
 | R9 | **Harness calls are function calls** with their own frame (model, tools, permissions, budget, `sees`, conversation); a callee sees nothing of its caller or the session unless passed, forked or granted | 04 |
 | R10 | **Attenuation only**: every frame's tools, permissions, model locations, `sees`, budgets and subagents are bounded by its caller's | 04, 07 |
 | R11 | **Prompts are typed values** built from sections; only a `TrustedPrompt` may be a system prompt; the section decides how text is framed | 05 |
@@ -175,10 +290,10 @@ Each decision is argued, with the alternatives rejected, in the chapter named.
 | [`model`](06-stdlib/model.md) | 29 | [`session`](06-stdlib/session.md) | 22 |
 | [`think`](06-stdlib/think.md) | 30 | [`state`](06-stdlib/session.md#state-package-state) | 4 |
 | [`tools`](06-stdlib/tools.md) | 50 | [`data`](06-stdlib/data.md) (15 submodules) | 213 |
-| [`agents`](06-stdlib/agents.md) | 20 | [`control`](06-stdlib/control.md) | 29 |
+| [`agents`](06-stdlib/agents.md) | 20 | [`control`](06-stdlib/control.md) | 30 |
 | [`memory`](06-stdlib/memory.md) | 12 | [`eval`](06-stdlib/eval.md) | 14 |
 | [`context`](06-stdlib/context.md) | 35 | [`meta`](06-stdlib/meta.md) | 20 |
-| | | **Total** | **478** |
+| | | **Total** | **479** |
 
 The counts are maintained by hand; chapter 10's conformance suite checks, from a `builtins.txt`
 generated from these tables, that every built-in has a test, that no implemented built-in is

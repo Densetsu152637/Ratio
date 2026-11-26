@@ -274,12 +274,12 @@ pub harness takes_text(rules: Str) -> Untrusted<Str> {
 }
 
 pub harness offered(page: Untrusted<Str>, n: Int) -> Untrusted<Str> {
-  let p = agents.spawn(page, "std:tdd-fix")
+  let p = agents.spawn(page, "std:tdd_fix")
   page
 }
 
 @task
-harness task_entry(t: Task) -> Untrusted<Str> {
+harness task_entry(t: TaskInput) -> Untrusted<Str> {
   model.generate(prompt { task t.brief })
 }
 

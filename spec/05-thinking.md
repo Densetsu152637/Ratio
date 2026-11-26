@@ -13,8 +13,8 @@ A `Prompt` is an ordered list of **sections**, each with a role in the request a
 It is built with a `prompt { … }` expression or a `prompt` declaration (a function returning a
 prompt). A prompt whose every section holds trusted content only (no `data`, `image`, `context`
 from a conversation, untrusted `task`, or included untrusted prompt) has the type
-`TrustedPrompt`, a subtype of `Prompt`; the checker infers which of the two a literal is, and a
-`prompt` declaration may declare it (`prompt rules() -> TrustedPrompt { … }`). Only a
+`TrustedPrompt`, a subtype of `Prompt`; the checker infers which of the two a literal or a
+`prompt` declaration is (the declaration has no written result type). Only a
 `TrustedPrompt` may be a system prompt:
 
 ```ratio
@@ -180,6 +180,7 @@ only the frame's own budget running out raises an error. Every iterative built-i
 stopped (`stopped: until | max_rounds | no_progress | converged | budget`), so a harness can tell
 a passing result from a cut-off one.
 
-At the token level, `sampling.stop` sequences and `max_tokens` end a single generation; at the
-loop level, `model.loop` ends when the model makes no tool call, when `max_steps` is reached, or
-when its `until` predicate holds after a step.
+At the token level, `sampling.stop` sequences, `max_tokens` (which admission may lower to what the
+budgets can pay for, chapter 04) and `model.stream`'s `until` predicate (chapter 06, `model`) end a
+single generation; at the loop level, `model.loop` ends when the model makes no tool call, when
+`max_steps` is reached, or when its `until` predicate holds after a step.

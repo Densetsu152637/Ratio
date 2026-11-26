@@ -73,7 +73,7 @@ and run under bounds the model cannot lift.
 ## Harnesses reached by models
 
 Models reach harnesses through two tools: `spawn_agent`'s `harness` (a package's `@task` entry,
-whose input is a `Task` with an untrusted `Brief`) and `run_harness` (a public harness called like
+whose input is a `TaskInput` with an untrusted `Brief`) and `run_harness` (a public harness called like
 a function, defined in chapter 06, `meta`). The rules for `run_harness` hold for **every** source,
 `std`, user, plugin, project and authored alike:
 
@@ -95,7 +95,8 @@ a function, defined in chapter 06, `meta`). The rules for `run_harness` hold for
 
 **Names.** Authored packages are qualified by area: `authored:session/<name>` lives with the
 session, `authored:env/<name>` with the environment once persisted. A bare `authored:<name>`
-means the session area first, then the environment area.
+means the session area first, then the environment area; inside an authored package's import
+it means the importer's own area only.
 
 **Writing.** A model writes a harness with the model-facing tool `write_harness(name, source,
 description)` (a Ratio program with `meta.author`). The engine:
@@ -247,7 +248,11 @@ examples on the eval suites (chapter 10, stage 24).
 | Single string | 16 MiB | 64 MiB | `Invalid` |
 | Single list or map | 1,000,000 elements | 10,000,000 | `Invalid` |
 | Package source | 256 KiB per file, 2 MiB per package (authored: 64 KiB) | — | Not loadable |
-| Concurrent branches | 16 | 64 | Excess branches wait |
+| Package loading | 1024 files, 64 packages, 4096 registry calls per load (answers, failures included, remembered); at most 64 modules in one import chain, the entry counted; package and plugin names at most 128 bytes | — | Not loadable |
+| Concurrent branches (running; parked branches hold no slot, chapter 03) | 16 | 64 | Excess branches wait, and start in branch-path order |
+| Reply floor (`min_reply_tokens`: the fewest output tokens a model call is admitted with, chapter 04) | 256 | — | The admission waits for held reservations, then raises `Budget` |
+| Offloaded built-in jobs in flight per session (an implementation constant, chapter 01) | 2 | — | Further offloads wait; heap is accounted before dispatch, and a cancelled branch's job keeps its place, heap and steps until it ends |
+| Running time of one `drain`-class tool call (chapter 06, `tools`) | the tool's timeout or the call's deadline | 3600 s | The host fails the call |
 | Model calls | the session's `agents.max_steps` × 4 | — | `Budget { which: model_calls }` |
 | Tool calls | 500 | 5,000 | `Budget { which: tool_calls }` |
 | Tokens, cost | the session's budgets (`BudgetGate`) | the session's | `Budget { which: tokens \| cost }` |
@@ -264,8 +269,12 @@ or pattern costs one level, a `defer` block and a prompt `if` or `for` section o
 a left-associative chain costs one (`a + b + c` and `x |> f |> g`, a `.` chain, a postfix chain),
 so a chain of 128 or more terms exceeds the default limit; split it with `let` bindings.
 
-Step accounting is deterministic (it depends only on the program and its data), so a run that
-exceeds its steps exceeds them identically in replay.
+Step accounting is deterministic (it depends only on the program and its data): pure built-ins
+are charged by cost class from the sizes of their inputs and outputs, never from representation
+state (chapter 06, `data`). Sequential code that exceeds its steps exceeds them identically in
+replay. Concurrent branches share their frame's steps ledger, and which branch reaches the limit
+depends on timing, so each branch's step total and the exhaustion are events on the turn sequence,
+replayed as recorded and verified against the limit (chapter 04).
 
 ## Prompt injection
 
@@ -332,16 +341,17 @@ person's approvals; trusted versus untrusted harness sources.
 | T6 | The model selects a dangerous harness for a subagent (A4) | `spawn_agent`'s `harness` accepts only packages in `harness.offered` and authored packages (which run contained unless approved); agent files from plugins and projects cannot name other sources | — |
 | T6b | A model passes injected text into a harness's trusted parameter through `run_harness` (A4 steered by A1) | Every `run_harness` argument is deep-`Untrusted` for every source; harnesses with trusted text in their parameters are not offerable, refused at check time and at offer time | — |
 | T7 | **Injection leads the model to author a malicious harness** (A1 via A4): one that reads secrets and smuggles them out, loops to burn money, edits files, or tries to persist | Contained tier: read tools only, the caller's model pinned with provider-side tools off, no network or writes, no secrets, no ambient reads, small fixed budget; no trust sites; arguments and results forced untrusted; caller tier only for a closure hash and authority the user approved with the whole closure, its diffs and its summary in view; wider authority asks again; persistence only through the native dialog; authored areas are protected paths; every version and run journalled and visible | The user approving a malicious version at caller tier; a contained harness wasting its small budget; contained reads returned to a caller that has network tools (the caller could read those files itself) |
-| T8 | Denial of wallet (A4, A3) | Step, call, token, cost and wall budgets per frame and session; `Budget` cannot be swallowed inside its scope; contained-tier budget cap | Spend up to the configured budgets |
+| T8 | Denial of wallet (A4, A3) | Step, call, token, cost and wall budgets per frame and session; `Budget` cannot be swallowed inside its scope; contained-tier budget cap; admission by reservation with an effective `max_tokens`, so concurrent calls never overshoot any cap; unpriced hosted models refused under a cost cap; cancelled `drain` calls keep their reservations (chapter 04) | Spend up to the configured budgets |
 | T9 | Approval fatigue (A3, A4) | Harness approvals capped per turn; denials remembered; versions approved once per session at most per prompt | The person approving without reading |
-| T10 | Resource exhaustion of the daemon (A3, A4) | Heap, call-depth, nesting, string and collection limits; linear-time regex; steps; no threads; package size limits | A heavy but legal harness slows its own session |
+| T10 | Resource exhaustion of the daemon (A3, A4) | Heap, call-depth, nesting, string and collection limits; linear-time regex; steps charged by cost class against required representations, the input-size part debited before a built-in runs, so a quadratic built-in over large inputs fails with `Budget` instead of running; yields at every 1,000 steps and large built-ins offloaded to a bounded pool with a per-session cap, so one session cannot stall others; no threads for program code; package size limits | A heavy but legal harness slows its own session |
 | T11 | Exfiltration of secret data (A1 via A4) | **Only where secrecy is configured**: labelled values, and calls on labelled conversations, are refused at the sinks of chapter 03 (network tools, hosted models, commands, non-secret writes, `call_tool`, delegation, persistence) by the host and by the engine at dispatch; commands whose line references a secret path ask every time and are refused when unattended; the checker adds load-time refusals only where the label is known statically. Elsewhere: frames without network tools for sensitive reads | Everything not labelled (by default nothing is); implicit flows; **a command that reads and uploads a secret file without naming it recognisably on its command line** (a script, a config-driven tool, an alias, a variable set earlier), which the best-effort command matching cannot see; a local model that saw a secret and later writes about it in an unlabelled conversation of another frame; search queries of unlabelled text leave the machine without asking (Imperium's existing residual risk) |
 | T12 | Cross-frame leakage of private context into a frame that talks to the web | Isolation by default; `sees` empty for fresh frames; `fork` is explicit | Programs that fork or grant `sees` carelessly |
-| T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions) | Wrong results, a scoring problem, not an authority problem |
+| T13 | A crafted tape or task file subverts a headless run | Replay answers effects with recorded values, which are untrusted; replay runs no real tools (lenient mode falls through to live calls under the run's own permissions); replay verifies the tape against itself (chapter 01): ledgers are rebuilt from recorded events and every admission, refusal, reading and step total checked, cache waits and promotions checked against recorded producers, cancellation outcomes checked, blobs checked against their digests, and labels only added, so a crafted tape cannot lift the limits on what a replay consumes, substitute bodies, hand a branch another key's cached value, or unlabel a value | Wrong results, a scoring problem, not an authority problem |
 | T14 | Sensitive data persisted in tapes, caches and state, or sent to clients | Journal-protected; labelled values redacted from headless tape files and from every event leaving the daemon (below); caches keyed by type digest so untrusted values never return as trusted | Tapes and events contain unlabelled file contents and tool output by design |
 | T14b | An agent runs the `imperium` CLI (or its own client) to declassify a conversation or subscribe with `secrets: true`, unredacting its own secrets (A4) | Both operations need the desktop app's single-use challenge and native dialog; no CLI or other client path exists; refused in unattended sessions | A user approving the dialog for a request they did not make |
 | T15 | A process reaching the daemon loads or changes harnesses (A5) | `harnesses.list`, `harnesses.check` and `harnesses.source` are read-only; selection uses existing authorised session methods; persisting an authored package and approving a plugin need the desktop app's native dialog | As for every daemon method |
 | T16 | Replay divergence hides a behaviour change | Strict replay fails on any request digest mismatch; the IR hash is recorded with every run | Lenient replay mixes live and recorded calls (listed in the output) |
+| T17 | Cancellation tears or reorders effects, or turns into consent (A4, A3) | Only tools the engine or the user vouches for are aborted (never on a server's own claim); every other call drains, and the drain fence holds later writes, the frame's close and the turn's end until it finishes; every drain has a finite bound; a pending approval is withdrawn atomically and its late answer is discarded, never remembered as consent, a session allowance or a denial; an extension install withdrawn before approval is not installed (chapter 03) | Writes in `defer` blocks are exempt from the fence; a remote side may still act on an `abandoned` call |
 
 ## Redaction of events leaving the daemon
 

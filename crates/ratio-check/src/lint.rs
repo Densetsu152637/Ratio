@@ -248,10 +248,11 @@ impl Checker<'_> {
                         {
                             root = object;
                         }
-                        if let Some(Res::Local(l)) =
-                            self.tables[st.module.0].res.get(&Key::from(root.span))
-                            && st.derived.insert(*l)
-                        {
+                        let local = match self.tables[st.module.0].res.get(&Key::from(root.span)) {
+                            Some(Res::Local(l)) => Some(*l),
+                            _ => None,
+                        };
+                        if local.is_some_and(|l| st.derived.insert(l)) {
                             st.changed = true;
                         }
                     }

@@ -3,12 +3,12 @@
 
 // A `Brief` is never an instruction: it reaches `task` sections only.
 
-fn ask(t: Task) -> Prompt {
+fn ask(t: TaskInput) -> Prompt {
   prompt {
     instruct t.brief
   }
 }
 
-fn as_str(t: Task) -> Str {
+fn as_str(t: TaskInput) -> Str {
   "Do: {t.brief}"
 }
