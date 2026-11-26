@@ -16,8 +16,8 @@ mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ratio_eval::{CancelToken, Limits, Outcome, Prepared, Value, work};
-use support::{prepared, run, run_with, value};
+use ratio_eval::{CancelToken, Limits, Outcome, Prepared, Value};
+use support::{prepared, run, run_logged, run_with, value};
 
 /// Every case applies one built-in to prepared arguments, so a function's steps are the
 /// built-in's charge plus a few steps of body.
@@ -286,11 +286,12 @@ const FACTOR: u64 = 8;
 
 #[test]
 fn the_counted_work_stays_within_a_multiple_of_the_charge() {
-    if !work::ENABLED {
+    if !cfg!(debug_assertions) {
         return;
     }
     let p = prepared(SOURCE);
     let mut ratios: Vec<(f64, String)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for n in [100, 2000] {
         let b = Bundle::new(&p, n);
         for (name, args, _) in CASES {
@@ -299,39 +300,56 @@ fn the_counted_work_stays_within_a_multiple_of_the_charge() {
             } else {
                 b.args(args)
             };
-            work::reset();
-            let f = run(&p, name, args);
-            let done = work::total();
+            let (f, log) = run_logged(&p, name, args, Limits::default());
             assert!(
                 matches!(f.outcome, Outcome::Returned(_)),
                 "{name}: raised at n = {n}"
             );
-            let allowed = FACTOR * 64 * f.steps;
-            #[allow(clippy::cast_precision_loss, reason = "a ratio for the report")]
-            let ratio = done as f64 / (64 * f.steps) as f64;
-            ratios.push((ratio, format!("{name}@{n}")));
-            assert!(
-                done <= allowed,
-                "{name} at n = {n}: {done} units of work for {} steps (at most {allowed})",
-                f.steps
-            );
+            // The machine harvests the counters (the structures', the comparisons' and the
+            // built-ins' own) around each pure call, on whichever thread ran it.
+            for w in &log {
+                seen.insert(w.name);
+                let allowed = FACTOR * 64 * w.steps;
+                #[allow(clippy::cast_precision_loss, reason = "a ratio for the report")]
+                let ratio = w.work as f64 / (64 * w.steps) as f64;
+                ratios.push((ratio, format!("{}@{n}", w.name)));
+                assert!(
+                    w.work <= allowed,
+                    "{} at n = {n}: {} units of work for {} steps (at most {allowed})",
+                    w.name,
+                    w.work,
+                    w.steps
+                );
+            }
         }
     }
     ratios.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (r, name) in ratios.iter().take(8) {
         eprintln!("work / charge {r:.2}  {name}");
     }
+    // Every pure built-in of stage 8 that the cases call was seen (callbacks are tasks and
+    // are not logged).
+    for name in [
+        "list.sort",
+        "list.unique",
+        "map.from",
+        "json.validate",
+        "json.diff",
+        "json.patch",
+    ] {
+        assert!(seen.contains(name), "`{name}` never ran");
+    }
 }
 
 #[test]
 fn the_counters_do_count() {
-    if !work::ENABLED {
+    if !cfg!(debug_assertions) {
         return;
     }
     let p = prepared(SOURCE);
-    work::reset();
-    let _ = run(&p, "w_sort", vec![ints(2000)]);
-    assert!(work::total() >= 2000, "{}", work::total());
+    let (_, log) = run_logged(&p, "w_sort", vec![ints(2000)], Limits::default());
+    let w = log.iter().find(|w| w.name == "list.sort").expect("a sort");
+    assert!(w.work >= 2000, "{}", w.work);
 }
 
 /// A built-in whose input-size charge exceeds the steps left raises `Budget { which: steps }`
@@ -355,20 +373,15 @@ fn a_charge_the_steps_left_cannot_pay_raises_budget_without_running() {
         } else {
             b.args(args)
         };
-        work::reset();
-        let f = run_with(&p, name, args, limits);
+        let (f, log) = run_logged(&p, name, args, limits);
         let Outcome::Raised(e) = &f.outcome else {
             panic!("{name} ran")
         };
         assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{name}");
         assert!(f.steps <= 1500, "{name}: {} steps", f.steps);
-        if work::ENABLED {
-            assert!(
-                work::total() < 1000,
-                "{name} did {} units of work",
-                work::total()
-            );
-        }
+        // A built-in that ran is logged: the refused one did not (an argument's `json.parse` of
+        // a few characters may be there).
+        assert!(log.iter().all(|w| w.work < 1000), "{name} ran: {log:?}");
     }
     // Refusing all of them took no real time.
     assert!(
@@ -417,15 +430,12 @@ fn a_long_map_key_is_refused_before_it_is_compared() {
         ..Limits::default()
     };
     for name in ["k_get", "k_has", "k_set", "k_remove", "k_update"] {
-        work::reset();
-        let f = run_with(&p, name, vec![m.clone(), key.clone()], limits);
+        let (f, log) = run_logged(&p, name, vec![m.clone(), key.clone()], limits);
         let Outcome::Raised(e) = &f.outcome else {
             panic!("{name} ran")
         };
         assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{name}");
-        if work::ENABLED {
-            assert!(work::total() < 100, "{name} did {} units", work::total());
-        }
+        assert!(log.is_empty(), "{name} ran: {log:?}");
     }
 }
 
@@ -492,24 +502,29 @@ fn a_loop_of_pushes_or_sets_is_charged_n_log_n() {
     for name in ["pushes", "sets", "text_sets"] {
         let mut last = 0u64;
         for n in [1000u64, 10_000, 100_000] {
-            work::reset();
-            let f = run(&p, name, vec![Value::int(i64::try_from(n).unwrap())]);
+            let (f, log) = run_logged(
+                &p,
+                name,
+                vec![Value::int(i64::try_from(n).unwrap())],
+                Limits::default(),
+            );
             assert!(matches!(f.outcome, Outcome::Returned(_)), "{name} {n}");
-            let log = u64::from(64 - n.leading_zeros());
+            let lg = u64::from(64 - n.leading_zeros());
             assert!(
-                f.steps <= 16 * n * log,
+                f.steps <= 16 * n * lg,
                 "{name}: {} steps for {n} (limit {})",
                 f.steps,
-                16 * n * log
+                16 * n * lg
             );
             assert!(f.steps > last, "{name}: charges grow with n");
             last = f.steps;
-            if work::ENABLED {
+            for w in &log {
                 assert!(
-                    work::total() <= FACTOR * 64 * f.steps,
-                    "{name} at {n}: {} units of work for {} steps",
-                    work::total(),
-                    f.steps
+                    w.work <= FACTOR * 64 * w.steps,
+                    "{name} at {n}: `{}` did {} units of work for {} steps",
+                    w.name,
+                    w.work,
+                    w.steps
                 );
             }
         }

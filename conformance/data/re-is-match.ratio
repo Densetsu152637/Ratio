@@ -1,0 +1,30 @@
+// arg: "order 66"
+// arg: "("
+// expect: value ["true", "false", "Invalid", "true", "true"]
+// expect: labels secret secret none secret none
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str, p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(re.is_match("\\d+", s)),
+    text.show(re.is_match("^\\d", s)),
+    text.show(fails(|| re.is_match(p, s))),
+    text.show(told(|| re.is_match(p, "x"))),
+    text.show(re.is_match("a", "cat")),
+  ]
+}

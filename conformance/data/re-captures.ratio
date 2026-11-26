@@ -1,0 +1,31 @@
+// arg: "key=value"
+// arg: "\\1"
+// expect: value ["[\"key=value\",\"key\",\"value\",\"-\"]", "{\"k\":\"key\"}", "none", "Invalid", "true"]
+// expect: labels secret secret secret none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str, p: Str) -> [Untrusted<Str>] {
+  let c = re.captures("(?P<k>\\w+)=(\\w+)(x)?", s)
+  [
+    text.show((c?.groups ?? []).map(|g| g ?? "-")),
+    text.show(c?.named),
+    text.show(re.captures("z", s)),
+    text.show(fails(|| re.captures(p, "x"))),
+    text.show(told(|| re.captures(p, "x"))),
+  ]
+}

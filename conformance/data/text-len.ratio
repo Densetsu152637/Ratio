@@ -1,0 +1,10 @@
+// arg: "héllo"
+// expect: value ["5", "0"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.len(s)),
+    text.show(text.len("")),
+  ]
+}

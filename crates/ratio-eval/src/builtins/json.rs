@@ -30,7 +30,7 @@ pub(super) fn s_patch(a: &Args) -> Sizes {
         n,
         n2: ops,
         c: n.saturating_add(ops),
-        m: 0,
+        ..Sizes::default()
     }
 }
 
@@ -84,7 +84,8 @@ pub(super) fn validate_(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
     let layout = std::sync::Arc::clone(&cx.p.rt.violation);
     let mut out = Gather::new();
     let cx_ref: &Cx<'_> = cx;
-    validate(cx_ref, j, schema, budget, &mut |pointer, message| {
+    let paid = std::sync::atomic::AtomicU64::new(0);
+    let walked = validate(cx_ref, j, schema, budget, &paid, &mut |pointer, message| {
         let message = Value::new_text(cx_ref.heap, message).map_err(|f| cx_ref.fault(f, labels))?;
         let pointer = Value::new_text(cx_ref.heap, pointer.to_owned())
             .map_err(|f| cx_ref.fault(f, labels))?;
@@ -95,7 +96,12 @@ pub(super) fn validate_(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
         )
         .map_err(|f| cx_ref.fault(f, labels))?;
         out.push(cx_ref, record)
-    })?;
+    });
+    // The pattern work is paid for, whether the walk finished or not.
+    cx.debit = cx
+        .debit
+        .saturating_add(paid.load(std::sync::atomic::Ordering::Relaxed));
+    walked?;
     out.finish(cx, labels)
 }
 

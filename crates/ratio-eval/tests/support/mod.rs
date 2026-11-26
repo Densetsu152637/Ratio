@@ -65,6 +65,27 @@ pub fn run_with(p: &Arc<Prepared>, name: &str, args: Vec<Value>, limits: Limits)
     ratio_eval::block_on(eval)
 }
 
+/// As [`run_with`], with the machine's log of pure built-in calls (their charge and counted
+/// work; empty in release builds).
+pub fn run_logged(
+    p: &Arc<Prepared>,
+    name: &str,
+    args: Vec<Value>,
+    limits: Limits,
+) -> (Finished, Vec<ratio_eval::BuiltinWork>) {
+    let entry = p
+        .find("main.ratio", name)
+        .unwrap_or_else(|| panic!("no function `{name}`"));
+    let mut eval = ratio_eval::evaluate(Arc::clone(p), entry, args, limits, CancelToken::new())
+        .expect("starts");
+    let finished = ratio_eval::block_on(&mut eval);
+    #[cfg(debug_assertions)]
+    let log = eval.machine().work_log().to_vec();
+    #[cfg(not(debug_assertions))]
+    let log = Vec::new();
+    (finished, log)
+}
+
 pub fn run(p: &Arc<Prepared>, name: &str, args: Vec<Value>) -> Finished {
     run_with(p, name, args, Limits::default())
 }

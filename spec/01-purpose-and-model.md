@@ -79,7 +79,10 @@ pub harness turn(turn: Turn) -> Reply {
   (chapter 07, limits). At every 1,000-step checkpoint it yields to the async runtime as well as
   checking cancellation, so a long pure stretch never holds a runtime worker that other sessions
   and the agent's own branches need. A pure built-in whose input exceeds an implementation
-  threshold (for example 64 KiB of text or 16,384 elements) runs on a bounded blocking pool while
+  threshold (for example 64 KiB of text or 16,384 elements), or whose charge before running
+  exceeds one (for example ten checkpoints, as for a heavy pattern over a short text), runs on a
+  bounded blocking pool, as does, whenever the steps left exceed that threshold, a built-in that
+  debits its later work as it goes (an iteration over matches), while
   its branch awaits it, with the same result, labels and charges, its heap accounted before
   dispatch; built-ins that take callbacks
   never run there, so program code always stays on the agent's task. Values are `Send + Sync`

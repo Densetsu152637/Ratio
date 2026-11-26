@@ -1,0 +1,11 @@
+// arg: "haystack"
+// expect: value ["true", "false", "true"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.starts_with(s, "hay")),
+    text.show(text.starts_with(s, "st")),
+    text.show(text.starts_with("ab", "a")),
+  ]
+}

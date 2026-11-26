@@ -2,6 +2,13 @@
 // configuration record), as the checker knows them. They are in scope in every file behind
 // the file's own names. Shapes the specification does not spell out are marked provisional.
 
+// Text (chapter 06, `data`): what `text.code_blocks` and the `re` built-ins return. Chapter 06
+// writes them without a parameter; they take the text type `S` of the call (provisional), so
+// parts of untrusted text stay untrusted.
+type Match<S> = { text: S, start: Int, end: Int }
+type Captures<S> = { groups: [S?], named: Map<Str, S> }
+type CodeBlock<S> = { lang?: S, code: S }
+
 // Turns and tasks (chapter 01)
 type Turn = {
   message: UserText,

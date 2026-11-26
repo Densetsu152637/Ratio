@@ -14,8 +14,8 @@ mod support;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use ratio_eval::{Labels, Limits, Outcome, Value, work};
-use support::{SECRET, prepared, run, run_with};
+use ratio_eval::{Labels, Limits, Outcome, Value};
+use support::{SECRET, prepared, run, run_logged, run_with};
 
 fn scan(f: &ratio_eval::Finished) -> Labels {
     match &f.outcome {
@@ -180,7 +180,7 @@ fn big(j: Json, s: Json) -> Int { json.validate(j, s).len() }
         "validate {validating:?} against equal {comparing:?}"
     );
     // A walk that restarts on the large stack still counts its work for the caller.
-    if work::ENABLED {
+    if cfg!(debug_assertions) {
         let nested = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
         let parse = prepared("fn j(s: Str) -> Json { json.parse(s) }");
         let doc = support::value(&parse, "j", vec![Value::text(&nested(60))]);
@@ -189,10 +189,13 @@ fn big(j: Json, s: Json) -> Int { json.validate(j, s).len() }
             "j",
             vec![Value::text(r##"{"items":{"$ref":"#"}}"##)],
         );
-        work::reset();
-        let f = run(&p, "big", vec![doc, schema]);
+        let (f, log) = run_logged(&p, "big", vec![doc, schema], Limits::default());
         assert!(matches!(f.outcome, Outcome::Returned(_)));
-        assert!(work::total() >= 60, "{}", work::total());
+        let w = log
+            .iter()
+            .find(|w| w.name == "json.validate")
+            .expect("a validate");
+        assert!(w.work >= 60, "{}", w.work);
     }
 }
 
@@ -225,11 +228,11 @@ fn a_failing_schema_derivation_is_charged_for_its_work() {
     for i in 0..levels {
         let _ = writeln!(
             src,
-            "type T{i} = {{ a: T{j}, b: T{j}, c: T{j}, d: T{j} }}\n",
+            "type T{i} = {{ a: T{j}, b: T{j}, c: T{j}, d: T{j} }}",
             j = i + 1
-        ));
+        );
     }
-    src.push_str(&format!("type T{levels} = {{ z: Int }}\n"));
+    let _ = writeln!(src, "type T{levels} = {{ z: Int }}");
     src.push_str(
         "fn s() -> Bool { try { let j = json.schema::<T0>(); true } catch e { false } }\n",
     );
@@ -241,4 +244,91 @@ fn a_failing_schema_derivation_is_charged_for_its_work() {
         "only {} steps for the whole derivation",
         f.steps
     );
+}
+
+/// Violations of `schema` by the JSON text `instance`, or the error kind.
+fn violations(
+    p: &std::sync::Arc<ratio_eval::Prepared>,
+    instance: &str,
+    schema: &str,
+) -> Result<i64, String> {
+    let f = run(p, "v", vec![Value::text(instance), Value::text(schema)]);
+    match f.outcome {
+        Outcome::Returned(v) => Ok(v.as_int().unwrap()),
+        Outcome::Raised(e) => Err(e.kind(p)),
+    }
+}
+
+/// `pattern` reads as ECMAScript reads it where the `re` syntax differs, or is refused.
+#[test]
+fn patterns_mean_what_ecmascript_means_or_are_refused() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let pat = |pattern: &str| format!("{{\"pattern\":\"{pattern}\"}}");
+    let cases: [(&str, &str, Result<i64, &str>); 12] = [
+        // `.` stops at every line terminator.
+        ("\"a\\rb\"", "^a.b$", Ok(1)),
+        ("\"a\\u2028b\"", "^a.b$", Ok(1)),
+        ("\"axb\"", "^a.b$", Ok(0)),
+        // `\d` and `\w` are ASCII; `\s` is ECMAScript's (U+FEFF in, U+0085 out).
+        ("\"\\u0663\"", "^\\\\d$", Ok(1)),
+        ("\"\\u00e9\"", "^\\\\w$", Ok(1)),
+        ("\"\\ufeff\"", "^\\\\s$", Ok(0)),
+        ("\"\\u0085\"", "^\\\\s$", Ok(1)),
+        // Refused rather than read differently.
+        ("\"a\"", "\\\\ba", Err("Invalid")),
+        ("\"x\"", "[]x]", Err("Invalid")),
+        ("\"x\"", "[^]", Err("Invalid")),
+        // A character outside the basic plane is one character, as ECMAScript's `u` flag reads it.
+        ("\"\\ud83d\\ude00\"", "^.$", Ok(0)),
+        ("\"a\"", "(?=a)a", Err("Invalid")),
+    ];
+    for (instance, pattern, want) in cases {
+        let got = violations(&p, instance, &pat(pattern));
+        let want = want.map_err(str::to_owned);
+        assert_eq!(got, want, "{instance} against {pattern}");
+    }
+}
+
+/// A pattern of repeated wide classes is compiled by the linear engine, which charges its
+/// program (the old matcher copied a class 4,000 times for 130 MB), and a long text against it
+/// is charged by its length times the program, before it runs.
+#[test]
+fn a_wide_repeated_class_is_charged_and_bounded() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let class: String = "a".repeat(4050) + "b";
+    let schema = format!("{{\"pattern\":\"(?:[{class}]{{1000}}){{4}}\"}}");
+    for len in [100usize, 400] {
+        let start = Instant::now();
+        let f = run(
+            &p,
+            "v",
+            vec![
+                Value::text(&format!("\"{}\"", "a".repeat(len))),
+                Value::text(&schema),
+            ],
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(
+            f.heap_peak < 32 * 1024 * 1024,
+            "{} bytes of heap",
+            f.heap_peak
+        );
+        match f.outcome {
+            Outcome::Returned(_) => {}
+            // Refused as too big a program, or too much work for what was paid.
+            Outcome::Raised(e) => assert!(
+                e.kind(&p) == "Invalid" || e.budget(&p).as_deref() == Some("steps"),
+                "{}",
+                e.kind(&p)
+            ),
+        }
+    }
 }

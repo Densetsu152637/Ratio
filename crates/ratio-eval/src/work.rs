@@ -3,8 +3,11 @@
 //!
 //! The persistent structures, the comparisons and the built-ins' own loops add the units of
 //! work they do (an element visited, a node built, a character compared) to a per-thread
-//! counter. Tests reset it, run a built-in, and compare the total with 64 times the steps the
-//! built-in was charged (a step pays for 64 units, chapter 06, `data`). Release builds count
+//! counter. The machine resets it before each pure built-in call and reads it after, on the
+//! thread that ran the call (inline or pooled), adding it to the body's own `Cx::work`; the
+//! total goes to `Machine::work_log`, where tests compare it with 64 times the steps the call
+//! was charged (a step pays for 64 units, chapter 06, `data`). A body that runs part of its
+//! work on another thread adds that thread's [`total`] back with [`add`]. Release builds count
 //! nothing: [`add`] compiles to nothing and [`total`] is 0.
 
 use std::cell::Cell;

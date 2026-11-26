@@ -18,6 +18,7 @@
 //! a walk that visits more than a multiple of the charge raises `Budget { which: steps }`.
 
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::error::{Kind, RtError, raise};
 use crate::heap::{Charge, cost};
@@ -28,8 +29,8 @@ use crate::plist::List;
 use crate::pmap::Map;
 use crate::value::{Json, Value};
 
-use super::nfa::Regex;
 use super::util::{Pace, heap_error};
+use crate::re::{Regex, Stopped, scratch_bytes, search_work};
 
 /// The deepest the walk nests (instance levels, applicators and `$ref` hops together).
 const MAX_NEST: u32 = 192;
@@ -127,6 +128,9 @@ pub(super) struct Validator<'a, 'b> {
     /// over (`$ref` into `allOf`) cannot do more work than was paid for.
     visits: u64,
     budget: u64,
+    /// The steps debited for pattern work (compiling, searching), which the product charge does
+    /// not size: added to the call's `debit`, and never more than the steps left.
+    paid: &'a AtomicU64,
     /// The patterns compiled so far, with the heap each holds.
     patterns: Vec<(String, Regex, Charge)>,
     /// The labels of the instance and the schema: what a bad schema's error depends on.
@@ -169,6 +173,7 @@ pub(super) fn validate(
     instance: &Value,
     schema: &Value,
     budget: u64,
+    paid: &AtomicU64,
     sink: &mut Sink<'_>,
 ) -> Result<(), RtError> {
     let labels = instance.quick() | schema.quick();
@@ -187,6 +192,7 @@ pub(super) fn validate(
             buffer: Vec::new(),
             visits: 0,
             budget,
+            paid,
             patterns: Vec::new(),
             labels,
         };
@@ -200,6 +206,8 @@ pub(super) fn validate(
         }
         return r;
     }
+    // The pattern work of the first attempt is done again, and paid for once.
+    paid.store(0, AtomicOrdering::Relaxed);
     let (r, units) = crate::stack::run(|max_depth| {
         let nest = MAX_NEST.min(u32::try_from(max_depth).unwrap_or(MAX_NEST));
         let (r, _, _) = walk(sink, nest, MAX_HOPS, false);
@@ -322,16 +330,7 @@ impl Validator<'_, '_> {
 
     /// Checks `inst` against `schema`; `Ok(true)` when it is valid.
     fn check(&mut self, inst: &Value, schema: &Value, depth: u32, hops: u32) -> Check {
-        self.visits += 1;
-        if self.visits > self.budget {
-            return Err(raise(
-                self.cx.p,
-                Kind::Budget("steps"),
-                "json.validate visited more of the schema than its charge paid for",
-                Labels::NONE,
-                self.cx.loc,
-            ));
-        }
+        self.spend(1)?;
         if depth > self.nest {
             if self.inline {
                 return Err(self.restart());
@@ -492,17 +491,61 @@ impl Validator<'_, '_> {
         Ok(ok)
     }
 
+    /// Adds work to the walk's count: past the budget the call is refused (`Budget { steps }`).
+    fn spend(&mut self, units: u64) -> Result<(), RtError> {
+        self.visits = self.visits.saturating_add(units);
+        if self.visits > self.budget {
+            return Err(raise(
+                self.cx.p,
+                Kind::Budget("steps"),
+                "json.validate did more work than its charge paid for",
+                Labels::NONE,
+                self.cx.loc,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Debits `work` units of pattern work as steps, or raises `Budget { which: steps }` before
+    /// it is done when the steps left cannot pay.
+    fn pay(&mut self, work: u64) -> Result<(), RtError> {
+        let steps = work.div_ceil(64);
+        let total = self
+            .paid
+            .load(AtomicOrdering::Relaxed)
+            .saturating_add(steps);
+        if total > self.cx.steps_left {
+            return Err(raise(
+                self.cx.p,
+                Kind::Budget("steps"),
+                "json.validate's patterns need more steps than are left",
+                Labels::NONE,
+                self.cx.loc,
+            ));
+        }
+        self.paid.store(total, AtomicOrdering::Relaxed);
+        Ok(())
+    }
+
     fn compiled(&mut self, pattern: &str) -> Result<usize, RtError> {
         if let Some(i) = self.patterns.iter().position(|(p, ..)| p == pattern) {
             return Ok(i);
         }
-        let re = Regex::new(pattern)
+        let translated = super::ecma::to_re(pattern)
             .map_err(|why| self.bad(&format!("`pattern` {pattern:?}: {why}")))?;
+        let re = match Regex::new(&translated) {
+            Ok(re) => re,
+            Err(refusal) => {
+                self.pay(refusal.work)?;
+                return Err(self.bad(&format!("`pattern` {pattern:?}: {}", refusal.message)));
+            }
+        };
+        self.pay(re.compile_work)?;
         let mut charge = Charge::none();
         charge
             .grow(
                 self.cx.heap,
-                cost::SLOT.saturating_mul(2 * re.size() as u64),
+                cost::SLOT.saturating_mul(re.weight().saturating_add(re.insts())),
             )
             .map_err(|_| heap_error(self.cx))?;
         self.patterns.push((pattern.to_owned(), re, charge));
@@ -511,9 +554,31 @@ impl Validator<'_, '_> {
 
     fn matches(&mut self, pattern: &str, text: &str) -> Result<bool, RtError> {
         let i = self.compiled(pattern)?;
-        let (found, work) = self.patterns[i].1.is_match(text);
-        self.pace.tick(self.cx, work)?;
-        Ok(found)
+        let re = &self.patterns[i].1;
+        // The search is paid for before it runs: a program's weight per character.
+        let predicted = search_work(re.weight(), text.chars().count() as u64, 0);
+        let scratch = scratch_bytes(re.insts(), 0);
+        self.pay(predicted)?;
+        let mut held = Charge::none();
+        held.grow(self.cx.heap, scratch)
+            .map_err(|_| heap_error(self.cx))?;
+        let re = &self.patterns[i].1;
+        let mut vm = re.vm(0);
+        let mut work = 0u64;
+        let cancel = self.cx.cancel;
+        let found = vm.search(&re.program, text, 0, &mut work, &|| cancel.is_cancelled());
+        drop(held);
+        crate::work::add(work);
+        match found {
+            Ok(m) => Ok(m.is_some()),
+            Err(Stopped) => Err(raise(
+                self.cx.p,
+                Kind::Cancelled,
+                "the evaluation was cancelled",
+                Labels::NONE,
+                self.cx.loc,
+            )),
+        }
     }
 
     fn string(&mut self, inst: &Value, kw: &Kw<'_>) -> Check {

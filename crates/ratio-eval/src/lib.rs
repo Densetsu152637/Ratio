@@ -10,6 +10,10 @@
 //! chapter 03 (`Budget` and `Cancelled` cannot be caught; `defer` runs on every exit). Effects
 //! are explicit suspensions of the [`Machine`] ([`Suspend::Effect`]), which stage 11's host
 //! answers.
+//!
+//! Stage 7 adds the `text` and `re` built-ins (the latter over a linear-time regex engine) and
+//! the bounded [`Pool`] large pure built-ins run on, with at most [`JOBS_IN_FLIGHT`] jobs per
+//! session, while the machine waits ([`Suspend::Wait`]).
 
 #![allow(
     clippy::many_single_char_names,
@@ -34,12 +38,16 @@ mod json;
 mod jsonedit;
 mod labels;
 mod machine;
+#[cfg(test)]
+mod offload_tests;
 mod ops;
 mod plist;
 mod pmap;
+mod pool;
 mod prepare;
 #[cfg(test)]
 mod properties;
+mod re;
 mod schema;
 pub mod sink;
 mod stack;
@@ -54,10 +62,15 @@ pub use heap::{Heap, HeapLedger};
 pub use json::MAX_JSON_DEPTH;
 pub use labels::Labels;
 pub use machine::{
-    CHECKPOINT, CancelToken, EffectRequest, Limits, Machine, Outcome, StartError, Suspend,
+    BuiltinWork, CHECKPOINT, CancelToken, EffectRequest, Limits, Machine, Outcome, StartError,
+    Suspend,
 };
 pub use plist::List;
 pub use pmap::Map;
+pub use pool::{
+    JOBS_IN_FLIGHT, OFFLOAD_ELEMENTS, OFFLOAD_STEPS, OFFLOAD_TEXT_BYTES, Pool, PoolSession,
+    Thresholds, Waiter,
+};
 pub use prepare::{Entry, PrepareError, Prepared, prepare};
 pub use value::{Fault, MAX_DEPTH, MAX_ELEMS, MAX_STR_BYTES, Str, Value};
 

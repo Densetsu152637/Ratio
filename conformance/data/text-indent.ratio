@@ -1,0 +1,11 @@
+// arg: "a\n\nb"
+// expect: value ["  a\n\n  b", "> a\n\n> b", "x"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.indent(s)),
+    text.show(text.indent(s, prefix: "> ")),
+    text.show(text.indent("x", prefix: "")),
+  ]
+}

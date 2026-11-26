@@ -1,0 +1,10 @@
+// arg: "  a b  "
+// expect: value ["  a b", "x"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.trim_end(s)),
+    text.show(text.trim_end("x ")),
+  ]
+}

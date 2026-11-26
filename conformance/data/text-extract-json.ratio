@@ -1,0 +1,12 @@
+// arg: "Here: ```json\n{\"a\": [1, 2]}\n``` done"
+// expect: value ["{\"a\":[1,2]}", "none", "none", "[1,2]"]
+// expect: labels secret none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.extract_json(s)),
+    text.show(text.extract_json("no json")),
+    text.show(text.extract_json("[1, \{\"b\" ")),
+    text.show(text.extract_json("x ] [1,2]")),
+  ]
+}

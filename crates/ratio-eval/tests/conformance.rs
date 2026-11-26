@@ -1,12 +1,18 @@
-//! The evaluation corpus (chapter 10, "The conformance suite"): `conformance/eval/`.
+//! The evaluation corpora (chapter 10, "The conformance suite"): `conformance/eval/` (the
+//! core language) and `conformance/data/` (the data built-ins of chapter 06, one file per
+//! built-in from stage 7).
 //!
-//! Each `.ratio` file is a package of one file whose `fn main()` is run (with no arguments,
-//! the default limits and no host). Its header says what must happen:
+//! Each `.ratio` file is a package of one file whose `fn main()` is run (with the default
+//! limits and no host). Its header says what must happen:
 //!
 //! ```text
+//! // arg: "text"                         (an argument for `main`, a JSON scalar, given with
+//! //                                      a secrecy label; one line per parameter)
 //! // expect: ok                          (checks and runs without raising)
 //! // expect: value {"a": [1, 2]}         (returns this value, printed as JSON; object keys in
 //! //                                      any order)
+//! // expect: labels secret none secret   (the labels found in each element of the returned
+//! //                                      list or tuple, in order: `secret` or `none`)
 //! // expect: runtime-error Invalid       (raises an error of this kind)
 //! // expect: steps 1042                  (is charged exactly this many steps)
 //! ```
@@ -19,11 +25,15 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ratio_eval::{Outcome, to_json_text};
-use support::normal;
+use ratio_eval::{Outcome, Value, to_json_text};
+use support::{J, normal};
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/eval")
+}
+
+fn data_corpus() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/data")
 }
 
 #[derive(Default)]
@@ -32,6 +42,50 @@ struct Case {
     value: Option<String>,
     error: Option<String>,
     steps: Option<u64>,
+    args: Vec<Value>,
+    labels: Option<Vec<bool>>,
+}
+
+/// A JSON scalar argument, with the secret label.
+fn argument(text: &str) -> Option<Value> {
+    let t = text.trim();
+    let v = if t.starts_with('"') {
+        match normal(t) {
+            J::Str(s) => Value::text(&unescape(&s)),
+            _ => return None,
+        }
+    } else if t == "true" || t == "false" {
+        Value::bool(t == "true")
+    } else if let Ok(i) = t.parse::<i64>() {
+        Value::int(i)
+    } else {
+        Value::float(t.parse().ok()?)
+    };
+    Some(v.with_labels(support::SECRET))
+}
+
+/// The JSON escapes a header string may use.
+fn unescape(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+            }
+            Some(c) => out.push(c),
+            None => {}
+        }
+    }
+    out
 }
 
 fn header(text: &str, file: &str) -> Result<Case, String> {
@@ -40,6 +94,11 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
         let Some(rest) = line.strip_prefix("// ") else {
             break;
         };
+        if let Some(a) = rest.strip_prefix("arg: ") {
+            case.args
+                .push(argument(a).ok_or_else(|| format!("{file}: bad argument `{a}`"))?);
+            continue;
+        }
         let Some(expect) = rest.strip_prefix("expect: ") else {
             return Err(format!("{file}: unknown header directive `{line}`"));
         };
@@ -47,6 +106,17 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
         match kind {
             "ok" if arg.is_empty() => case.ok = true,
             "value" => case.value = Some(arg.trim().to_owned()),
+            "labels" => {
+                let mut v = Vec::new();
+                for w in arg.split_whitespace() {
+                    v.push(match w {
+                        "secret" => true,
+                        "none" => false,
+                        _ => return Err(format!("{file}: bad label word `{w}`")),
+                    });
+                }
+                case.labels = Some(v);
+            }
             "runtime-error" => case.error = Some(arg.trim().to_owned()),
             "steps" => {
                 case.steps = Some(
@@ -58,7 +128,12 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
             _ => return Err(format!("{file}: unknown expectation `{expect}`")),
         }
     }
-    if !case.ok && case.value.is_none() && case.error.is_none() && case.steps.is_none() {
+    if !case.ok
+        && case.value.is_none()
+        && case.error.is_none()
+        && case.steps.is_none()
+        && case.labels.is_none()
+    {
         return Err(format!("{file}: no expectation"));
     }
     Ok(case)
@@ -105,7 +180,7 @@ fn run_file(path: &Path, failures: &mut Vec<String>) -> Case {
         }
     };
     let p = ratio_eval::prepare(&program).unwrap();
-    let finished = support::run(&p, "main", Vec::new());
+    let finished = support::run(&p, "main", case.args.clone());
     match (&finished.outcome, &case.error) {
         (Outcome::Raised(e), Some(kind)) => {
             if e.kind(&p) != *kind {
@@ -134,6 +209,9 @@ fn run_file(path: &Path, failures: &mut Vec<String>) -> Case {
                     ));
                 }
             }
+            if let Some(want) = &case.labels {
+                check_labels(&name, v, want, failures);
+            }
         }
     }
     if let Some(want) = case.steps
@@ -145,6 +223,94 @@ fn run_file(path: &Path, failures: &mut Vec<String>) -> Case {
         ));
     }
     case
+}
+
+/// Each element's labels (or the whole value's, for one word) against the expectation, and
+/// every summary against a full scan.
+fn check_labels(name: &str, v: &Value, want: &[bool], failures: &mut Vec<String>) {
+    if !v.summaries_hold() {
+        failures.push(format!("{name}: a label summary misses a label"));
+    }
+    let parts = match (want.len(), v.elements().or_else(|| v.parts())) {
+        (1, _) => vec![v.clone()],
+        (_, Some(parts)) => parts,
+        (_, None) => {
+            failures.push(format!("{name}: `labels` needs a list or tuple result"));
+            return;
+        }
+    };
+    if parts.len() != want.len() {
+        failures.push(format!(
+            "{name}: {} label words for {} elements",
+            want.len(),
+            parts.len()
+        ));
+        return;
+    }
+    for (i, (part, secret)) in parts.iter().zip(want).enumerate() {
+        let got = part.scan().contains(support::SECRET) && !part.scan().is_empty();
+        if got != *secret {
+            failures.push(format!(
+                "{name}: element {i} is {}, expected {}",
+                if got { "secret" } else { "unlabelled" },
+                if *secret { "secret" } else { "unlabelled" }
+            ));
+        }
+    }
+}
+
+/// Every `.ratio` file of a corpus directory, sorted.
+fn files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ratio"))
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn the_data_corpus_runs_as_expected() {
+    // Stage 8's files (`json.*`, `list.*`, `map.*`) are run by `data_ii.rs`.
+    let paths: Vec<PathBuf> = files(&data_corpus())
+        .into_iter()
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            name.starts_with("text-") || name.starts_with("re-")
+        })
+        .collect();
+    let mut failures = Vec::new();
+    for path in &paths {
+        let case = run_file(path, &mut failures);
+        if case.labels.is_none() {
+            failures.push(format!(
+                "{}: every data file checks label propagation",
+                path.display()
+            ));
+        }
+    }
+    // One file per `text` and `re` built-in, named after it (`text.split_once` is
+    // `text-split-once.ratio`).
+    let names: std::collections::BTreeSet<String> = paths
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    for (builtin, _) in ratio_eval::builtins::implemented() {
+        if builtin.starts_with("text.") || builtin.starts_with("re.") {
+            let file = builtin.replacen('.', "-", 1).replace('_', "-");
+            if !names.contains(&file) {
+                failures.push(format!("no conformance/data/{file}.ratio for `{builtin}`"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} problem(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]

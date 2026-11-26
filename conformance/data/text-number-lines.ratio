@@ -1,0 +1,12 @@
+// arg: "a\nb\n"
+// expect: value ["1\ta\n2\tb\n", "10\ta\n11\tb\n", "", "1\tx"]
+// expect: labels secret secret none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.number_lines(s)),
+    text.show(text.number_lines(s, start: 10)),
+    text.show(text.number_lines("")),
+    text.show(text.number_lines("x")),
+  ]
+}

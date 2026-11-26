@@ -1,0 +1,10 @@
+// arg: "a\r\nb\n\nc\n"
+// expect: value ["[\"a\",\"b\",\"\",\"c\"]", "[]"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.lines(s)),
+    text.show(text.lines("")),
+  ]
+}

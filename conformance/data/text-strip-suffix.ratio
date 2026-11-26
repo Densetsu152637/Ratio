@@ -1,0 +1,11 @@
+// arg: "x.txt"
+// expect: value ["x", "none", "a"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.strip_suffix(s, ".txt")),
+    text.show(text.strip_suffix(s, ".md")),
+    text.show(text.strip_suffix("ab", "b")),
+  ]
+}
