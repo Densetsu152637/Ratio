@@ -229,7 +229,70 @@ fn fastest(runs: u32, mut f: impl FnMut()) -> std::time::Duration {
         .unwrap()
 }
 
+/// Debug builds count the comparisons frame opening makes (`frame::work_done`): opening
+/// with 256 folders, and with 256 tools under a parent with 64, makes no more than a fixed
+/// multiple of the steps charged for the whole call, and charges well above a plain call.
+#[cfg(debug_assertions)]
 #[test]
+fn opening_a_frame_makes_work_within_a_fixed_multiple_of_its_charge() {
+    // 256 tools asked for (a literal list) under a parent with 64, and 256 folders.
+    let wanted: Vec<String> = (0..256).map(|i| format!("tool_{i}")).collect();
+    let parent: Vec<String> = (0..64).map(|i| format!("tool_{}", i * 3)).collect();
+    let source = format!(
+        r"
+harness paths(ts: [Str]) -> Int with {{ permissions: {{ paths: ts }} }} {{ 1 }}
+harness tools() -> Int with {{ tools: {{ need: [], want: [{}] }} }} {{ 1 }}
+harness narrow() -> Int with {{ tools: [{}] }} {{ tools() }}
+harness plain() -> Int {{ 1 }}
+fn open_paths(xs: [Str]) -> Int {{ paths(xs) }}
+fn open_tools() -> Int {{ narrow() }}
+fn open_plain() -> Int {{ plain() }}
+",
+        wanted.join(", "),
+        parent.join(", ")
+    );
+    let p = support::prepared(&source);
+    let measure = |name: &str, args: Vec<Value>| {
+        let entry = p.find("main.ratio", name).unwrap();
+        let eval = ratio_eval::evaluate(
+            Arc::clone(&p),
+            entry,
+            args,
+            Limits::default(),
+            CancelToken::new(),
+        )
+        .unwrap();
+        let before = ratio_eval::frame::work_done();
+        let f = ratio_eval::block_on(eval);
+        let work = ratio_eval::frame::work_done() - before;
+        assert!(matches!(f.outcome, Outcome::Returned(_)), "{name}");
+        (work, f.steps)
+    };
+    let (plain_work, plain_steps) = measure("open_plain", Vec::new());
+    let folders = (0..256)
+        .map(|i| Value::text(&format!("/repo/area{i}/sub")))
+        .collect();
+    let cases = [
+        ("open_paths", vec![Value::list(folders).unwrap()]),
+        ("open_tools", Vec::new()),
+    ];
+    for (name, args) in cases {
+        let (work, steps) = measure(name, args);
+        assert!(
+            work > 10 * plain_work.max(1),
+            "{name}: only {work} comparisons"
+        );
+        assert!(
+            work <= 2 * steps,
+            "{name}: {work} comparisons for {steps} steps (a plain call: {plain_work} for              {plain_steps})"
+        );
+    }
+}
+
+/// The wall-clock version, for manual runs on a quiet machine (`--ignored`): CI runners are too
+/// noisy for it.
+#[test]
+#[ignore = "wall-clock timing; run by hand on a quiet machine"]
 fn opening_a_frame_costs_time_in_proportion_to_its_charge() {
     // A harness with 256 folders, opened once, against a pure loop, both charged in steps:
     // the opening may take at most a fixed multiple of the loop's time per step.

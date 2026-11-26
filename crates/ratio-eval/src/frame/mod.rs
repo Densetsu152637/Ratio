@@ -36,4 +36,8 @@ pub use scope::{
 };
 pub use stack::{FrameCtx, Session};
 
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use scope::work_done;
+
 pub(crate) use config::{parse_work as config_work, read as read_config};

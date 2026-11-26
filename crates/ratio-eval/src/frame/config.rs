@@ -82,6 +82,7 @@ fn texts(v: &Value, what: &str) -> Result<Vec<Arc<str>>, String> {
     let items = v
         .elements()
         .ok_or_else(|| format!("`{what}` is not a list"))?;
+    super::scope::count(items.len() as u64);
     if items.len() > MAX_CONFIG_LIST {
         return Err(format!(
             "`{what}` holds {} entries, over the limit of {MAX_CONFIG_LIST}",

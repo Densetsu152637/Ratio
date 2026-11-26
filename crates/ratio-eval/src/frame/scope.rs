@@ -18,6 +18,31 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Debug builds: the elementary comparisons frame opening made on this thread.
+    static WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` elementary comparisons (debug builds only; nothing in release builds).
+#[inline]
+pub(crate) fn count(n: u64) {
+    #[cfg(debug_assertions)]
+    WORK.with(|w| w.set(w.get().saturating_add(n)));
+    #[cfg(not(debug_assertions))]
+    let _ = n;
+}
+
+/// Debug builds: the comparisons frame opening has made on this thread so far (tool pattern
+/// and folder comparisons, set insertions, rules compared and copied, configuration entries
+/// read), for the test that keeps them within a fixed multiple of the steps charged.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+#[must_use]
+pub fn work_done() -> u64 {
+    WORK.with(std::cell::Cell::get)
+}
+
 /// A permission mode. The order is `plan < ask < default < auto, accept_edits < full`;
 /// `auto` and `accept_edits` are incomparable and meet at `default`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -160,6 +185,7 @@ impl ToolPat {
     /// Whether every tool `other` names is named by `self`.
     #[must_use]
     pub fn covers(&self, other: &ToolPat) -> bool {
+        count(1);
         match (self, other) {
             (ToolPat::Name(a), ToolPat::Name(b)) => a == b,
             (ToolPat::Name(_), ToolPat::Prefix(_)) => false,
@@ -211,6 +237,7 @@ impl ToolSet {
     pub fn of(pats: impl IntoIterator<Item = ToolPat>) -> ToolSet {
         let all: Vec<ToolPat> = pats
             .into_iter()
+            .inspect(|_| count(1))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -287,6 +314,7 @@ impl Rules {
     /// every ask and deny rule the parent has.
     #[must_use]
     pub fn within(&self, parent: &Rules) -> bool {
+        count((self.allow.len() + parent.ask.len() + parent.deny.len()) as u64);
         self.allow.is_subset(&parent.allow)
             && self.ask.is_superset(&parent.ask)
             && self.deny.is_superset(&parent.deny)
@@ -371,6 +399,7 @@ impl Folder {
     /// components a prefix of its components (so `/a` does not contain `/ab`).
     #[must_use]
     pub fn contains(&self, other: &Folder) -> bool {
+        count(1);
         self.root == other.root
             && other.parts.len() >= self.parts.len()
             && other.parts[..self.parts.len()] == self.parts[..]
@@ -408,6 +437,7 @@ impl Paths {
     fn of(folders: impl IntoIterator<Item = Folder>) -> Paths {
         let all: Vec<Folder> = folders
             .into_iter()
+            .inspect(|_| count(1))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -934,6 +964,13 @@ pub fn attenuate(
     };
     let mode = request.mode.map_or(parent.mode, |m| m.meet(parent.mode));
     let mut rules = parent.rules.clone();
+    count(
+        (rules.allow.len()
+            + rules.ask.len()
+            + rules.deny.len()
+            + request.deny.len()
+            + request.ask.len()) as u64,
+    );
     rules.deny.extend(request.deny.iter().cloned());
     rules.ask.extend(request.ask.iter().cloned());
     let paths = match &request.paths {
