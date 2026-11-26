@@ -1,0 +1,13 @@
+// arg: 9007199254740993
+// expect: value ["9007199254740992.0","3.0","9.223372036854776e18","-9.223372036854776e18","9007199254740992.0"]
+// expect: labels secret none none none none
+
+fn main(i: Int) -> [Untrusted<Str>] {
+  [
+    text.show(math.to_float(i)),
+    text.show(math.to_float(3)),
+    text.show(math.to_float(9223372036854775807)),
+    text.show(math.to_float(-9223372036854775807 - 1)),
+    text.show(math.to_float(9007199254740993)),
+  ]
+}

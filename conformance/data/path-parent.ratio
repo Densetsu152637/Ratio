@@ -1,0 +1,19 @@
+// arg: "/a/b/../c/./d.tar.gz"
+// expect: value ["/a/b/../c/.","/a","/","none","a","","none","C:/a","a","none","/a/b/../c/./d.tar.gz"]
+// expect: labels secret none none none none none none none none none secret
+
+fn main(p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(path.parent(p)),
+    text.show(path.parent("/a/b")),
+    text.show(path.parent("/a")),
+    text.show(path.parent("/")),
+    text.show(path.parent("a/b")),
+    text.show(path.parent("a")),
+    text.show(path.parent("")),
+    text.show(path.parent("C:\\a\\b")),
+    text.show(path.parent("a/b/")),
+    text.show(path.parent("C:/")),
+    text.show(path.parent(p + "/z")),
+  ]
+}

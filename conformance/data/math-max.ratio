@@ -1,0 +1,16 @@
+// arg: 3
+// arg: 7
+// expect: value ["9","7","7","2","2.0","1.0","2s"]
+// expect: labels secret secret secret none none none none
+
+fn main(a: Int, b: Int) -> [Untrusted<Str>] {
+  [
+    text.show(math.max(a, 9)),
+    text.show(math.max(1, b)),
+    text.show(math.max(a, b)),
+    text.show(math.max(1, 2)),
+    text.show(math.max(2.0, 1.0)),
+    text.show(math.max(math.sqrt(-1.0), 1.0)),
+    text.show(math.max(1s, 2s)),
+  ]
+}

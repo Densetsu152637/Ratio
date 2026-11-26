@@ -1,0 +1,44 @@
+// arg: "HTTP://Example.com:80/a/./b/../c?x=1&y=%20z#frag"
+// arg: "v w"
+// expect: value ["HTTP://Example.com:80/a/./b/../c?x=1&y=%20z&k=v#frag","http://a/?k=v%20w","http://a/?v%20w=v","http://a/b?x=new&y=2&z=a%20b#f","http://a/b?a=1","http://a/b?x=3","http://a/?k=v","http://a/?k%26=v%3D#f","http://a/?x=2","http://a/?a=%C3%A9","Invalid","true"]
+// expect: labels secret secret secret none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(u: Str, s: Str) -> [Untrusted<Str>] {
+  [
+    url.with_query(u, { k: "v" }),
+    url.with_query("http://a/", { k: s }),
+    url.with_query("http://a/", map.set({}, s, "v")),
+    url.with_query("http://a/b?x=1&y=2#f", { x: "new", z: "a b" }),
+    url.with_query("http://a/b", { a: "1" }),
+    url.with_query("http://a/b?x=1&x=2", { x: "3" }),
+    url.with_query("http://a/?k=v", {}),
+    url.with_query("http://a/#f", map.set({}, "k&", "v=")),
+    url.with_query("http://a/?%78=1", { x: "2" }),
+    url.with_query("http://a/?", { a: "é" }),
+    fails(|| url.with_query("not a url", { a: "1" })),
+    text.show(told(|| url.with_query(u + " ", { a: "1" }))),
+  ]
+}

@@ -1,0 +1,15 @@
+// arg: 3.0
+// expect: value ["5.0","5.0","1.414213562373095e200","1.414213562373095e-200","0.0","0.0","2.0"]
+// expect: labels secret none none none none none none
+
+fn main(x: Float) -> [Untrusted<Str>] {
+  [
+    text.show(vec.norm([x, 4.0])),
+    text.show(vec.norm([3.0, 4.0])),
+    text.show(vec.norm([1e200, 1e200])),
+    text.show(vec.norm([1e-200, 1e-200])),
+    text.show(vec.norm(list.take([1.0], 0))),
+    text.show(vec.norm([0.0, 0.0])),
+    text.show(vec.norm([1.0, 1.0, 1.0, 1.0])),
+  ]
+}

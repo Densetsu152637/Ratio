@@ -1,0 +1,38 @@
+// arg: "{{a}}"
+// expect: value ["[\"a\"]","[\"a\",\"b\",\"c.d\",\"e\"]","[]","[\"a\"]","Invalid","Invalid","true"]
+// expect: labels secret none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(t: Str) -> [Untrusted<Str>] {
+  [
+    text.show(template.names(t)),
+    text.show(template.names(r"{{a}} {{#b}}{{c.d}}{{a}}{{/b}} {{^e}}{{.}}{{/e}}")),
+    text.show(template.names("plain")),
+    text.show(template.names(r"{{ a }}")),
+    fails(|| template.names(r"{{")),
+    fails(|| template.names(r"{{#a}}")),
+    text.show(told(|| template.names(t + "\{\{"))),
+  ]
+}

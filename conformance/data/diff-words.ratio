@@ -1,0 +1,15 @@
+// arg: "the quick brown fox"
+// arg: "the slow brown dog"
+// expect: value ["[{\"op\":\"equal\",\"text\":\"the\"},{\"op\":\"delete\",\"text\":\"quick\"},{\"op\":\"insert\",\"text\":\"slow\"},{\"op\":\"equal\",\"text\":\"brown\"},{\"op\":\"delete\",\"text\":\"fox\"},{\"op\":\"insert\",\"text\":\"dog\"}]","[{\"op\":\"equal\",\"text\":\"the\"},{\"op\":\"equal\",\"text\":\"quick\"},{\"op\":\"equal\",\"text\":\"brown\"},{\"op\":\"equal\",\"text\":\"fox\"}]","[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"equal\",\"text\":\"b\"}]","[{\"op\":\"insert\",\"text\":\"x\"},{\"op\":\"insert\",\"text\":\"y\"}]","[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"equal\",\"text\":\"b\"}]","[]"]
+// expect: labels secret secret none none none none
+
+fn main(a: Str, b: Str) -> [Untrusted<Str>] {
+  [
+    text.show(diff.words(a, b)),
+    text.show(diff.words(a, "the quick brown fox")),
+    text.show(diff.words("a  b", "a b")),
+    text.show(diff.words("", "x y")),
+    text.show(diff.words("a\nb", "a b")),
+    text.show(diff.words("", "")),
+  ]
+}

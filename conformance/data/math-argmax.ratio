@@ -1,0 +1,14 @@
+// arg: 5
+// expect: value ["1","1","none","0","1","none"]
+// expect: labels secret none none none none none
+
+fn main(i: Int) -> [Untrusted<Str>] {
+  [
+    text.show(math.argmax([1, i, 3])),
+    text.show(math.argmax([3, 9, 9])),
+    text.show(math.argmax(list.take([1], 0))),
+    text.show(math.argmax([1.0, math.sqrt(-1.0), 0.5])),
+    text.show(math.argmax([1s, 3s, 2s])),
+    text.show(math.argmax([math.sqrt(-1.0)])),
+  ]
+}

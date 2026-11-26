@@ -1,0 +1,37 @@
+// arg: 1.0
+// expect: value ["[4.0,6.0]","[4.0,3.0]","[0.30000000000000004,0.30000000000000004]","[]","Invalid","true"]
+// expect: labels secret secret none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(x: Float) -> [Untrusted<Str>] {
+  [
+    text.show(vec.add([x, 2.0], [3.0, 4.0])),
+    text.show(vec.add([1.0, 2.0], [3.0, x])),
+    text.show(vec.add([0.1, 0.2], [0.2, 0.1])),
+    text.show(vec.add(list.take([1.0], 0), list.take([1.0], 0))),
+    fails(|| vec.add([1.0], [1.0, 2.0])),
+    text.show(told(|| vec.add([x], [1.0, 2.0]))),
+  ]
+}

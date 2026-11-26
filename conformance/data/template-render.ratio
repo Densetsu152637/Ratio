@@ -1,0 +1,60 @@
+// arg: "Ann"
+// expect: value ["Hi Ann!","Ann","A","Ann","Ann","x","deep","[1][2][3]","a,b,","none","no","N T","2.5 true 3s","ab;ab;","plain {text}","from a map","empty","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","true","true"]
+// expect: labels secret secret secret secret secret none none none none none none none none none none none none none none none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(name: Str) -> [Untrusted<Str>] {
+  [
+    template.render(r"Hi {{n}}!", { n: name }),
+    template.render(r"{{#xs}}{{.}}{{/xs}}", { xs: [name] }),
+    template.render(r"{{#flag}}A{{/flag}}", { flag: name == "Ann" }),
+    template.render(r"{{a}}", { a: name }),
+    template.render(r"{{a.b}}", { a: { b: name } }),
+    template.render(r"{{a}}", { a: "x", b: name }),
+    template.render(r"{{ a.b }}", { a: { b: "deep" } }),
+    template.render(r"{{#xs}}[{{.}}]{{/xs}}", { xs: [1, 2, 3] }),
+    template.render(r"{{#xs}}{{n}},{{/xs}}", { xs: [{ n: "a" }, { n: "b" }] }),
+    template.render(r"{{^xs}}none{{/xs}}", { xs: list.take([1], 0) }),
+    template.render(r"{{#flag}}yes{{/flag}}{{^flag}}no{{/flag}}", { flag: false }),
+    template.render(r"{{#p}}{{name}} {{title}}{{/p}}", { title: "T", p: { name: "N" } }),
+    template.render(r"{{k}} {{j}} {{d}}", { k: 2.5, j: true, d: 3s }),
+    template.render(r"{{#xs}}{{#ys}}{{.}}{{/ys}};{{/xs}}", { xs: [1, 2], ys: ["a", "b"] }),
+    template.render("plain \{text\}", {}),
+    template.render(r"{{a}}", map.set({}, "a", "from a map")),
+    template.render(r"{{#s}}s{{/s}}{{^s}}empty{{/s}}", { s: "" }),
+    fails(|| template.render(r"{{missing}}", { a: 1 })),
+    fails(|| template.render(r"{{a", { a: 1 })),
+    fails(|| template.render(r"{{#a}}x", { a: true })),
+    fails(|| template.render(r"{{#a}}x{{/b}}", { a: true })),
+    fails(|| template.render(r"{{/a}}", { a: true })),
+    fails(|| template.render(r"{{> p}}", { a: 1 })),
+    fails(|| template.render(r"{{{a}}}", { a: 1 })),
+    fails(|| template.render(r"{{! note }}", { a: 1 })),
+    fails(|| template.render(r"{{a}}", { a: [1] })),
+    fails(|| template.render(r"{{a b}}", { a: 1 })),
+    text.show(says(|| template.render("x\n\{\{#a\}\}", { a: 1 }), "line 2")),
+    text.show(told(|| template.render(r"{{name}} {{missing}}", { name: name }))),
+  ]
+}

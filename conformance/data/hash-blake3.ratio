@@ -1,0 +1,14 @@
+// arg: "abc"
+// expect: value ["6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85","af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24","c59d2e12583df14d951e757a42f1734d355c8c5b1db6b6a33ab2bfabeed40c7d","cf657d3fd42311a258afdf3b5261c256983e3deb2bb38980cb0e754db903d549","46d0ec742ceaad149f9a3d109d1bd9e9ece7858161b43cf0008906478418e807"]
+// expect: labels secret none none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    hash.blake3(s),
+    hash.blake3(""),
+    hash.blake3("hello world"),
+    hash.blake3(text.repeat("a", 1025)),
+    hash.blake3(text.repeat("a", 4096)),
+    hash.blake3("é"),
+  ]
+}

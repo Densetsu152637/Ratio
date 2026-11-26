@@ -1,0 +1,17 @@
+// arg: "6869"
+// expect: value ["hi","none","none","none","oo","none","é","none",""]
+// expect: labels secret secret none none none none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(codec.hex_decode(s)),
+    text.show(codec.hex_decode(s + "z")),
+    text.show(codec.hex_decode("68 69")),
+    text.show(codec.hex_decode("6")),
+    text.show(codec.hex_decode("6F6f")),
+    text.show(codec.hex_decode("ff")),
+    text.show(codec.hex_decode("c3a9")),
+    text.show(codec.hex_decode("zz")),
+    text.show(codec.hex_decode("")),
+  ]
+}

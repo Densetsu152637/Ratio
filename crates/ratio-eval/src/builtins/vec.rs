@@ -73,9 +73,19 @@ fn pair(cx: &Cx<'_>, a: &Value, b: &Value) -> Result<(Floats, Floats), RtError> 
     Ok((floats(cx, a)?, floats(cx, b)?))
 }
 
-/// `(m, s)` with `m` the largest absolute component and `s` the length of the vector scaled
-/// by `1/m`; the vector's length is `m · s`. A zero vector is `(0, 0)`.
+/// The length of a vector as `(m, s)` with `m · s` the length: the plain `(1, sqrt(Σ x²))`
+/// when the sum of squares neither overflows nor underflows, else `m` the largest absolute
+/// component and `s` the length of the vector scaled by `1/m`, so a vector of 1e200s has the
+/// length it should and one of 1e-200s is not taken for the zero vector. The zero vector is
+/// `(0, 0)`.
 fn scaled(v: &[f64]) -> (f64, f64) {
+    let mut ss = 0.0f64;
+    for x in v {
+        ss += x * x;
+    }
+    if ss.is_finite() && ss >= 1e-290 {
+        return (1.0, ss.sqrt());
+    }
     let mut m = 0.0f64;
     for x in v {
         let a = x.abs();
@@ -148,15 +158,25 @@ pub(super) fn cosine(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let (x, y) = pair(cx, a, b)?;
     let labels = a.quick() | b.quick();
-    let (ma, sa) = scaled(&x.v);
-    let (mb, sb) = scaled(&y.v);
-    work::add(3 * x.v.len() as u64);
-    Ok(float_val(cosine_of(&x.v, ma, sa, &y.v, mb, sb), labels))
+    work::add(6 * x.v.len() as u64);
+    Ok(float_val(cosine_of(&x.v, &y.v), labels))
 }
 
-/// The cosine of the angle between two vectors with their scaled lengths, in `[-1, 1]`; 0.0
-/// when either is the zero vector.
-fn cosine_of(x: &[f64], ma: f64, sa: f64, y: &[f64], mb: f64, sb: f64) -> f64 {
+/// The cosine of the angle between two vectors of one dimension, in `[-1, 1]`: `dot / sqrt(|x|² ·
+/// |y|²)` when those are neither too large nor too small to be written, else computed on the
+/// scaled vectors; 0.0 when either is the zero vector, `NaN` for a `NaN` component.
+fn cosine_of(x: &[f64], y: &[f64]) -> f64 {
+    let (mut dot, mut xx, mut yy) = (0.0f64, 0.0f64, 0.0f64);
+    for (p, q) in x.iter().zip(y) {
+        dot += p * q;
+        xx += p * p;
+        yy += q * q;
+    }
+    let both = xx * yy;
+    if dot.is_finite() && both.is_finite() && both >= 1e-290 {
+        return (dot / both.sqrt()).clamp(-1.0, 1.0);
+    }
+    let ((ma, sa), (mb, sb)) = (scaled(x), scaled(y));
     if ma.is_nan() || mb.is_nan() {
         return f64::NAN;
     }
@@ -261,7 +281,6 @@ pub(super) fn top_k(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         ));
     };
     let q = floats(cx, query)?;
-    let (mq, sq) = scaled(&q.v);
     let l = list(cx, vs)?;
     // One (score, index) pair per vector.
     let _scores_charge = charged(cx, cost::SLOT.saturating_mul(l.len()))?;
@@ -284,9 +303,8 @@ pub(super) fn top_k(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             ));
         }
         let x = floats(cx, &v)?;
-        let (m, s) = scaled(&x.v);
-        work::add(3 * x.v.len() as u64);
-        scores.push((cosine_of(&q.v, mq, sq, &x.v, m, s), index));
+        work::add(6 * x.v.len() as u64);
+        scores.push((cosine_of(&q.v, &x.v), index));
         index = index.saturating_add(1);
     }
     work::add(

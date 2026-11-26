@@ -1,0 +1,40 @@
+// arg: 1
+// arg: 4
+// expect: value ["49a64717","49a6","49a64717","49a6","49a64717d5d4cb19952e6eac2946415cf6879adacf9908e7d872332d32c6e684","","","Invalid"]
+// expect: labels secret secret none none none none none none
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(x: Int, n: Int) -> [Untrusted<Str>] {
+  [
+    hash.short([x, 2]),
+    hash.short([1, 2], n),
+    hash.short([1, 2]),
+    hash.short([1, 2], 4),
+    hash.short([1, 2], 100),
+    hash.short([1, 2], -1),
+    hash.short([1, 2], 0),
+    fails(|| hash.short(|y: Int| y)),
+  ]
+}

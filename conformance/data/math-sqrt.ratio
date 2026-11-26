@@ -1,0 +1,14 @@
+// arg: 2.25
+// expect: value ["1.5","1.4142135623730951","0.0","NaN","2.0","true"]
+// expect: labels secret none none none none none
+
+fn main(f: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.sqrt(f)),
+    text.show(math.sqrt(2.0)),
+    text.show(math.sqrt(0.0)),
+    text.show(math.sqrt(-1.0)),
+    text.show(math.sqrt(4.0)),
+    text.show(math.is_nan(math.sqrt(-1.0))),
+  ]
+}

@@ -1,0 +1,42 @@
+// arg: 5.0
+// arg: 50.0
+// expect: value ["2.5","5.0","1.0","4.0","1.75","none","Invalid","Invalid","Invalid","true"]
+// expect: labels secret secret none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(x: Float, p: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.percentile([1.0, 2.0, 3.0, 4.0], p)),
+    text.show(math.percentile([x, 1.0, 9.0], 50.0)),
+    text.show(math.percentile([1, 2, 3, 4], 0.0)),
+    text.show(math.percentile([1, 2, 3, 4], 100.0)),
+    text.show(math.percentile([1, 2, 3, 4], 25.0)),
+    text.show(math.percentile(list.take([1.0], 0), 50.0)),
+    fails(|| math.percentile([1.0], 101.0)),
+    fails(|| math.percentile([1.0], 0.0 - 1.0)),
+    fails(|| math.percentile([1.0], math.sqrt(-1.0))),
+    text.show(told(|| math.percentile([x], p + 100.0))),
+  ]
+}

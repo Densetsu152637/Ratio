@@ -1,0 +1,18 @@
+// arg: "%FF"
+// expect: value ["none","none","a b/c","é","none","100%","%zz","a+b","","€"]
+// expect: labels secret secret none none none none none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(url.decode(s)),
+    text.show(url.decode("a%20b" + s)),
+    text.show(url.decode("a%20b%2Fc")),
+    text.show(url.decode("%C3%A9")),
+    text.show(url.decode("%FF")),
+    text.show(url.decode("100%")),
+    text.show(url.decode("%zz")),
+    text.show(url.decode("a+b")),
+    text.show(url.decode("")),
+    text.show(url.decode("%e2%82%ac")),
+  ]
+}

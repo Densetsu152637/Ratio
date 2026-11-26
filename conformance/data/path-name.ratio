@@ -1,0 +1,15 @@
+// arg: "/a/b/../c/./d.tar.gz"
+// expect: value ["d.tar.gz","b.txt","","b","y.z","","b"]
+// expect: labels secret none none none none none none
+
+fn main(p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(path.name(p)),
+    text.show(path.name("/a/b.txt")),
+    text.show(path.name("/")),
+    text.show(path.name("a/b/")),
+    text.show(path.name("C:\\x\\y.z")),
+    text.show(path.name("")),
+    text.show(path.name("a//b")),
+  ]
+}

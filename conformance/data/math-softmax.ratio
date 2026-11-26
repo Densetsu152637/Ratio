@@ -1,0 +1,39 @@
+// arg: 1.0
+// expect: value ["[0.2689414213699951,0.7310585786300049]","[0.5,0.5]","[0.37754066879814546,0.6224593312018546]","[]","[0.5,0.5]","Invalid","Invalid","true"]
+// expect: labels secret none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(x: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.softmax([x, 2.0])),
+    text.show(math.softmax([0.0, 0.0])),
+    text.show(math.softmax([1.0, 2.0], temperature: 2.0)),
+    text.show(math.softmax(list.take([1.0], 0))),
+    text.show(math.softmax([1000.0, 1000.0])),
+    fails(|| math.softmax([1.0], temperature: 0.0)),
+    fails(|| math.softmax([1.0], temperature: 0.0 - 1.0)),
+    text.show(told(|| math.softmax([x], temperature: x - x))),
+  ]
+}

@@ -1,0 +1,16 @@
+// arg: "/a/b/../c/./d.tar.gz"
+// expect: value ["gz","gz","none","none","none","none","txt","none"]
+// expect: labels secret none none none none none none none
+
+fn main(p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(path.ext(p)),
+    text.show(path.ext("archive.tar.gz")),
+    text.show(path.ext(".bashrc")),
+    text.show(path.ext("a.")),
+    text.show(path.ext("..")),
+    text.show(path.ext("noext")),
+    text.show(path.ext("/x/y.txt")),
+    text.show(path.ext("x.y/z")),
+  ]
+}

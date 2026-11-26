@@ -1,0 +1,43 @@
+// arg: "x,y"
+// expect: value ["a,b\r\n1,\"x,y\"\r\n2,z\r\n","a\r\nx,y\r\n","","a,b\r\n1,\"x,y\"\r\n\"q\"\"\",\"l\nn\"\r\n","a;b\r\n1;2\r\n","a\r\n1\r\n2\r\n","a,b\r\n2,1\r\n","true","Invalid","Invalid","true","true"]
+// expect: labels secret secret none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    codec.csv_write([{ a: "1", b: s }, { a: "2", b: "z" }]),
+    codec.csv_write([{ a: s }], delimiter: ";"),
+    codec.csv_write([]),
+    codec.csv_write([{ a: "1", b: "x,y" }, { a: "q\"", b: "l\nn" }]),
+    codec.csv_write([{ a: "1", b: "2" }], delimiter: ";"),
+    codec.csv_write([{ a: "1" }, { a: "2", z: "9" }]),
+    codec.csv_write([{ b: "1", a: "2" }]),
+    text.show(codec.csv_parse(codec.csv_write([{ a: "1", b: "x,y" }, { a: "q\"", b: "l\nn" }])) == [{ a: "1", b: "x,y" }, { a: "q\"", b: "l\nn" }]),
+    fails(|| codec.csv_write([{ a: "1" }, { b: "2" }])),
+    fails(|| codec.csv_write([{ a: "1" }], delimiter: "ab")),
+    text.show(says(|| codec.csv_write([{ a: "1" }, { b: "2" }]), "row 1")),
+    text.show(told(|| codec.csv_write([{ a: s }, { b: "2" }]))),
+  ]
+}

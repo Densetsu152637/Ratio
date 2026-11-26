@@ -1,0 +1,16 @@
+// arg: 5.0
+// expect: value ["3.0","2.5","none","2.0","1.5","NaN","1e308","2.0"]
+// expect: labels secret none none none none none none none
+
+fn main(x: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.median([x, 1.0, 3.0])),
+    text.show(math.median([5, 1, 3, 2])),
+    text.show(math.median(list.take([1], 0))),
+    text.show(math.median([2.0])),
+    text.show(math.median([1, 2])),
+    text.show(math.median([1.0, math.sqrt(-1.0)])),
+    text.show(math.median([1e308, 1e308])),
+    text.show(math.median([3s, 1s, 2s])),
+  ]
+}

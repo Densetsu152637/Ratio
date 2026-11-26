@@ -1,0 +1,39 @@
+// arg: 2.5
+// expect: value ["2","-3","-1","-9223372036854775808","Invalid","Invalid","Invalid","true"]
+// expect: labels secret none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(f: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.floor(f)),
+    text.show(math.floor(0.0 - 2.5)),
+    text.show(math.floor(0.0 - 0.5)),
+    text.show(math.floor(0.0 - 9223372036854775808.0)),
+    fails(|| math.floor(math.sqrt(-1.0))),
+    fails(|| math.floor(1e300)),
+    fails(|| math.floor(9223372036854775808.0)),
+    text.show(told(|| math.floor(f * 1e300))),
+  ]
+}

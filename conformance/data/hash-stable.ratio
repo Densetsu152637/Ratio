@@ -1,0 +1,49 @@
+// arg: 1
+// arg: "a"
+// expect: value ["sha256:49a64717d5d4cb19952e6eac2946415cf6879adacf9908e7d872332d32c6e684","sha256:ac8d8342bbb2362d13f0a559a3621bb407011368895164b628a54f7fc33fc43c","sha256:721ef82f2d6c0997bffb7a8ab3f40f8fb45b0b52ce2af3afa6b0f05efbdc317f","sha256:49a64717d5d4cb19952e6eac2946415cf6879adacf9908e7d872332d32c6e684","sha256:d0ff5974b6aa52cf562bea5921840c032a860a91a3512f7fe8f768f6bbe005f6","sha256:06bad31060c1212ae832de4c031f7b31e3b48aed57858294478cb19450cf34ca","sha256:3e56e2cebf1f1fa02a4de1b66e40ae0df35cc8251606b600e62f45ffcab86c4c","sha256:e22baeb956aece361b8f57e8ec1e2e9a7fb98e03d154b94bc124681b0896f3f1","sha256:118b372f96f59ca0a0ca9f954e8f79fc70dd7361fd8501a39055105cc570de24","sha256:e607aaf738f67fc2879a2a52672c599e9337b4cacd57582c6d3cf9526f5aa222","sha256:5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22","true","true","sha256:84a2941f564640d239bd902dc0af3e7295a60f1244093dd03f3b92c703b695ca","Invalid","Invalid","true"]
+// expect: labels secret secret none none none none none none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(x: Int, s: Str) -> [Untrusted<Str>] {
+  [
+    hash.stable([x, 2]),
+    hash.stable(s),
+    hash.stable({ b: [1, 2], a: "x" }),
+    hash.stable([1, 2]),
+    hash.stable(1.0),
+    hash.stable(0.1 + 0.2),
+    hash.stable(2s),
+    hash.stable($3),
+    hash.stable("é\n\""),
+    hash.stable(1e21),
+    hash.stable(1e-7),
+    text.show(hash.stable({ b: 2, a: 1 }) == hash.stable({ a: 1, b: 2 })),
+    text.show(hash.stable(json.parse("\{\"b\": 1, \"a\": 2\}")) == hash.stable(json.parse("\{\"a\": 2, \"b\": 1\}"))),
+    hash.stable(json.parse("\{\"b\": [1, null], \"a\": 2.5\}")),
+    fails(|| hash.stable(math.sqrt(-1.0))),
+    fails(|| hash.stable(|y: Int| y)),
+    text.show(told(|| hash.stable([math.to_float(x), math.sqrt(-1.0)]))),
+  ]
+}

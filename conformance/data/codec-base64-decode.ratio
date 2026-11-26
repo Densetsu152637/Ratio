@@ -1,0 +1,25 @@
+// arg: "aGVsbG8="
+// expect: value ["hello","none","f","f","","none","none","none","none","none","none","é","foob","none","none","foobar","none"]
+// expect: labels secret secret none none none none none none none none none none none none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(codec.base64_decode(s)),
+    text.show(codec.base64_decode(s + "!")),
+    text.show(codec.base64_decode("Zg")),
+    text.show(codec.base64_decode("Zg==")),
+    text.show(codec.base64_decode("")),
+    text.show(codec.base64_decode("Zh==")),
+    text.show(codec.base64_decode("Zg=")),
+    text.show(codec.base64_decode("Z")),
+    text.show(codec.base64_decode("Zm9v!")),
+    text.show(codec.base64_decode("Zm 9v")),
+    text.show(codec.base64_decode("/w==")),
+    text.show(codec.base64_decode("w6k=")),
+    text.show(codec.base64_decode("Zm9vYg==")),
+    text.show(codec.base64_decode("Zg==Zg==")),
+    text.show(codec.base64_decode("====")),
+    text.show(codec.base64_decode("Zm9vYmFy")),
+    text.show(codec.base64_decode("_-8=")),
+  ]
+}

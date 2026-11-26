@@ -1,0 +1,16 @@
+// arg: "HTTP://Example.com:80/a/./b/../c?x=1&y=%20z#frag"
+// expect: value ["example.com","example.com","[::1]","none","127.0.0.1","none","none","192.168.0.1"]
+// expect: labels secret none none none none none none none
+
+fn main(u: Str) -> [Untrusted<Str>] {
+  [
+    text.show(url.host(u)),
+    text.show(url.host("http://Example.COM/x")),
+    text.show(url.host("http://[::1]/")),
+    text.show(url.host("mailto:a@b")),
+    text.show(url.host("http://2130706433/")),
+    text.show(url.host("nonsense")),
+    text.show(url.host("file:///x")),
+    text.show(url.host("http://0300.0250.0.1/")),
+  ]
+}

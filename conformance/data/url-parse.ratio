@@ -1,0 +1,42 @@
+// arg: "HTTP://Example.com:80/a/./b/../c?x=1&y=%20z#frag"
+// expect: value ["{\"fragment\":\"frag\",\"host\":\"example.com\",\"path\":\"/a/c\",\"query\":{\"x\":\"1\",\"y\":\" z\"},\"scheme\":\"http\"}","{\"host\":\"example.com\",\"path\":\"/\",\"query\":{},\"scheme\":\"https\"}","{\"host\":\"example.com\",\"path\":\"/x\",\"port\":8080,\"query\":{},\"scheme\":\"http\"}","{\"host\":\"[::1]\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"[2001:db8::1]\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"127.0.0.1\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"127.0.0.1\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","none","none","none","none","{\"host\":\"\",\"path\":\"a@b.c\",\"query\":{},\"scheme\":\"mailto\"}","{\"host\":\"a.com\",\"path\":\"/b\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"a.com\",\"path\":\"/%C3%A4\",\"query\":{},\"scheme\":\"http\"}","none","none","{\"host\":\"host\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","none","{\"host\":\"a.com\",\"path\":\"/p\",\"query\":{\"q\":\"2\"},\"scheme\":\"http\"}","{\"host\":\"a.com\",\"path\":\"/\",\"query\":{\"a\":\"1 2\",\"b\":\"\",\"c\":\"é\"},\"scheme\":\"http\"}","{\"fragment\":\"\",\"host\":\"a.com\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"\",\"path\":\"/etc/passwd\",\"query\":{},\"scheme\":\"file\"}","none","{\"host\":\"a.com\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"a.com\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"[::ffff:102:304]\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","{\"host\":\"[1:2:3:4:5:6:7:8]\",\"path\":\"/\",\"query\":{},\"scheme\":\"http\"}","none","none","{\"host\":\"example.com\",\"path\":\"/\",\"query\":{},\"scheme\":\"https\"}","{\"host\":\"bar\",\"path\":\"/baz\",\"query\":{},\"scheme\":\"foo\"}","none","none","none"]
+// expect: labels secret none none none none none none none none none none none none none none none none none none none none none none none none none none none none none none none none none
+
+fn main(u: Str) -> [Untrusted<Str>] {
+  [
+    text.show(url.parse(u)),
+    text.show(url.parse("https://example.com")),
+    text.show(url.parse("http://example.com:8080/x")),
+    text.show(url.parse("http://[::1]:80/")),
+    text.show(url.parse("http://[2001:db8:0:0:0:0:0:1]/")),
+    text.show(url.parse("http://2130706433/")),
+    text.show(url.parse("http://0x7f.1/")),
+    text.show(url.parse("http://127.0.0.1.5/")),
+    text.show(url.parse("http://exa mple.com")),
+    text.show(url.parse("example.com/x")),
+    text.show(url.parse("http:example.com")),
+    text.show(url.parse("mailto:a@b.c")),
+    text.show(url.parse("http://a.com/%2e%2e/b")),
+    text.show(url.parse("http://a.com/ä")),
+    text.show(url.parse("http://münchen.de/")),
+    text.show(url.parse("http://a.com:99999/")),
+    text.show(url.parse("http://user:pw@host/")),
+    text.show(url.parse("http://a@b@host/")),
+    text.show(url.parse("http://a.com/p?q=1&q=2")),
+    text.show(url.parse("http://a.com/?a=1+2&b&&c=%C3%A9")),
+    text.show(url.parse("http://a.com/#")),
+    text.show(url.parse("file:///etc/passwd")),
+    text.show(url.parse("http://a.com\\evil")),
+    text.show(url.parse("HTTP://A.COM")),
+    text.show(url.parse("http://a.com/a/..")),
+    text.show(url.parse("http://[::ffff:1.2.3.4]/")),
+    text.show(url.parse("http://[1:2:3:4:5:6:7:8]/")),
+    text.show(url.parse("http://[::1")),
+    text.show(url.parse("http://999.999.999.999/")),
+    text.show(url.parse("https://example.com:443/")),
+    text.show(url.parse("foo://bar/baz")),
+    text.show(url.parse("http:///x")),
+    text.show(url.parse("http://a.com/b c")),
+    text.show(url.parse(text.repeat("a", 9000))),
+  ]
+}

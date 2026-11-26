@@ -1,0 +1,20 @@
+// arg: "a\nb\nc\nd\n"
+// arg: "a\nx\nc\nd\ne\n"
+// expect: value ["[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"delete\",\"text\":\"b\"},{\"op\":\"insert\",\"text\":\"x\"},{\"op\":\"equal\",\"text\":\"c\"},{\"op\":\"equal\",\"text\":\"d\"},{\"op\":\"insert\",\"text\":\"e\"}]","[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"equal\",\"text\":\"b\"},{\"op\":\"equal\",\"text\":\"c\"},{\"op\":\"equal\",\"text\":\"d\"}]","[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"insert\",\"text\":\"x\"},{\"op\":\"insert\",\"text\":\"c\"},{\"op\":\"insert\",\"text\":\"d\"},{\"op\":\"insert\",\"text\":\"e\"}]","[]","[{\"op\":\"equal\",\"text\":\"a\"}]","[{\"op\":\"delete\",\"text\":\"a\"},{\"op\":\"delete\",\"text\":\"b\"},{\"op\":\"insert\",\"text\":\"x\"},{\"op\":\"insert\",\"text\":\"y\"}]","[{\"op\":\"equal\",\"text\":\"a\"},{\"op\":\"equal\",\"text\":\"b\"}]","[{\"op\":\"delete\",\"text\":\"a\"}]","[{\"op\":\"insert\",\"text\":\"a\"}]","[{\"op\":\"delete\",\"text\":\"x\"},{\"op\":\"equal\",\"text\":\"y\"},{\"op\":\"delete\",\"text\":\"z\"}]","[{\"op\":\"delete\",\"text\":\"a\"},{\"op\":\"delete\",\"text\":\"b\"},{\"op\":\"equal\",\"text\":\"c\"},{\"op\":\"insert\",\"text\":\"b\"},{\"op\":\"insert\",\"text\":\"a\"}]"]
+// expect: labels secret secret secret none none none none none none none none
+
+fn main(a: Str, b: Str) -> [Untrusted<Str>] {
+  [
+    text.show(diff.lines(a, b)),
+    text.show(diff.lines(a, "a\nb\nc\nd\n")),
+    text.show(diff.lines("a", b)),
+    text.show(diff.lines("", "")),
+    text.show(diff.lines("a", "a")),
+    text.show(diff.lines("a\nb", "x\ny")),
+    text.show(diff.lines("a\r\nb", "a\nb")),
+    text.show(diff.lines("a\n", "")),
+    text.show(diff.lines("", "a")),
+    text.show(diff.lines("x\ny\nz", "y")),
+    text.show(diff.lines("a\nb\nc", "c\nb\na")),
+  ]
+}

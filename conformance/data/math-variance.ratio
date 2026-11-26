@@ -1,0 +1,17 @@
+// arg: 2.0
+// arg: true
+// expect: value ["4.0","0.5","1.6666666666666667","1.25","none","0.0","none","inf"]
+// expect: labels secret secret none none none none none none
+
+fn main(x: Float, b: Bool) -> [Untrusted<Str>] {
+  [
+    text.show(math.variance([x, 4.0, 6.0])),
+    text.show(math.variance([1.0, 2.0], sample: b)),
+    text.show(math.variance([1, 2, 3, 4])),
+    text.show(math.variance([1, 2, 3, 4], sample: false)),
+    text.show(math.variance([5.0])),
+    text.show(math.variance([5.0], sample: false)),
+    text.show(math.variance(list.take([1.0], 0))),
+    text.show(math.variance([1e154, 0.0 - 1e154])),
+  ]
+}

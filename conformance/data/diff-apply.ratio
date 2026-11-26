@@ -1,0 +1,47 @@
+// arg: "a\nb\nc\nd\n"
+// arg: "a\nx\nc\nd\ne\n"
+// expect: value ["a\nx\nc\nd\ne\n","a\nx\nc\nd\ne\n","a\nx\nc\nd\ne\n","x\ny\n","a\nc","a\nc\n","x\ny\n","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","true","true"]
+// expect: labels secret secret secret none none none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(a: Str, b: Str) -> [Untrusted<Str>] {
+  [
+    diff.apply(a, diff.unified(a, b)),
+    diff.apply(a, diff.unified("a\nb\nc\nd\n", "a\nx\nc\nd\ne\n")),
+    diff.apply("a\nb\nc\nd\n", diff.unified(a, b)),
+    diff.apply("x\ny\n", ""),
+    diff.apply("a\nb", diff.unified("a\nb", "a\nc")),
+    diff.apply("a\nb\n", "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"),
+    diff.apply("", "--- a\n+++ b\n@@ -0,0 +1,2 @@\n+x\n+y\n"),
+    fails(|| diff.apply("a\nb\n", diff.unified("a\nQ\n", "a\nR\n"))),
+    fails(|| diff.apply("z\na\nb\nc\n", diff.unified("a\nb\nc\n", "a\nX\nc\n"))),
+    fails(|| diff.apply("a\n", "@@ -1 +1 @@\n-a\n")),
+    fails(|| diff.apply("a\n", "@@ -x +1 @@\n-a\n+b\n")),
+    fails(|| diff.apply("a\n", "@@ -5 +5 @@\n-a\n+b\n")),
+    fails(|| diff.apply("a\n", "--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b\n--- c\n+++ d\n@@ -1 +1 @@\n-b\n+c\n")),
+    text.show(says(|| diff.apply("a\nb\n", "@@ -1,2 +1,2 @@\n a\n-Q\n+R\n"), "hunk 1")),
+    text.show(told(|| diff.apply(a, "@@ -1 +1 @@\n-zzz\n+y\n"))),
+  ]
+}

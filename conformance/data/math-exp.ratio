@@ -1,0 +1,15 @@
+// arg: 1.0
+// expect: value ["2.7182818284590455","1.0","1.6487212707001282","0.36787944117144233","22026.465794806718","0.0","inf"]
+// expect: labels secret none none none none none none
+
+fn main(f: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.exp(f)),
+    text.show(math.exp(0.0)),
+    text.show(math.exp(0.5)),
+    text.show(math.exp(-1.0)),
+    text.show(math.exp(10.0)),
+    text.show(math.exp(-1000.0)),
+    text.show(math.exp(1000.0)),
+  ]
+}

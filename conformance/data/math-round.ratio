@@ -1,0 +1,23 @@
+// arg: 2.675
+// arg: 2
+// expect: value ["2.67","2.7","3.0","2.67","3.0","-3.0","0.13","1200.0","0.33333","1e300","1.0","1.4","0.1","NaN"]
+// expect: labels secret secret secret secret none none none none none none none none none none
+
+fn main(f: Float, d: Int) -> [Untrusted<Str>] {
+  [
+    text.show(math.round(f, d)),
+    text.show(math.round(f, 1)),
+    text.show(math.round(f)),
+    text.show(math.round(2.675, d)),
+    text.show(math.round(2.5)),
+    text.show(math.round(0.0 - 2.5)),
+    text.show(math.round(0.125, 2)),
+    text.show(math.round(1234.5678, -2)),
+    text.show(math.round(1.0 / 3.0, 5)),
+    text.show(math.round(1e300, 5)),
+    text.show(math.round(1.005, 2)),
+    text.show(math.round(1.45, 1)),
+    text.show(math.round(0.1, 30)),
+    text.show(math.round(math.sqrt(-1.0), 2)),
+  ]
+}

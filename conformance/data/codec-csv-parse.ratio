@@ -1,0 +1,54 @@
+// arg: "a,b\n1,2\n3,4\n"
+// expect: value ["[{\"a\":\"1\",\"b\":\"2\"},{\"a\":\"3\",\"b\":\"4\"}]","[{\"c1\":\"a\",\"c2\":\"b\"},{\"c1\":\"1\",\"c2\":\"2\"},{\"c1\":\"3\",\"c2\":\"4\"}]","[{\"a\":\"1\",\"b\":\"2\"},{\"a\":\"3\",\"b\":\"4\"}]","[]","[]","[{\"x\":\"q,1\",\"y\":\"he said \\\"hi\\\"\"}]","[{\"a\":\"1\",\"b\":\"2\"}]","[{\"a\":\"1\",\"b\":\"2\"}]","[{\"c1\":\"1\",\"c2\":\"2\"},{\"c1\":\"3\",\"c2\":\"4\"}]","[{\"a\":\"line1\\nline2\"}]","[{\"a\":\"\",\"b\":\"\"}]","[{\"a\":\"x\"}]","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","Invalid","true","true"]
+// expect: labels secret secret secret none none none none none none none none none none none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(codec.csv_parse(s)),
+    text.show(codec.csv_parse(s, header: false)),
+    text.show(codec.csv_parse(s, delimiter: ",")),
+    text.show(codec.csv_parse("")),
+    text.show(codec.csv_parse("a,b\n")),
+    text.show(codec.csv_parse("x,y\n\"q,1\",\"he said \"\"hi\"\"\"\n")),
+    text.show(codec.csv_parse("a,b\r\n1,2\r\n")),
+    text.show(codec.csv_parse("a;b\n1;2", delimiter: ";")),
+    text.show(codec.csv_parse("1,2\n3,4", header: false)),
+    text.show(codec.csv_parse("a\n\"line1\nline2\"")),
+    text.show(codec.csv_parse("a,b\n,\n")),
+    text.show(codec.csv_parse("a\nx\n")),
+    fails(|| codec.csv_parse("a,b\n1\n")),
+    fails(|| codec.csv_parse("a,a\n1,2\n")),
+    fails(|| codec.csv_parse("a\n\"unterminated")),
+    fails(|| codec.csv_parse("a,b\n1,\"x\"y\n")),
+    fails(|| codec.csv_parse("a\nb\"c\n")),
+    fails(|| codec.csv_parse("a\n1", delimiter: "ab")),
+    fails(|| codec.csv_parse("a\n1", delimiter: "\"")),
+    fails(|| codec.csv_parse("a,b\n1\r2\n")),
+    fails(|| codec.csv_parse("a\n\n\n1,2")),
+    text.show(says(|| codec.csv_parse("a,b\n1,2\n3\n"), "line 3")),
+    text.show(told(|| codec.csv_parse(s + "x\n"))),
+  ]
+}

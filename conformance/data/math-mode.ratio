@@ -1,0 +1,16 @@
+// arg: "b"
+// arg: 3
+// expect: value ["b","1","3","none","2.5","x","[1]"]
+// expect: labels secret secret none none none none none
+
+fn main(s: Str, i: Int) -> [Untrusted<Str>] {
+  [
+    text.show(math.mode([s, "a", s, "a"])),
+    text.show(math.mode([i, 1, 1])),
+    text.show(math.mode([3, 1, 1, 3, 2])),
+    text.show(math.mode(list.take([1], 0))),
+    text.show(math.mode([1.5, 2.5, 2.5])),
+    text.show(math.mode(["x"])),
+    text.show(math.mode([[1], [2], [1]])),
+  ]
+}

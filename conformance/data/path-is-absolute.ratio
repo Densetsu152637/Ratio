@@ -1,0 +1,17 @@
+// arg: "/a/b/../c/./d.tar.gz"
+// expect: value ["true","true","false","true","true","true","false","false","false"]
+// expect: labels secret none none none none none none none none
+
+fn main(p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(path.is_absolute(p)),
+    text.show(path.is_absolute("/a")),
+    text.show(path.is_absolute("a/b")),
+    text.show(path.is_absolute("C:\\a")),
+    text.show(path.is_absolute("C:a")),
+    text.show(path.is_absolute("\\\\srv\\sh")),
+    text.show(path.is_absolute("")),
+    text.show(path.is_absolute("./a")),
+    text.show(path.is_absolute("1:/a")),
+  ]
+}

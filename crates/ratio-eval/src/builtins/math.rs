@@ -266,11 +266,16 @@ fn gather(cx: &Cx<'_>, xs: &Value) -> Result<Nums, RtError> {
     Ok(Nums { v, _charge: charge })
 }
 
-/// Neumaier's compensated sum, in order: deterministic and robust to cancellation.
+/// Neumaier's compensated sum, in order: deterministic and robust to cancellation. A sum that
+/// overflows is the plain sum (`inf`, or `NaN` for `inf - inf`): the compensation term of an
+/// infinite partial sum is meaningless.
 fn sum(v: &[f64]) -> f64 {
     let (mut s, mut c) = (0.0f64, 0.0f64);
     for &x in v {
         let t = s + x;
+        if !t.is_finite() {
+            return v.iter().fold(0.0, |a, b| a + b);
+        }
         c += if s.abs() >= x.abs() {
             (s - t) + x
         } else {
@@ -281,6 +286,20 @@ fn sum(v: &[f64]) -> f64 {
     s + c
 }
 
+/// The mean of `v` (not empty): the sum over the count, or, when the sum overflows although
+/// every element is finite, the sum of the elements each over the count.
+fn mean_of(v: &[f64]) -> f64 {
+    #[allow(clippy::cast_precision_loss, reason = "a count of elements")]
+    let n = v.len() as f64;
+    let s = sum(v);
+    if s.is_finite() || !v.iter().all(|x| x.is_finite()) {
+        s / n
+    } else {
+        let scaled: Vec<f64> = v.iter().map(|x| x / n).collect();
+        sum(&scaled)
+    }
+}
+
 pub(super) fn mean(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let xs = arg(cx, args, 0)?;
     let nums = gather(cx, xs)?;
@@ -288,7 +307,7 @@ pub(super) fn mean(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     if nums.v.is_empty() {
         return Ok(Value::none().with_labels(labels));
     }
-    Ok(float_val(sum(&nums.v) / nums.v.len() as f64, labels))
+    Ok(float_val(mean_of(&nums.v), labels))
 }
 
 fn variance_of(v: &[f64], sample: bool) -> Option<f64> {
@@ -296,7 +315,7 @@ fn variance_of(v: &[f64], sample: bool) -> Option<f64> {
     if n == 0 || (sample && n < 2) {
         return None;
     }
-    let m = sum(v) / n as f64;
+    let m = mean_of(v);
     let squares: Vec<f64> = v.iter().map(|x| (x - m) * (x - m)).collect();
     let denominator = if sample { n - 1 } else { n } as f64;
     Some(sum(&squares) / denominator)

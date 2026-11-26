@@ -1,0 +1,48 @@
+// arg: 3
+// arg: 2.0
+// expect: value ["81","8","1024.0","1024","1.4142135623730951","1000000000000000000","1","-1","0.5","1000000000000000.0","-512.0","true","inf","Invalid","Invalid","true"]
+// expect: labels secret secret secret none none none none none none none none none none none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels); whether it says `part`.
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn says<T>(f: fn() -> T, part: Str) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => text.contains(error.message, part),
+  }
+}
+
+fn main(i: Int, f: Float) -> [Untrusted<Str>] {
+  [
+    text.show(math.pow(i, 4)),
+    text.show(math.pow(2, i)),
+    text.show(math.pow(f, 10.0)),
+    text.show(math.pow(2, 10)),
+    text.show(math.pow(2.0, 0.5)),
+    text.show(math.pow(10, 18)),
+    text.show(math.pow(0, 0)),
+    text.show(math.pow(-1, 9223372036854775807)),
+    text.show(math.pow(2.0, 0.0 - 1.0)),
+    text.show(math.pow(10.0, 15.0)),
+    text.show(math.pow(-8.0, 3.0)),
+    text.show(math.is_nan(math.pow(-8.0, 0.5))),
+    text.show(math.pow(2.0, 1024.0)),
+    fails(|| math.pow(2, -1)),
+    fails(|| math.pow(10, 19)),
+    text.show(told(|| math.pow(i, -1))),
+  ]
+}

@@ -1,0 +1,21 @@
+// arg: "/a/b/../c/./d.tar.gz"
+// expect: value ["/a/b/../c/./d.tar.gz/x","a/a/b/../c/./d.tar.gz","a/b/c","a/b","/a/b","//server/share/x","","C:/x/y","a/b/c/d/","/","/a","a/../b",""]
+// expect: labels secret secret none none none none none none none none none none none
+
+fn main(p: Str) -> [Untrusted<Str>] {
+  [
+    path.join([p, "x"]),
+    path.join(["a", p]),
+    path.join(["a/", "/b", "c"]),
+    path.join(["a", "", "b"]),
+    path.join(["/a", "b"]),
+    path.join(["//server/share", "x"]),
+    path.join(list.take(["a"], 0)),
+    path.join(["C:\\x", "y"]),
+    path.join(["a\\b//c", "d/"]),
+    path.join(["/"]),
+    path.join(["/", "a"]),
+    path.join(["a", "../b"]),
+    path.join(["", ""]),
+  ]
+}
