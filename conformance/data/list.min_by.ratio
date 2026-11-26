@@ -1,0 +1,22 @@
+// builtin: list.min_by, list.max_by
+// case main: value ["a", "bb"]
+// case first_on_ties: value ["x", "x"]
+// case empty: value [null, null]
+// case raises: error User
+// labels least(xs): ["bb", "a", "cc"] ; inner 0
+// labels greatest(xs): ["bb", "a", "cc"] ; inner 0
+fn main() -> (Str?, Str?) {
+  let xs = ["bb", "a", "cc"]
+  (list.min_by(xs, |s| text.len(s)), xs.max_by(|s| text.len(s)))
+}
+fn first_on_ties() -> (Str?, Str?) {
+  let xs = ["x", "y"]
+  (xs.min_by(|s| 1), xs.max_by(|s| 1))
+}
+fn empty() -> (Str?, Str?) {
+  let xs: [Str] = []
+  (xs.min_by(|s| 1), xs.max_by(|s| 1))
+}
+fn raises() -> Str? { list.min_by::<Str, Int>(["a"], |s| raise fail("boom", "key")) }
+fn least(xs: [Str]) -> Str? { list.min_by(xs, |s| text.len(s)) }
+fn greatest(xs: [Str]) -> Str? { list.max_by(xs, |s| text.len(s)) }

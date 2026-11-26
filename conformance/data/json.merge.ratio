@@ -1,0 +1,34 @@
+// builtin: json.merge
+// case rfc7396: value [{"a": "c"}, {"a": "b", "b": "c"}, {}, {"b": "c"}, {"a": "c"}, {"a": ["b"]}, {"a": {"b": "d"}}, {"a": [1]}, ["c", "d"], ["c"], null, "bar", {"e": null, "a": 1}, {"a": "b"}, {"a": {"bb": {}}}]
+// case persistent: value [{"a": 1, "b": 2}, {"b": null}, {"a": 1}]
+// labels merge(n): 5
+// labels merge_null(n): 5 ; inert 0
+// labels merge_patch(xs): [1, 2] ; inner 0
+fn m(a: Str, b: Str) -> Json { json.merge(json.parse(a), json.parse(b)) }
+fn rfc7396() -> [Json] {
+  [
+    m(r"""{"a":"b"} """, r"""{"a":"c"} """),
+    m(r"""{"a":"b"} """, r"""{"b":"c"} """),
+    m(r"""{"a":"b"} """, r"""{"a":null} """),
+    m(r"""{"a":"b","b":"c"} """, r"""{"a":null} """),
+    m(r"""{"a":["b"]} """, r"""{"a":"c"} """),
+    m(r"""{"a":"c"} """, r"""{"a":["b"]} """),
+    m(r"""{"a":{"b":"c"}} """, r"""{"a":{"b":"d","c":null}} """),
+    m(r"""{"a":[{"b":"c"}]} """, r"""{"a":[1]} """),
+    m(r"""["a","b"] """, r"""["c","d"] """),
+    m(r"""{"a":"b"} """, r"""["c"] """),
+    m(r"""{"a":"foo"} """, "null"),
+    m(r"""{"a":"foo"} """, r""""bar" """),
+    m(r"""{"e":null} """, r"""{"a":1} """),
+    m("[1,2]", r"""{"a":"b","c":null} """),
+    m(r"""{} """, r"""{"a":{"bb":{"ccc":null}}} """),
+  ]
+}
+fn persistent() -> [Json] {
+  let a = json.parse(r"""{"a": 1, "b": 2} """)
+  let p = json.parse(r"""{"b": null} """)
+  [a, p, json.merge(a, p)]
+}
+fn merge(n: Int) -> Json { json.merge(json.parse(r"""{"a": 1} """), json.encode(map.from([("b", n)]))) }
+fn merge_null(n: Int) -> Json { json.merge(json.encode(map.from([("a", n), ("b", 1)])), json.parse(r"""{"a": null} """)) }
+fn merge_patch(xs: [Int]) -> Json { json.merge(json.parse(r"""{"a": 1} """), json.encode(map.from([("b", xs)]))) }

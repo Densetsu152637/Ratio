@@ -170,6 +170,22 @@ impl Gather {
     }
 }
 
+impl Gather {
+    /// The elements as a `Json` array node whose own labels are `own`.
+    ///
+    /// # Errors
+    ///
+    /// Over the heap or depth limits.
+    pub(super) fn finish_json(self, cx: &Cx<'_>, own: Labels) -> Result<Value, RtError> {
+        let Gather { items, charge, .. } = self;
+        let list = List::from_vec(cx.heap, items).map_err(|f| cx.fault(f, own))?;
+        drop(charge);
+        Value::new_json(cx.heap, crate::value::Json::Array(list))
+            .map(|v| v.with_labels(own))
+            .map_err(|f| cx.fault(f, own))
+    }
+}
+
 /// A stable order of `0..n` and the heap charge that pays for it.
 #[derive(Debug)]
 pub(super) struct Order {

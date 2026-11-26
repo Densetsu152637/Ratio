@@ -1,0 +1,14 @@
+// builtin: list.sum
+// case main: value [6, 3.5, 0]
+// case durations: value "3s"
+// case money: value "$3.5"
+// case overflow: error Invalid
+// labels sum(xs): [1, 2, 3] ; inner 0
+fn main() -> (Int, Float, Int) {
+  let empty: [Int] = []
+  ([1, 2, 3].sum(), list.sum([1.5, 2.0]), empty.sum())
+}
+fn durations() -> Duration { [1s, 2s].sum() }
+fn money() -> Money { [$1.50, $2].sum() }
+fn overflow() -> Int { [9223372036854775807, 1].sum() }
+fn sum(xs: [Int]) -> Int { list.sum(xs) }

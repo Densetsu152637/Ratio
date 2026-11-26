@@ -1,0 +1,12 @@
+// builtin: map.count_by
+// case main: value {"1": 2, "2": 2}
+// case empty: value {}
+// case raises: error User
+// labels count(xs): ["a", "bb", "c"] ; inner 0
+fn main() -> Map<Int, Int> { map.count_by(["a", "bb", "c", "dd"], |s| text.len(s)) }
+fn empty() -> Map<Int, Int> {
+  let xs: [Str] = []
+  map.count_by(xs, |s| text.len(s))
+}
+fn raises() -> Map<Int, Int> { map.count_by::<Str, Int>(["a"], |s| raise fail("boom", "key")) }
+fn count(xs: [Str]) -> Map<Int, Int> { map.count_by(xs, |s| text.len(s)) }

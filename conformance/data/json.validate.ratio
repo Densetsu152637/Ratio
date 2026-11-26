@@ -1,0 +1,64 @@
+// builtin: json.validate
+// case valid: value []
+// case wrong_type: value ["/a: expected integer"]
+// case required: value [": is missing the required property `a`"]
+// case several: value ["/a: is below the minimum", "/b: has fewer items than `minItems`", "/c: does not match the pattern"]
+// case enumerations: value ["/a: is not one of the allowed values", "/b: is not the required value"]
+// case additional: value ["/z: no value is valid against `false`"]
+// case items: value ["/1: expected string", "/2: expected string"]
+// case prefix: value ["/1: expected string"]
+// case unique: value [": has duplicate items"]
+// case combinators: value [": matches none of the `anyOf` schemas", ": matches 2 of the `oneOf` schemas, not exactly 1", ": matches the schema `not` forbids"]
+// case refs: value ["/next/value: expected integer"]
+// case conditions: value ["/b: is missing the required property `c`"]
+// case strings: value ["/a: is shorter than `minLength`", "/b: is longer than `maxLength`"]
+// case names: value [": the property name `bad key` is not allowed"]
+// case dependent: value [": has `a` but not `b`"]
+// case contains: value [": has too few items matching `contains`"]
+// case multiple: value ["/a: is not a multiple of the required number"]
+// case not_a_schema: error Invalid
+// case bad_type: error Invalid
+// case remote_ref: error Invalid
+// case missing_ref: error Invalid
+// case ref_cycle: error Invalid
+// case bad_pattern: error Invalid
+// case deep_ok: value []
+// labels check(n): 5
+// labels check_schema(t): "integer"
+fn v(doc: Str, schema: Str) -> [Untrusted<Str>] {
+  json.validate(json.parse(doc), json.parse(schema)).map(|x| x.pointer + ": " + x.message)
+}
+fn valid() -> [Untrusted<Str>] { v(r"""{"a": 1} """, r"""{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]} """) }
+fn wrong_type() -> [Untrusted<Str>] { v(r"""{"a": "x"} """, r"""{"properties":{"a":{"type":"integer"}}} """) }
+fn required() -> [Untrusted<Str>] { v(r"""{} """, r"""{"required":["a"]} """) }
+fn several() -> [Untrusted<Str>] {
+  v(r"""{"a": 1, "b": [], "c": "ABC"} """, r"""{"properties":{"a":{"minimum":2},"b":{"minItems":1},"c":{"pattern":"^[a-z]+$"}}} """)
+}
+fn enumerations() -> [Untrusted<Str>] { v(r"""{"a": 3, "b": 4} """, r"""{"properties":{"a":{"enum":[1,2]},"b":{"const":5}}} """) }
+fn additional() -> [Untrusted<Str>] { v(r"""{"a": 1, "z": 2} """, r"""{"properties":{"a":{}},"additionalProperties":false} """) }
+fn items() -> [Untrusted<Str>] { v(r"""["a", 1, 2] """, r"""{"items":{"type":"string"}} """) }
+fn prefix() -> [Untrusted<Str>] { v("[1, 2]", r"""{"prefixItems":[{"type":"integer"},{"type":"string"}]} """) }
+fn unique() -> [Untrusted<Str>] { v("[1, 2, 1]", r"""{"uniqueItems":true} """) }
+fn combinators() -> [Untrusted<Str>] {
+  v("1", r"""{"anyOf":[{"type":"string"},{"type":"null"}]} """) + v("1", r"""{"oneOf":[{"type":"integer"},{"type":"number"}]} """) + v("1", r"""{"not":{"type":"integer"}} """)
+}
+fn refs() -> [Untrusted<Str>] {
+  v(r"""{"value": 1, "next": {"value": "x"}} """, r"""{"$ref":"#/$defs/node","$defs":{"node":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/node"}}}}} """)
+}
+fn conditions() -> [Untrusted<Str>] {
+  v(r"""{"a": 1, "b": {}} """, r"""{"if":{"required":["a"]},"then":{"properties":{"b":{"required":["c"]}}},"else":false} """)
+}
+fn strings() -> [Untrusted<Str>] { v(r"""{"a": "x", "b": "yyyy"} """, r"""{"properties":{"a":{"minLength":2},"b":{"maxLength":3}}} """) }
+fn names() -> [Untrusted<Str>] { v(r"""{"ok": 1, "bad key": 2} """, r"""{"propertyNames":{"pattern":"^[a-z]+$"}} """) }
+fn dependent() -> [Untrusted<Str>] { v(r"""{"a": 1} """, r"""{"dependentRequired":{"a":["b"]}} """) }
+fn contains() -> [Untrusted<Str>] { v("[1, 2]", r"""{"contains":{"type":"string"}} """) }
+fn multiple() -> [Untrusted<Str>] { v(r"""{"a": 7, "b": 9} """, r"""{"properties":{"a":{"multipleOf":2},"b":{"multipleOf":3}}} """) }
+fn not_a_schema() -> [Untrusted<Str>] { v("1", "5") }
+fn bad_type() -> [Untrusted<Str>] { v("1", r"""{"type":5} """) }
+fn remote_ref() -> [Untrusted<Str>] { v("1", r"""{"$ref":"http://example.com/s"} """) }
+fn missing_ref() -> [Untrusted<Str>] { v("1", r"""{"$ref":"#/$defs/none"} """) }
+fn ref_cycle() -> [Untrusted<Str>] { v("1", r"""{"$ref":"#"} """) }
+fn bad_pattern() -> [Untrusted<Str>] { v(r""""a" """, r"""{"pattern":"("} """) }
+fn deep_ok() -> [Untrusted<Str>] { v(text.repeat("[", 60) + text.repeat("]", 60), r"""{"type":"array"} """) }
+fn check(n: Int) -> [Violation] { json.validate(json.encode(n), json.parse(r"""{"type":"string"} """)) }
+fn check_schema(t: Str) -> [Violation] { json.validate(json.parse("1"), json.encode(map.from([("type", t)]))) }

@@ -211,7 +211,7 @@ pub(super) fn diff_(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         &mut |units| pace.tick(cx_ref, units),
         &|| heap_error(cx_ref),
     )?;
-    out.finish(cx, labels)
+    out.finish_json(cx, labels)
 }
 
 pub(super) fn equal(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {

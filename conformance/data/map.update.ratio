@@ -1,0 +1,31 @@
+// builtin: map.update
+// case main: value [{"a": 2, "b": 2}, {"a": 1, "b": 2, "c": 11}]
+// case raises: error User
+// case steps_loop: value 5
+// labels update(k, d): "a" | 100 ; inert 1
+// labels absent(k, d): "c" | 100
+// labels existing(xs): [4] ; inner 0
+fn main() -> (Map<Str, Int>, Map<Str, Int>) {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  (map.update(m, "a", |v| v + 1, 0), m.update("c", |v| v + 1, 10))
+}
+fn raises() -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1 }
+  map.update(m, "a", |v| raise fail("boom", "update"), 0)
+}
+fn steps_loop() -> Int {
+  var m: Map<Str, Int> = {}
+  for w in ["a", "b", "a", "a", "b", "c"] {
+    m = m.update(w, |n| n + 1, 0)
+  }
+  m["a"] + m["c"] + 1
+}
+fn update(k: Str, d: Int) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.update(m, k, |v| v + 1, d)
+}
+fn absent(k: Str, d: Int) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.update(m, k, |v| v + 1, d)
+}
+fn existing(xs: [Int]) -> Map<Str, Int> { map.update(map.from(xs.map(|x| ("a", x))), "a", |v| v + 1, 0) }

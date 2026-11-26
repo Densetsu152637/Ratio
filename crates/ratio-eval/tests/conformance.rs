@@ -20,6 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ratio_eval::{Outcome, to_json_text};
+use support::normal;
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/eval")
@@ -61,120 +62,6 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
         return Err(format!("{file}: no expectation"));
     }
     Ok(case)
-}
-
-// ---- JSON normalisation for comparing values ----
-
-#[derive(Debug, PartialEq)]
-enum J {
-    Null,
-    Bool(bool),
-    Num(String),
-    Str(String),
-    Arr(Vec<J>),
-    Obj(Vec<(String, J)>),
-}
-
-struct P<'a> {
-    s: &'a [u8],
-    i: usize,
-}
-
-impl P<'_> {
-    fn ws(&mut self) {
-        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
-            self.i += 1;
-        }
-    }
-
-    fn string(&mut self) -> String {
-        self.i += 1;
-        let mut out = Vec::new();
-        while self.s[self.i] != b'"' {
-            if self.s[self.i] == b'\\' {
-                out.push(self.s[self.i]);
-                self.i += 1;
-            }
-            out.push(self.s[self.i]);
-            self.i += 1;
-        }
-        self.i += 1;
-        String::from_utf8(out).unwrap()
-    }
-
-    fn value(&mut self) -> J {
-        self.ws();
-        match self.s[self.i] {
-            b'n' => {
-                self.i += 4;
-                J::Null
-            }
-            b't' => {
-                self.i += 4;
-                J::Bool(true)
-            }
-            b'f' => {
-                self.i += 5;
-                J::Bool(false)
-            }
-            b'"' => J::Str(self.string()),
-            b'[' => {
-                self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    if self.s[self.i] == b']' {
-                        self.i += 1;
-                        return J::Arr(items);
-                    }
-                    items.push(self.value());
-                    self.ws();
-                    if self.s[self.i] == b',' {
-                        self.i += 1;
-                    }
-                }
-            }
-            b'{' => {
-                self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    if self.s[self.i] == b'}' {
-                        self.i += 1;
-                        items.sort_by(|a: &(String, J), b| a.0.cmp(&b.0));
-                        return J::Obj(items);
-                    }
-                    let k = self.string();
-                    self.ws();
-                    self.i += 1;
-                    let v = self.value();
-                    items.push((k, v));
-                    self.ws();
-                    if self.s[self.i] == b',' {
-                        self.i += 1;
-                    }
-                }
-            }
-            _ => {
-                let start = self.i;
-                while self.i < self.s.len() && b"+-.0123456789eE".contains(&self.s[self.i]) {
-                    self.i += 1;
-                }
-                let text = std::str::from_utf8(&self.s[start..self.i]).unwrap();
-                // Compare numbers by value: `1.0` and `1.00` are the same.
-                let n: f64 = text.parse().unwrap();
-                J::Num(format!("{n:?}"))
-            }
-        }
-    }
-}
-
-fn normal(text: &str) -> J {
-    P {
-        s: text.as_bytes(),
-        i: 0,
-    }
-    .value()
 }
 
 fn run_file(path: &Path, failures: &mut Vec<String>) -> Case {

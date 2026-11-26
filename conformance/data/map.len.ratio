@@ -1,0 +1,17 @@
+// builtin: map.len, map.is_empty
+// case main: value [2, 0, false, true]
+// labels size(k): "z"
+// labels none_left(k): "z"
+fn main() -> (Int, Int, Bool, Bool) {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  let e: Map<Str, Int> = {}
+  (map.len(m), e.len(), m.is_empty(), map.is_empty(e))
+}
+fn size(k: Str) -> Int {
+  let m: Map<Str, Int> = { a: 1 }
+  map.len(map.set(m, k, 2))
+}
+fn none_left(k: Str) -> Bool {
+  let m: Map<Str, Int> = { a: 1 }
+  map.is_empty(map.remove(m, k))
+}

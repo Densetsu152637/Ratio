@@ -1,0 +1,15 @@
+// builtin: list.insert
+// case main: value [1, 9, 2, 3]
+// case at_end: value [1, 2, 3, 9]
+// case at_start: value [9, 1, 2]
+// case past_end: error Invalid
+// case negative: error Invalid
+// labels insert(xs, i, x): [1, 2, 3] | 1 | 9
+// labels refused(xs, i, x): [1, 2, 3] | 7 | 9 ; inert 2
+fn main() -> [Int] { list.insert([1, 2, 3], 1, 9) }
+fn at_end() -> [Int] { [1, 2, 3].insert(3, 9) }
+fn at_start() -> [Int] { [1, 2].insert(0, 9) }
+fn past_end() -> [Int] { list.insert([1, 2], 3, 9) }
+fn negative() -> [Int] { list.insert([1, 2], -1, 9) }
+fn insert(xs: [Int], i: Int, x: Int) -> [Int] { list.insert(xs, i, x) }
+fn refused(xs: [Int], i: Int, x: Int) -> [Int] { list.insert(xs, i, x) }
