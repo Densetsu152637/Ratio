@@ -7,7 +7,7 @@ repository.
 **Changes in draft 0.11.** Errata from stage 4, the type checker. One grammar change.
 
 - Enums a program declares take no type parameters: `enum_decl` loses `[ type_params ]`, and
-  `Result<T>` is the built-in generic enum (chapters 02, 03). An enum's type arguments relate by
+  only built-in enums (`Result<T>`, `Fold<A>`) may be generic (chapters 02, 03). An enum's type arguments relate by
   how its payloads use each parameter (chapter 03).
 - A `prompt` declaration's type, `TrustedPrompt` or `Prompt`, is inferred; it has no written
   result type (chapter 05).

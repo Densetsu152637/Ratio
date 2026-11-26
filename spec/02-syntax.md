@@ -241,9 +241,9 @@ name_path       = IDENT , { "." , IDENT } ;
 
 type_decl       = "type" , IDENT , [ type_params ] , "=" , type ;
 enum_decl       = "enum" , IDENT , "{" , variant , { "," , variant } , [ "," ] , "}" ;
-                  (* no type parameters: Result<T> is the built-in generic enum (chapter 06);
-                     the parser reads parameters after the name so that the checker can
-                     refuse them by name, C0033 *)
+                  (* no type parameters: only built-in enums (Result<T>, Fold<A>, chapter 06)
+                     may be generic; the parser reads parameters after the name so that the
+                     checker can refuse them by name, C0033 *)
 variant         = IDENT , [ record_type ] ;
 type_params     = "<" , IDENT , { "," , IDENT } , ">" ;
 const_decl      = "const" , IDENT , [ ":" , type ] , "=" , expr ;

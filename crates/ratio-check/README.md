@@ -24,8 +24,9 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
   maps (keys `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum), nominal enums whose
   payloads are records, function and harness types. Functions and type aliases may be
   generic (`Scored<T>`); harnesses are not, and neither are enums a program declares
-  (`C0033`): only the built-in `Result<T>` is. An enum's type arguments relate by the variance
-  its payloads give each parameter (computed as a fixpoint; `Result<T>` is covariant), never
+  (`C0033`): only built-in enums (`Result<T>`, `Fold<A>`) may be generic. An enum's type
+  arguments relate by the variance its payloads give each parameter (computed as a fixpoint;
+  `Result<T>` is covariant, and so is `Fold<A>` once its stage adds it to the prelude), never
   covariantly by default.
 - **Subtyping** is chapter 03's list: `T <: T?`, `Never <: T`, `T <: Untrusted<T>`,
   `UserText <: Str <: Brief <: Untrusted<Str>`, `TrustedPrompt <: Prompt`, a harness is a
@@ -191,7 +192,7 @@ refuses nesting beyond 12.
 | `C0031` | Warning: a `let` that shadows an earlier binding (lint `shadowed_binding`) |
 | `C0032` | Warning: a local binding that shadows a standard module |
 | `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
-| `C0034` | A standard built-in the checker has no signature for yet (stages 7 to 12 add them) |
+| `C0034` | A standard built-in the checker has no signature for yet (its module's stage adds it) |
 
 ## Tests
 

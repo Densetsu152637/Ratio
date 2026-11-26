@@ -18,7 +18,7 @@ type Pair<A, B> = (A, B)
 type Note = { path: Str, risky?: Bool "True when risky" }
 
 enum Effort { low, medium, high }
-enum Verdict<T> { Pass, Fail { reason: Str }, Other { value: T, } }
+enum Verdict { Pass, Fail { reason: Str }, Other { value: Int, } }
 enum Single { Only }
 
 const LIMIT = 20k

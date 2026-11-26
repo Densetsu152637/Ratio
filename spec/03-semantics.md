@@ -37,7 +37,8 @@ and harness signatures are written out; local `let` and `var` bindings and closu
 inferred (bidirectional checking: the expected type flows into closures and literals). Generic
 type parameters are allowed on functions and type aliases; harnesses are monomorphic, because a
 harness signature is a contract recorded in the registry and used to derive schemas. Enums a
-program declares are not generic; `Result<T>` (chapter 06) is the built-in generic enum.
+program declares are not generic; only built-in enums (`Result<T>`, `Fold<A>`, chapter 06) may
+be generic.
 
 Records are structural: two record types with the same fields are the same type. A record value
 must have exactly the declared fields (no width subtyping), and a required field may stand
@@ -55,7 +56,7 @@ fields it declares, so it builds narrower records explicitly. Enums are nominal.
 - `TrustedPrompt` is a subtype of `Prompt`.
 - Lists, options, tuples, maps (in values) and records are covariant in their element types.
   This is sound because values are immutable. An enum's type arguments relate by how its
-  payloads use each parameter (`Result<T>` is covariant).
+  payloads use each parameter (`Result<T>` and `Fold<A>` are covariant).
 - A function type is contravariant in parameters and covariant in result.
 
 `Json` is the one dynamic type. It comes from `json.parse`, from `tools.call_tool` and MCP
