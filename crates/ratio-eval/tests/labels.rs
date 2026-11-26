@@ -261,6 +261,9 @@ fn drive(
                 let r = answer(&req);
                 m.resume_effect(r);
             }
+            Suspend::Branches(_) | Suspend::Fence(_) => {
+                panic!("hand-driven machines run no concurrent constructs")
+            }
             Suspend::Done(o) => return o,
         }
     }

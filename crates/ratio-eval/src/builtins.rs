@@ -20,18 +20,22 @@
 
 use std::fmt::Debug;
 
+// The BLAKE3 hash (tape blob names, digests); the same file as stage 9's `hash` module uses.
+pub(crate) mod blake3;
 mod regex;
 mod text;
 
 pub(crate) use regex::{Compiled, ReCache};
 
 use crate::error::{Kind, RtError, raise, raise_with};
-use crate::heap::{Charge, cost};
+use crate::heap::{Charge, Heap, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
 use crate::ops::{cmp_natural, eq, size};
 use crate::plist::{Cursor, List};
+use crate::prepare::Prepared;
 use crate::value::{Fault, Json, Repr, Value};
+use ratio_ir::Loc;
 
 /// A pure built-in's cost class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -477,29 +481,33 @@ fn new_list(cx: &Cx<'_>, items: Vec<Value>, own: Labels) -> Result<Value, RtErro
 
 /// `Result.Ok { value }` or `Result.Err { error }`.
 fn result_value(cx: &Cx<'_>, ok: bool, v: Value) -> Result<Value, RtError> {
-    let e = cx.p.rt.result;
-    let index = cx.p.enums[e as usize]
+    result_variant(cx.p, cx.heap, ok, v, cx.loc)
+}
+
+/// `Result.Ok { value }` or `Result.Err { error }`, charged to `heap`.
+pub(crate) fn result_variant(
+    p: &Prepared,
+    heap: &Heap,
+    ok: bool,
+    v: Value,
+    loc: Loc,
+) -> Result<Value, RtError> {
+    let e = p.rt.result;
+    let index = p.enums[e as usize]
         .variant(if ok { "Ok" } else { "Err" })
         .unwrap_or(0);
-    let layout = cx.p.layout_of(e, index).cloned().ok_or_else(|| {
+    let layout = p.layout_of(e, index).cloned().ok_or_else(|| {
         raise(
-            cx.p,
+            p,
             Kind::Invalid,
             "the prelude's Result has no payload",
             Labels::NONE,
-            cx.loc,
+            loc,
         )
     })?;
-    let payload =
-        Value::new_record(cx.heap, layout, vec![v]).map_err(|f| cx.fault(f, Labels::NONE))?;
-    Value::new_variant(
-        cx.heap,
-        e,
-        index,
-        cx.p.variant_weight(e, index),
-        Some(payload),
-    )
-    .map_err(|f| cx.fault(f, Labels::NONE))
+    let fault = |f| crate::machine::fault_pub(p, f, Labels::NONE, loc);
+    let payload = Value::new_record(heap, layout, vec![v]).map_err(fault)?;
+    Value::new_variant(heap, e, index, p.variant_weight(e, index), Some(payload)).map_err(fault)
 }
 
 // ---- control ----

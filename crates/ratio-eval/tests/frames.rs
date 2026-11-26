@@ -97,6 +97,9 @@ fn drive(
                 check(&req);
                 m.resume_effect(answer());
             }
+            Suspend::Branches(_) | Suspend::Fence(_) => {
+                panic!("hand-driven machines run no concurrent constructs")
+            }
             Suspend::Done(o) => return o,
         }
     }

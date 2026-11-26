@@ -8,6 +8,10 @@ repository.workspace = true
 publish = false
 description = "Ratio's core interpreter (stage 6): the prepared form, values with secrecy labels, and the evaluator of the pure language"
 
+[features]
+# The host contract suite (`ratio_eval::host_tests`), for hosts in other crates to run.
+host-tests = []
+
 [dependencies]
 ratio-ir = { path = "../ratio-ir", version = "0.1.0" }
 ratio-check = { path = "../ratio-check", version = "0.1.0" }

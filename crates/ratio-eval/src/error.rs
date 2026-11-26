@@ -116,6 +116,12 @@ pub(crate) enum Kind<'a> {
     Denied(&'static str),
     /// `User { tag }`, from `fail`, with the tag's labels.
     User(&'a str, Labels),
+    Timeout,
+    ToolFailed,
+    ModelFailed,
+    RateLimited,
+    /// A replay diverged from its tape: never catchable.
+    Replay,
 }
 
 impl Kind<'_> {
@@ -130,6 +136,11 @@ impl Kind<'_> {
             Kind::Cancelled => "Cancelled",
             Kind::Denied(_) => "Denied",
             Kind::User(..) => "User",
+            Kind::Timeout => "Timeout",
+            Kind::ToolFailed => "ToolFailed",
+            Kind::ModelFailed => "ModelFailed",
+            Kind::RateLimited => "RateLimited",
+            Kind::Replay => "Replay",
         }
     }
 
@@ -137,6 +148,7 @@ impl Kind<'_> {
         match self {
             Kind::Budget(_) => Class::Budget,
             Kind::Cancelled => Class::Cancelled,
+            Kind::Replay => Class::Replay,
             _ => Class::Catchable,
         }
     }

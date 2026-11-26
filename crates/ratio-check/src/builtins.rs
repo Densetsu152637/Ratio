@@ -470,6 +470,18 @@ pub(crate) const FRAME_MODULES: &[(&str, &str)] = &[
 @pure fn question(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error {}
 ",
     ),
+    // The scheduler's constructs (stage 11a). They run their functions concurrently and send
+    // nothing anywhere themselves (`@local`); the effects are their functions'.
+    (
+        "control",
+        r"
+@local fn par<T>(fs: [fn() -> T], limit: Int? = none) -> [T] {}
+@local fn race<T>(fs: [fn() -> T]) -> T {}
+@local fn par_map<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [U] {}
+@local fn par_map_settled<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [Result<U>] {}
+@local fn timeout<T>(d: Duration, f: fn() -> T) -> T {}
+",
+    ),
     (
         "meta",
         r"

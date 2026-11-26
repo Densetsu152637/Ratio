@@ -120,6 +120,8 @@ pub(crate) enum PKind {
         /// The call's overrides (`f(x) with { … }`), evaluated after the arguments.
         config: Option<NodeId>,
     },
+    /// `with timeout d { body } else { … }`.
+    Timeout(NodeId, NodeId, Option<NodeId>),
     Effect {
         name: Arc<str>,
         args: Box<[NodeId]>,
@@ -808,8 +810,14 @@ impl Preparer<'_> {
             E::Prompt(parts) => PKind::Prompt(self.prompt(parts)),
             E::Par(xs) => PKind::Par(self.exprs(xs)),
             E::Race(xs) => PKind::Race(self.exprs(xs)),
-            E::WithTimeout { .. } => {
-                PKind::Unsupported("`with timeout` needs the scheduler (stage 11)")
+            E::WithTimeout {
+                duration,
+                body,
+                else_,
+            } => {
+                let d = self.expr(duration);
+                let b = self.expr(body);
+                PKind::Timeout(d, b, else_.as_ref().map(|e| self.expr(e)))
             }
             E::With { config, body } => {
                 let c = self.expr(config);

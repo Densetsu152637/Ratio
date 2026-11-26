@@ -65,6 +65,9 @@ fn run_no_host(p: &Arc<Prepared>, name: &str, args: Vec<Value>, limits: Limits) 
             Suspend::Yield => {}
             Suspend::Wait(w) => w.wait(),
             Suspend::Effect(req) => panic!("`{name}` reached the host with `{}`", req.builtin),
+            Suspend::Branches(_) | Suspend::Fence(_) => {
+                panic!("hand-driven machines run no concurrent constructs")
+            }
             Suspend::Done(o) => return o,
         }
     }
@@ -368,6 +371,9 @@ fn main(n: Int) -> Int {
             Suspend::Yield => {}
             Suspend::Wait(w) => w.wait(),
             Suspend::Effect(_) => panic!("no effects"),
+            Suspend::Branches(_) | Suspend::Fence(_) => {
+                panic!("hand-driven machines run no concurrent constructs")
+            }
             Suspend::Done(o) => break o,
         }
     };

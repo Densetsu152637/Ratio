@@ -64,7 +64,7 @@ pub(crate) struct Caller {
     pub loc: Loc,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Frame {
     pub ctx: FrameCtx,
     branch: Vec<BranchEl>,
@@ -98,7 +98,7 @@ pub(crate) struct OpenError {
     pub scope: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FrameStack {
     frames: Vec<Frame>,
     ledgers: Ledgers,
@@ -322,23 +322,86 @@ impl FrameStack {
         Some(f)
     }
 
-    /// A concurrent construct starts in the top frame (its first branch, index 0).
-    pub(crate) fn enter_branch(&mut self, site: u32) {
-        let top = self.top_mut();
-        let occ = top.next_occ(site);
-        top.branch.push(BranchEl { site, occ, idx: 0 });
+    /// The next occurrence of `site` in the top frame and branch path (an effect, a harness
+    /// call or a concurrent construct).
+    pub(crate) fn next_occ(&mut self, site: u32) -> u32 {
+        self.top_mut().next_occ(site)
     }
 
-    /// The construct moves on to branch `idx`.
-    pub(crate) fn set_branch(&mut self, idx: u32) {
-        if let Some(b) = self.top_mut().branch.last_mut() {
-            b.idx = idx;
+    /// The frames of branch `idx` of the construct at `site` (occurrence `occ`) in the top
+    /// frame: the same frames, the branch element pushed onto the top frame's branch path,
+    /// and its own step count (from 0). The occurrence counts below are not copied: the
+    /// branch's paths are its own, so none of them can be counted yet.
+    pub(crate) fn child(&self, site: u32, occ: u32, idx: u32) -> FrameStack {
+        let mut frames: Vec<Frame> = self
+            .frames
+            .iter()
+            .map(|f| Frame {
+                ctx: f.ctx.clone(),
+                branch: f.branch.clone(),
+                occ: HashMap::new(),
+                depth_scope: f.depth_scope,
+                caller: f.caller.clone(),
+            })
+            .collect();
+        if let Some(top) = frames.last_mut() {
+            top.branch.push(BranchEl { site, occ, idx });
         }
+        let mut s = FrameStack {
+            frames,
+            ledgers: self.ledgers.clone(),
+            flushed: 0,
+            step_limit: 0,
+            step_scope: 0,
+        };
+        s.limits(0);
+        s
     }
 
-    /// The construct ends.
-    pub(crate) fn leave_branch(&mut self) {
-        self.top_mut().branch.pop();
+    /// Debits the steps since the last flush and recomputes the top frame's step limit from
+    /// the ledgers (which concurrent branches debit too).
+    pub(crate) fn refresh(&mut self, steps: u64) {
+        self.flush(steps);
+        self.limits(steps);
+    }
+
+    /// Adds a finished branch's steps (already debited on the ledgers by the branch).
+    pub(crate) fn absorb(&mut self, steps: u64, branch_steps: u64) {
+        self.flushed = self.flushed.saturating_add(branch_steps);
+        self.limits(steps);
+    }
+
+    /// The session's frame's ledger node.
+    pub(crate) fn session_node(&self) -> NodeId {
+        self.frames[0].ctx.node
+    }
+
+    /// The path of the open frame whose ledger node is `node`.
+    pub(crate) fn path_of(&self, node: NodeId) -> Option<Arc<str>> {
+        self.frames
+            .iter()
+            .find(|f| f.ctx.node == node)
+            .map(|f| Arc::clone(&f.ctx.path))
+    }
+
+    /// The ledger nodes of the open frames, bottom first.
+    pub(crate) fn nodes(&self) -> Vec<NodeId> {
+        self.frames.iter().map(|f| f.ctx.node).collect()
+    }
+
+    /// The stack index of the frame whose ledger node is `node` (0: the turn's).
+    pub(crate) fn index_of(&self, node: NodeId) -> u32 {
+        self.frames
+            .iter()
+            .position(|f| f.ctx.node == node)
+            .and_then(|i| u32::try_from(i).ok())
+            .unwrap_or(0)
+    }
+
+    /// The frame below the top one (the caller of the top frame), if any.
+    pub(crate) fn below_top(&self) -> Option<&FrameCtx> {
+        let n = self.frames.len();
+        (n >= 2).then(|| &self.frames[n - 2].ctx)
     }
 
     /// The top frame's branch path, rendered (empty outside concurrent constructs).
