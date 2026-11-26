@@ -31,6 +31,10 @@ pub const OFFLOAD_TEXT_BYTES: u64 = 64 * 1024;
 /// A list, map or JSON value with at least this many elements makes a built-in's input large.
 pub const OFFLOAD_ELEMENTS: u64 = 16_384;
 
+/// A charge before running of more than this many steps (ten checkpoints) makes a call large
+/// whatever its arguments' sizes.
+pub const OFFLOAD_STEPS: u64 = 10 * crate::machine::CHECKPOINT;
+
 /// When a built-in's input counts as large enough to offload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Thresholds {
@@ -38,6 +42,8 @@ pub struct Thresholds {
     pub text_bytes: u64,
     /// Elements (or JSON nodes) of any one container argument.
     pub elements: u64,
+    /// Steps charged before running (a heavy pattern over a short text, say).
+    pub steps: u64,
 }
 
 impl Default for Thresholds {
@@ -45,6 +51,7 @@ impl Default for Thresholds {
         Thresholds {
             text_bytes: OFFLOAD_TEXT_BYTES,
             elements: OFFLOAD_ELEMENTS,
+            steps: OFFLOAD_STEPS,
         }
     }
 }

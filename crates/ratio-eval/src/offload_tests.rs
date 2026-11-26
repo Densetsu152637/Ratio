@@ -45,6 +45,7 @@ fn a_cancelled_branch_keeps_its_jobs_place_steps_and_heap_until_the_job_ends() {
         Thresholds {
             text_bytes: 1024,
             elements: 1024,
+            steps: crate::pool::OFFLOAD_STEPS,
         },
     );
     // Hold the only worker.
@@ -131,6 +132,7 @@ fn a_waiting_evaluation_frees_its_thread_and_wakes_when_the_job_ends() {
         Thresholds {
             text_bytes: 16,
             elements: 16,
+            steps: crate::pool::OFFLOAD_STEPS,
         },
     );
     let (release, gate) = mpsc::channel::<()>();

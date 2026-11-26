@@ -1068,7 +1068,7 @@ impl Machine {
         match builtin.imp {
             Imp::Pure(f) => {
                 let steps_left = self.limits.steps.saturating_sub(self.steps);
-                if let Some(session) = self.offload_for(builtin, args) {
+                if let Some(session) = self.offload_for(builtin, args, pre) {
                     let p = Arc::clone(&self.p);
                     let heap = self.heap.clone();
                     let cancel = self.cancel.clone();
@@ -1078,6 +1078,20 @@ impl Machine {
                         // The arguments and the working memory stay charged until the job
                         // ends, whether or not anyone still waits for it.
                         let _scratch = scratch;
+                        if cancel.is_cancelled() {
+                            // Cancelled while it was queued: it ends without running.
+                            return Ran {
+                                result: Err(raise(
+                                    &p,
+                                    Kind::Cancelled,
+                                    "the evaluation was cancelled",
+                                    Labels::NONE,
+                                    loc,
+                                )),
+                                debit: 0,
+                                work: 0,
+                            };
+                        }
                         run_pure(
                             f, &p, &heap, &cancel, loc, &type_args, regex, steps_left, &args,
                         )
@@ -1132,17 +1146,21 @@ impl Machine {
         }
     }
 
-    /// The session to run this call on, when there is a pool and the input is large.
-    fn offload_for(&self, builtin: Builtin, args: &[Option<Value>]) -> Option<PoolSession> {
+    /// The session to run this call on, when there is a pool and the call is large: an
+    /// argument past the thresholds, or a charge before running of more than
+    /// [`crate::pool::OFFLOAD_STEPS`] (a heavy pattern over a short text).
+    fn offload_for(
+        &self,
+        builtin: Builtin,
+        args: &[Option<Value>],
+        pre: u64,
+    ) -> Option<PoolSession> {
         let session = self.offload.as_ref()?;
         if !builtin.offloadable() {
             return None;
         }
         let t = session.thresholds();
-        args.iter()
-            .flatten()
-            .any(|v| large(v, t))
-            .then(|| session.clone())
+        (pre > t.steps || args.iter().flatten().any(|v| large(v, t))).then(|| session.clone())
     }
 
     /// The compiled pattern of a `re` call (its first argument), from the call site's cache.

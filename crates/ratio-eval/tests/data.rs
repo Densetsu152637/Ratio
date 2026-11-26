@@ -202,6 +202,7 @@ fn offloaded_built_ins_give_the_same_values_labels_and_charges() {
         Thresholds {
             text_bytes: 0,
             elements: 0,
+            steps: 0,
         },
     );
     let session = pool.session();
@@ -370,4 +371,160 @@ fn oversized_programs_and_patterns_are_invalid() {
         );
         assert_eq!(kind, "Invalid", "`{pattern}`");
     }
+}
+
+#[test]
+fn a_long_fill_is_charged_and_only_its_needed_characters_are_read() {
+    let p = support::prepared("fn pad(s: Str, f: Str) -> Str { text.pad_start(s, 3, fill: f) }");
+    let fill = Value::text(&"xy".repeat(500_000));
+    let started = Instant::now();
+    let f = support::run_with(&p, "pad", vec![Value::text("a"), fill], Limits::default());
+    let Outcome::Returned(v) = &f.outcome else {
+        panic!("raised")
+    };
+    assert_eq!(v.as_text(), Some("xya"));
+    assert!(
+        f.steps > 1_000_000 / 64,
+        "the fill was not charged: {} steps",
+        f.steps
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn over_long_splits_are_refused_before_their_parts_are_built() {
+    let p = support::prepared(
+        r#"
+fn split(s: Str) -> Int { text.split(s, ",").len() }
+fn lines(s: Str) -> Int { text.lines(s).len() }
+fn words(s: Str) -> Int { text.words(s).len() }
+fn chars(s: Str) -> Int { text.chars(s).len() }
+"#,
+    );
+    let commas = Value::text(&",".repeat(2_000_000));
+    let newlines = Value::text(&"\n".repeat(2_000_000));
+    let words = Value::text(&"a ".repeat(1_500_000));
+    for (entry, s) in [
+        ("split", commas.clone()),
+        ("lines", newlines),
+        ("words", words),
+        ("chars", commas),
+    ] {
+        let f = support::run_with(&p, entry, vec![s], Limits::default());
+        let Outcome::Raised(e) = &f.outcome else {
+            panic!("`{entry}` returned")
+        };
+        assert_eq!(e.kind(&p), "Invalid", "{entry}");
+        // Only the counting pass ran: nothing was built for the parts.
+        assert!(
+            f.heap_peak < 1024 * 1024,
+            "{entry}: heap peak {}",
+            f.heap_peak
+        );
+    }
+    // `re.split` cannot count first; each part is charged as it is built, so it stops at the
+    // heap limit or the element limit.
+    let p = support::prepared(r#"fn split(s: Str) -> Int { re.split(",", s).len() }"#);
+    let f = support::run_with(
+        &p,
+        "split",
+        vec![Value::text(&",".repeat(4_000_000))],
+        Limits::default(),
+    );
+    let Outcome::Raised(e) = &f.outcome else {
+        panic!("re.split returned")
+    };
+    assert!(
+        matches!(e.kind(&p).as_str(), "Invalid" | "Budget"),
+        "{}",
+        e.kind(&p)
+    );
+    assert!(f.heap_peak <= Limits::default().heap);
+}
+
+#[test]
+fn a_heavy_pattern_over_a_short_text_runs_on_the_pool_and_stops_when_cancelled() {
+    let p = support::prepared(r"fn main(p: Str, s: Str) -> Bool { re.is_match(p, s) }");
+    let args = || {
+        vec![
+            Value::text(r"(?:\w{1000}){4}z"),
+            Value::text(&"a".repeat(30_000)),
+        ]
+    };
+    // Its charge before running passes `OFFLOAD_STEPS`, so it goes to the pool though its
+    // text is short.
+    let pool = Pool::new(1);
+    let session = pool.session();
+    let (pooled, log) = run_on(&p, args(), Limits::default(), Some(&session));
+    assert!(matches!(pooled.outcome, Outcome::Returned(_)));
+    if cfg!(debug_assertions) {
+        assert!(
+            log.iter().any(|w| w.name == "re.is_match" && w.offloaded),
+            "{log:?}"
+        );
+    }
+    // Inline, a cancellation stops the search within a checkpoint's worth of work.
+    let entry = p.find("main.ratio", "main").unwrap();
+    let cancel = CancelToken::new();
+    let eval = ratio_eval::evaluate(
+        Arc::clone(&p),
+        entry,
+        args(),
+        Limits::default(),
+        cancel.clone(),
+    )
+    .unwrap();
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        cancel.cancel();
+        Instant::now()
+    });
+    let finished = block_on(eval);
+    let ended = Instant::now();
+    let cancelled_at = canceller.join().unwrap();
+    let Outcome::Raised(e) = &finished.outcome else {
+        panic!("not cancelled")
+    };
+    assert_eq!(e.kind(&p), "Cancelled");
+    assert!(ended.duration_since(cancelled_at) < Duration::from_secs(1));
+}
+
+#[test]
+fn refused_and_cached_patterns_are_charged_their_compile_work() {
+    let p = support::prepared(
+        r#"
+fn fails<T>(f: fn() -> T) -> Int { match result(f) { Ok { .. } => 0, Err { .. } => 1 } }
+fn once(p: Str) -> Int { fails(|| re.is_match(p, "")) }
+fn twice(p: Str) -> Int { fails(|| re.is_match(p, "")) + fails(|| re.is_match(p, "")) }
+"#,
+    );
+    for pattern in [format!("{})", "[a-z]".repeat(800)), "[a-z]".repeat(800)] {
+        let one = support::run(&p, "once", vec![Value::text(&pattern)]).steps;
+        let two = support::run(&p, "twice", vec![Value::text(&pattern)]).steps;
+        // Four units a character: at least 4 × 4,000 / 64 = 250 steps, on a hit as on a miss.
+        assert!(one > 250, "`{}…` charged {one} steps", &pattern[..10]);
+        assert!(
+            two >= 2 * one - 20,
+            "a cached pattern was charged less: {one} then {two}"
+        );
+    }
+}
+
+#[test]
+fn match_lists_are_charged_for_their_output() {
+    let p =
+        support::prepared(r#"fn all(s: Str) -> Int { re.find_all("", s, limit: 1000000).len() }"#);
+    let n = 100_000;
+    let f = support::run_with(
+        &p,
+        "all",
+        vec![Value::text(&"x".repeat(n))],
+        Limits::default(),
+    );
+    let Outcome::Returned(v) = f.outcome else {
+        panic!("raised")
+    };
+    assert_eq!(v.as_int(), Some(i64::try_from(n).unwrap() + 1));
+    // Four output units a match record, beyond the search's own charge.
+    assert!(f.steps > 4 * n as u64 / 64, "charged {} steps", f.steps);
 }

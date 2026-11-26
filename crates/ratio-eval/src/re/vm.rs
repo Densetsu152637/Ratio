@@ -14,6 +14,13 @@ use super::parse::Look;
 /// An unset slot.
 pub(crate) const UNSET: usize = usize::MAX;
 
+/// A search stopped because its evaluation was cancelled.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Stopped;
+
+/// The work between cancellation checks: one checkpoint's worth, at 64 units a step.
+const CHECK_WORK: u64 = 64 * crate::machine::CHECKPOINT;
+
 /// A list of threads: the instructions reached, in priority order, with the slots each
 /// carries (by instruction).
 #[derive(Debug)]
@@ -106,9 +113,10 @@ pub(crate) struct Vm {
 /// The bytes of working memory a VM for `insts` instructions tracking `ns` slots holds, as the
 /// heap ledger charges it (fixed sizes, platform-independent).
 pub(crate) fn scratch_bytes(insts: u64, ns: u64) -> u64 {
-    // Two lists (a dense and a sparse index and the slots per instruction) and the stack.
+    // Two lists (a dense and a sparse index and the slots per instruction), the stack (two
+    // 24-byte frames per instruction) and the current slots.
     insts
-        .saturating_mul(2 * (4 + 4) + 16)
+        .saturating_mul(2 * (4 + 4) + 2 * 24)
         .saturating_add(insts.saturating_mul(ns).saturating_mul(2 * 8))
         .saturating_add(ns.saturating_mul(8))
 }
@@ -129,14 +137,17 @@ impl Vm {
     }
 
     /// The leftmost-first match starting at or after byte `start`: its tracked slots (byte
-    /// offsets, [`UNSET`] for a group that did not take part), or `None`.
+    /// offsets, [`UNSET`] for a group that did not take part), or `None`. Every checkpoint's
+    /// worth of work it asks `cancelled`, and stops with [`Stopped`] when it says so.
     pub(crate) fn search(
         &mut self,
         prog: &Program,
         hay: &str,
         start: usize,
         work: &mut u64,
-    ) -> Option<Vec<usize>> {
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<Vec<usize>>, Stopped> {
+        let mut next_check = work.saturating_add(CHECK_WORK);
         let ns = self.ns;
         let Vm {
             clist,
@@ -150,6 +161,12 @@ impl Vm {
         let mut matched: Option<Vec<usize>> = None;
         let mut pos = Pos::new(hay, start);
         loop {
+            if *work >= next_check {
+                if cancelled() {
+                    return Err(Stopped);
+                }
+                next_check = work.saturating_add(CHECK_WORK);
+            }
             if matched.is_none() && (!prog.anchored || pos.at == 0) {
                 curr.fill(UNSET);
                 *work += ns as u64;
@@ -170,7 +187,7 @@ impl Vm {
                 let step = match &prog.insts[pc as usize] {
                     Inst::Match => {
                         if ns == 0 {
-                            return Some(Vec::new());
+                            return Ok(Some(Vec::new()));
                         }
                         *work += ns as u64;
                         matched = Some(clist.slots(pc, ns).to_vec());
@@ -198,7 +215,7 @@ impl Vm {
             pos = npos;
             std::mem::swap(clist, nlist);
         }
-        matched
+        Ok(matched)
     }
 }
 

@@ -2,14 +2,18 @@
 //! `regex` syntax ([`parse`]), compiled to a Thompson NFA ([`compile`]) and run by a Pike VM
 //! ([`vm`]). Nothing backtracks, so no pattern can make a search take more than
 //! O(|text| · program weight · (1 + slots)) time, and the program's weight is bounded
-//! ([`compile::MAX_PROGRAM`]); patterns are at most [`MAX_PATTERN_BYTES`].
+//! ([`compile::MAX_PROGRAM`], every repeated copy weighing at least 1, so compiling is bounded
+//! too); patterns are at most [`MAX_PATTERN_BYTES`]. A search checks its evaluation's
+//! cancellation every checkpoint's worth of work.
 
 mod class;
 mod compile;
 mod parse;
 mod vm;
 
-pub(crate) use vm::{UNSET, Vm, scratch_bytes};
+use std::collections::HashMap;
+
+pub(crate) use vm::{Stopped, UNSET, Vm, scratch_bytes};
 
 /// The longest pattern accepted, in bytes.
 pub(crate) const MAX_PATTERN_BYTES: usize = 4096;
@@ -22,17 +26,40 @@ pub(crate) struct Regex {
     pub names: Vec<(String, u32)>,
     /// The capturing groups, the whole match (group 0) included.
     pub groups: u32,
+    /// The work compiling took: four units per pattern character and the program's weight.
+    pub compile_work: u64,
+}
+
+/// A refused pattern: why, and the work it took to find out (its characters and the program
+/// weight compiled before the refusal).
+#[derive(Clone, Debug)]
+pub(crate) struct Refusal {
+    pub message: String,
+    pub work: u64,
 }
 
 impl Regex {
     /// Compiles a pattern, or says why it is refused.
-    pub(crate) fn new(pattern: &str) -> Result<Regex, String> {
+    pub(crate) fn new(pattern: &str) -> Result<Regex, Refusal> {
         if pattern.len() > MAX_PATTERN_BYTES {
-            return Err("the pattern is longer than 4 KiB".to_owned());
+            return Err(Refusal {
+                message: "the pattern is longer than 4 KiB".to_owned(),
+                work: 0,
+            });
         }
-        let parsed = parse::parse(pattern)?;
-        let program = compile::compile(&parsed)?;
+        // Parsing and compiling cost a few units per pattern character, and one per unit of
+        // program weight.
+        let chars = 4 * pattern.chars().count() as u64;
+        let parsed = parse::parse(pattern).map_err(|message| Refusal {
+            message,
+            work: chars,
+        })?;
+        let program = compile::compile(&parsed).map_err(|(message, weight)| Refusal {
+            message,
+            work: chars + weight,
+        })?;
         Ok(Regex {
+            compile_work: chars + program.weight,
             program,
             names: parsed.names,
             groups: parsed.groups + 1,
@@ -57,11 +84,6 @@ impl Regex {
     /// A VM for this program tracking `ns` slots.
     pub(crate) fn vm(&self, ns: usize) -> Vm {
         Vm::new(&self.program, ns)
-    }
-
-    /// The group named `name`.
-    pub(crate) fn group(&self, name: &str) -> Option<u32> {
-        self.names.iter().find(|(n, _)| n == name).map(|(_, i)| *i)
     }
 }
 
@@ -95,94 +117,147 @@ impl<'a> Matches<'a> {
         }
     }
 
-    /// The next match's slots (byte offsets), counting the work in `work`.
-    pub(crate) fn next(&mut self, work: &mut u64) -> Option<Vec<usize>> {
+    /// The next match's slots (byte offsets), counting the work in `work`; `Err` when
+    /// `cancelled` says to stop.
+    pub(crate) fn next(
+        &mut self,
+        work: &mut u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<Vec<usize>>, Stopped> {
         loop {
             if self.start > self.hay.len() {
-                return None;
+                return Ok(None);
             }
-            let slots = self
-                .vm
-                .search(&self.re.program, self.hay, self.start, work)?;
+            let Some(slots) =
+                self.vm
+                    .search(&self.re.program, self.hay, self.start, work, cancelled)?
+            else {
+                return Ok(None);
+            };
             let (s, e) = (slots[0], slots[1]);
             if s == e && self.last_end == Some(e) {
                 // An empty match touching the last one: search again one character on.
-                let c = self.hay[e..].chars().next()?;
+                let Some(c) = self.hay[e..].chars().next() else {
+                    return Ok(None);
+                };
                 self.start = e + c.len_utf8();
                 continue;
             }
             self.start = e;
             self.last_end = Some(e);
-            return Some(slots);
+            return Ok(Some(slots));
         }
     }
 }
 
-/// Appends the replacement `with` for one match to `out`, as Rust's `regex` expands it: `$n`
-/// and `${n}` are group `n`, `$name` and `${name}` a named group (`$name` takes the longest run
-/// of letters, digits and `_`), `$$` is `$`, a group that did not take part or does not exist
-/// is empty, and a `$` that starts none of these is itself. Returns the work (bytes read and
-/// written), or `Err` with the work done when `out` would pass `limit` bytes (it stops there).
-pub(crate) fn expand(
-    re: &Regex,
-    with: &str,
-    hay: &str,
-    slots: &[usize],
-    out: &mut String,
-    limit: usize,
-) -> Result<u64, u64> {
-    let group = |i: u32| -> &str {
-        let (a, b) = (2 * i as usize, 2 * i as usize + 1);
-        match (slots.get(a), slots.get(b)) {
-            (Some(&s), Some(&e)) if s != UNSET && e != UNSET => &hay[s..e],
-            _ => "",
-        }
-    };
-    let lookup = |name: &str| -> &str {
-        match name.parse::<u32>() {
-            Ok(i) => group(i),
-            Err(_) => re.group(name).map_or("", group),
-        }
-    };
-    let start = out.len();
-    let work = |out: &String| (with.len() + out.len() - start) as u64;
-    let push = |out: &mut String, s: &str| -> Result<(), ()> {
-        if out.len() + s.len() > limit {
-            return Err(());
-        }
-        out.push_str(s);
-        Ok(())
-    };
-    let mut rest = with;
-    while let Some(at) = rest.find('$') {
-        let mut ok = push(out, &rest[..at]);
-        rest = &rest[at + 1..];
-        if let Some(r) = rest.strip_prefix('$') {
-            ok = ok.and_then(|()| push(out, "$"));
-            rest = r;
-        } else if let Some(r) = rest.strip_prefix('{')
-            && let Some(close) = r.find('}')
-        {
-            ok = ok.and_then(|()| push(out, lookup(&r[..close])));
-            rest = &r[close + 1..];
-        } else {
-            let len = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            if len == 0 {
-                ok = ok.and_then(|()| push(out, "$"));
+/// One piece of a replacement template.
+#[derive(Debug)]
+enum Piece {
+    /// Bytes of the template, by range.
+    Text(usize, usize),
+    Group(u32),
+}
+
+/// A replacement (`$1`, `${name}`, `$$`) resolved once per call against the pattern's groups,
+/// as Rust's `regex` expands it: `$n` and `${n}` are group `n`, `$name` and `${name}` a named
+/// group (`$name` takes the longest run of letters, digits and `_`), `$$` is `$`, a group that
+/// does not exist is empty, and a `$` that starts none of these is itself.
+#[derive(Debug)]
+pub(crate) struct Template<'w> {
+    with: &'w str,
+    pieces: Vec<Piece>,
+}
+
+impl<'w> Template<'w> {
+    /// The template, and the work resolving it took (its bytes and the group names).
+    pub(crate) fn new(re: &Regex, with: &'w str) -> (Template<'w>, u64) {
+        let names: HashMap<&str, u32> = re.names.iter().map(|(n, i)| (n.as_str(), *i)).collect();
+        let lookup = |name: &str| -> Option<u32> {
+            match name.parse::<u32>() {
+                Ok(i) => (i < re.groups).then_some(i),
+                Err(_) => names.get(name).copied(),
+            }
+        };
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        let b = with.as_bytes();
+        let mut text_from = 0;
+        while let Some(off) = with[at..].find('$') {
+            let dollar = at + off;
+            let rest = &with[dollar + 1..];
+            let (group, skip): (Option<Option<u32>>, usize) = if rest.starts_with('$') {
+                // `$$`: the text up to and including the first `$`.
+                pieces.push(Piece::Text(text_from, dollar + 1));
+                text_from = dollar + 2;
+                at = dollar + 2;
+                continue;
+            } else if let Some(r) = rest.strip_prefix('{')
+                && let Some(close) = r.find('}')
+            {
+                (Some(lookup(&r[..close])), close + 2)
             } else {
-                ok = ok.and_then(|()| push(out, lookup(&rest[..len])));
-                rest = &rest[len..];
+                let len = rest
+                    .bytes()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+                    .count();
+                if len == 0 {
+                    (None, 0)
+                } else {
+                    (Some(lookup(&rest[..len])), len)
+                }
+            };
+            match group {
+                None => at = dollar + 1,
+                Some(g) => {
+                    pieces.push(Piece::Text(text_from, dollar));
+                    if let Some(g) = g {
+                        pieces.push(Piece::Group(g));
+                    }
+                    at = dollar + 1 + skip;
+                    text_from = at;
+                }
             }
         }
-        if ok.is_err() {
-            return Err(work(out));
-        }
+        pieces.push(Piece::Text(text_from, b.len()));
+        pieces.retain(|p| !matches!(p, Piece::Text(a, z) if a == z));
+        let work = (with.len() + re.names.len()) as u64 + 1;
+        (Template { with, pieces }, work)
     }
-    match push(out, rest) {
-        Ok(()) => Ok(work(out)),
-        Err(()) => Err(work(out)),
+
+    /// Whether any piece refers to a group (so a search must track every group's slots).
+    pub(crate) fn uses_groups(&self) -> bool {
+        self.pieces
+            .iter()
+            .any(|p| matches!(p, Piece::Group(g) if *g > 0))
+    }
+
+    /// Appends the replacement for one match to `out`. Returns the bytes written, or `Err`
+    /// with them when `out` would pass `limit` bytes (it stops there).
+    pub(crate) fn expand(
+        &self,
+        hay: &str,
+        slots: &[usize],
+        out: &mut String,
+        limit: usize,
+    ) -> Result<u64, u64> {
+        let start = out.len();
+        for p in &self.pieces {
+            let s = match p {
+                Piece::Text(a, z) => &self.with[*a..*z],
+                Piece::Group(g) => {
+                    let (a, z) = (2 * *g as usize, 2 * *g as usize + 1);
+                    match (slots.get(a), slots.get(z)) {
+                        (Some(&s), Some(&e)) if s != UNSET && e != UNSET => &hay[s..e],
+                        _ => "",
+                    }
+                }
+            };
+            if out.len() + s.len() > limit {
+                return Err((out.len() - start) as u64);
+            }
+            out.push_str(s);
+        }
+        Ok((out.len() - start) as u64)
     }
 }
 
@@ -222,10 +297,11 @@ mod tests {
     use super::*;
 
     fn find(p: &str, h: &str) -> Option<(usize, usize)> {
-        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p}: {}", e.message));
         let mut vm = re.vm(2);
         let mut work = 0;
-        vm.search(&re.program, h, 0, &mut work)
+        vm.search(&re.program, h, 0, &mut work, &|| false)
+            .unwrap()
             .map(|s| (s[0], s[1]))
     }
 
@@ -234,7 +310,7 @@ mod tests {
         let mut m = Matches::new(&re, h, 2);
         let mut out = Vec::new();
         let mut work = 0;
-        while let Some(s) = m.next(&mut work) {
+        while let Some(s) = m.next(&mut work, &|| false).unwrap() {
             out.push((s[0], s[1]));
         }
         out
@@ -244,7 +320,10 @@ mod tests {
         let re = Regex::new(p).unwrap();
         let mut vm = re.vm(re.slots(true));
         let mut work = 0;
-        let s = vm.search(&re.program, h, 0, &mut work).unwrap();
+        let s = vm
+            .search(&re.program, h, 0, &mut work, &|| false)
+            .unwrap()
+            .unwrap();
         (0..re.groups as usize)
             .map(|i| {
                 (s[2 * i] != UNSET && s[2 * i + 1] != UNSET)
@@ -256,7 +335,7 @@ mod tests {
     fn refused(p: &str) -> String {
         Regex::new(p)
             .err()
-            .unwrap_or_else(|| panic!("`{p}` was accepted"))
+            .map_or_else(|| panic!("`{p}` was accepted"), |e| e.message)
     }
 
     #[test]
@@ -349,21 +428,20 @@ mod tests {
         let hay = "on 2024-05";
         let mut vm = re.vm(re.slots(true));
         let mut work = 0;
-        let s = vm.search(&re.program, hay, 0, &mut work).unwrap();
+        let s = vm
+            .search(&re.program, hay, 0, &mut work, &|| false)
+            .unwrap()
+            .unwrap();
         let mut out = String::new();
-        expand(
-            &re,
-            "$2/${y} $$ $y1 $ ${9} $0",
-            hay,
-            &s,
-            &mut out,
-            usize::MAX,
-        )
-        .unwrap();
+        let (t, _) = Template::new(&re, "$2/${y} $$ $y1 $ ${9} $0 ${1 $1.5$10$01 $");
+        assert!(t.uses_groups());
+        t.expand(hay, &s, &mut out, usize::MAX).unwrap();
         let mut short = String::new();
-        assert!(expand(&re, "$0$0$0", hay, &s, &mut short, 10).is_err());
+        let (t0, _) = Template::new(&re, "$0$0$0");
+        assert!(!t0.uses_groups());
+        assert!(t0.expand(hay, &s, &mut short, 10).is_err());
         assert!(short.len() <= 10);
-        assert_eq!(out, "05/2024 $  $  2024-05");
+        assert_eq!(out, "05/2024 $  $  2024-05 ${1 2024.52024 $");
     }
 
     #[test]
@@ -418,7 +496,8 @@ mod tests {
             for ns in [0, 2, re.slots(true)] {
                 let mut vm = re.vm(ns);
                 let mut work = 0;
-                vm.search(&re.program, &hay, 0, &mut work);
+                vm.search(&re.program, &hay, 0, &mut work, &|| false)
+                    .unwrap();
                 let bound = search_work(re.weight(), hay.chars().count() as u64, ns as u64);
                 assert!(work <= 4 * bound, "{p} ({ns} slots): {work} > 4 × {bound}");
             }
@@ -432,9 +511,123 @@ mod tests {
         let mut vm = re.vm(2);
         let mut work = 0;
         assert_eq!(
-            vm.search(&re.program, text, 0, &mut work)
+            vm.search(&re.program, text, 0, &mut work, &|| false)
+                .unwrap()
                 .map(|s| (s[0], s[1])),
             Some((0, text.len()))
         );
+    }
+
+    /// Rust's `regex` 1.12 on the same inputs (the review's differential cases): bodies that
+    /// can match empty have regex-automata's priorities.
+    #[test]
+    fn repetitions_of_bodies_that_can_match_empty_agree_with_rust() {
+        let empties = [(0, 0), (1, 1), (2, 2)];
+        assert_eq!(all("(|a)*", "aa"), empties);
+        assert_eq!(all("(|a)+", "aa"), empties);
+        assert_eq!(all("(|a){2,}", "aa"), empties);
+        assert_eq!(all("(?:|a)*", "aa"), empties);
+        assert_eq!(all(r"(?:\b|a)*", "ab"), empties);
+        assert_eq!(all("(?:a*|b)*", "ab"), [(0, 2)]);
+        assert_eq!(all("(?:a*|b)*", "aab"), [(0, 3)]);
+        assert_eq!(all("(a|)*", "aa"), [(0, 2)]);
+        assert_eq!(all("(?:a?)+?", "aa"), [(0, 1), (1, 2)]);
+        assert_eq!(all("(|ab)*c", "ababc"), [(0, 5)]);
+        assert_eq!(
+            groups("(?:(a)|())*", "b"),
+            [Some(String::new()), None, Some(String::new())]
+        );
+        assert_eq!(
+            groups("(a?)*", "b"),
+            [Some(String::new()), Some(String::new())]
+        );
+        assert_eq!(
+            groups("(|a)*", "aa"),
+            [Some(String::new()), Some(String::new())]
+        );
+        assert_eq!(
+            groups("(a*)+$", "aab"),
+            [Some(String::new()), Some(String::new())]
+        );
+        let replaced = |p: &str, h: &str| {
+            let re = Regex::new(p).unwrap();
+            let (t, _) = Template::new(&re, "-");
+            let mut m = Matches::new(&re, h, 2);
+            let (mut out, mut last, mut work) = (String::new(), 0, 0);
+            while let Some(s) = m.next(&mut work, &|| false).unwrap() {
+                out.push_str(&h[last..s[0]]);
+                t.expand(h, &s, &mut out, usize::MAX).unwrap();
+                last = s[1];
+            }
+            out.push_str(&h[last..]);
+            out
+        };
+        assert_eq!(replaced("(?:|a)*", "aab"), "-a-a-b-");
+        assert_eq!(replaced("a*", "baaac"), "-b-c-");
+        assert_eq!(replaced("", "ab"), "-a-b-");
+        let split = |p: &str, h: &str| {
+            let mut parts = Vec::new();
+            let mut last = 0;
+            for (s, e) in all(p, h) {
+                parts.push(h[last..s].to_owned());
+                last = e;
+            }
+            parts.push(h[last..].to_owned());
+            parts
+        };
+        assert_eq!(split("(?:|a)*", "aab"), ["", "a", "a", "b", ""]);
+        assert_eq!(split("b*", "abba"), ["", "a", "a", ""]);
+        assert_eq!(split("x*", "ab"), ["", "a", "b", ""]);
+    }
+
+    #[test]
+    fn empty_and_zero_repetitions_compile_at_once() {
+        for p in [
+            "(?:(?:(?:(?:){1000}){1000}){1000}){1000}",
+            "(?:(?:(?:a{0}){1000}){1000}){1000}",
+            "(?:(?:(?:(a){0}){1000}){1000}){1000}",
+            "(?:(?:(?:(?:)*){1000}){1000}){1000}",
+        ] {
+            let started = std::time::Instant::now();
+            let re = Regex::new(p).unwrap_or_else(|e| panic!("{p}: {}", e.message));
+            assert!(
+                started.elapsed() < std::time::Duration::from_millis(100),
+                "{p}"
+            );
+            assert!(re.weight() < 10, "{p}: weight {}", re.weight());
+        }
+        // Zero-width bodies are not collapsed: every copy weighs something, so nesting them
+        // reaches the size limit at once.
+        for p in [
+            r"(?:(?:(?:\b){1000}){1000}){1000}",
+            "(?:(?:(?:()){1000}){1000}){1000}",
+        ] {
+            let started = std::time::Instant::now();
+            assert!(refused(p).contains("larger than the limit"), "{p}");
+            assert!(
+                started.elapsed() < std::time::Duration::from_millis(100),
+                "{p}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_range_cannot_start_with_a_class() {
+        assert!(refused(r"[\d-z]").contains("starting with a class"));
+        assert_eq!(find(r"[\d-]+", "-1-"), Some((0, 3)));
+        assert_eq!(find(r"[\w--\d]+", "1ab2"), Some((1, 3)));
+    }
+
+    #[test]
+    fn a_search_stops_when_cancelled() {
+        let re = Regex::new(r"(?:\w{100}){4}z").unwrap();
+        let hay = "a".repeat(100_000);
+        let mut vm = re.vm(0);
+        let mut work = 0;
+        assert!(
+            vm.search(&re.program, &hay, 0, &mut work, &|| true)
+                .is_err()
+        );
+        assert!(work < 2 * 64 * crate::machine::CHECKPOINT + 10 * re.weight());
     }
 }

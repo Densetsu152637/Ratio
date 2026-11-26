@@ -8,12 +8,17 @@
 //! **Charges** (`product`): before running, `(n + 1) · W · (1 + k) + c` work, where `n` is the
 //! text's characters, `W` the program's weight, `k` the slots the search tracks (0 for
 //! `is_match`, 2 for spans, every group's for `captures` and for a replacement that refers to
-//! groups) and `c` the characters of the pattern, the text and the replacement; and the VM's
-//! working memory on the heap. A single search counts at most four times that work. Iterating
+//! groups) and `c` the compile work (four units per pattern character, and `W`), the text's characters
+//! and the replacement's; and the VM's working memory on the heap. The compile work is charged
+//! whether or not the pattern was already compiled, and a refused pattern is charged the work
+//! it took to refuse. A single search counts at most four times its charge. Iterating
 //! (`find_all`, `captures_all`, `replace_all`, `split`) searches again from each match's end,
 //! which a pathological pattern can make quadratic, as in Rust's `regex`: work past four times
 //! the charge is debited as it is done, and the call stops with `Budget { which: steps }` when
-//! the steps left cannot pay, so no call runs unpaid. Building a replacement is work too.
+//! the steps left cannot pay, so no call runs unpaid. The **output** is charged too, one unit
+//! per element and per character built (a match record, a group, a named entry, a split part,
+//! a replacement's text), debited as it is built. Searches stop with `Cancelled` within a
+//! checkpoint's worth of work of a cancellation.
 //!
 //! Spans (`start`, `end`) count characters, as every `text` index does. Results carry the
 //! labels of the pattern, the text and any other argument.
@@ -21,18 +26,18 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use super::text::{labels_of, new_record};
-use super::{Args, Sizes, arg, int, new_list, new_text, opt, sz, text};
+use super::text::{Items, labels_of, new_record};
+use super::{Args, Sizes, arg, int, new_text, opt, sz, text};
 use crate::error::{Kind, RtError, raise};
 use crate::heap::{Charge, Heap, HeapExhausted, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
 use crate::pmap::Map;
-use crate::re::{Matches, Regex, UNSET, scratch_bytes, search_work};
+use crate::re::{Matches, Refusal, Regex, Stopped, Template, UNSET, scratch_bytes, search_work};
 use crate::value::{MAX_ELEMS, MAX_STR_BYTES, Value};
 
 /// A call site's pattern: compiled, or why it was refused.
-pub(crate) type Compiled = Result<Regex, String>;
+pub(crate) type Compiled = Result<Regex, Refusal>;
 
 /// The compiled patterns an evaluation keeps.
 pub(crate) const CACHE_ENTRIES: usize = 32;
@@ -58,8 +63,8 @@ impl ReCache {
         heap: &Heap,
     ) -> Result<Arc<Compiled>, HeapExhausted> {
         if pattern.len() > crate::re::MAX_PATTERN_BYTES {
-            // Refused without compiling, and not kept.
-            return Ok(Arc::new(Err("the pattern is longer than 4 KiB".to_owned())));
+            // Refused without compiling (or hashing), and not kept.
+            return Ok(Arc::new(Regex::new(pattern)));
         }
         let key: Key = (loc.module, loc.line, loc.col, pattern.into());
         if let Some((compiled, _)) = self.entries.get(&key) {
@@ -84,12 +89,20 @@ impl ReCache {
 
 // ---- sizing ----
 
+/// The work charged before running (see the module's documentation).
+fn pre_work(re: &Regex, n: u64, ns: usize, extra: u64) -> u64 {
+    search_work(re.weight(), n, ns as u64)
+        .saturating_add(re.compile_work)
+        .saturating_add(n)
+        .saturating_add(extra)
+}
+
 fn sizes(a: &Args, re: &Regex, ns: usize, extra: u64) -> Sizes {
     let n = sz(a, 1);
     Sizes {
         n: n.saturating_add(1),
         n2: re.weight().saturating_mul(ns as u64 + 1),
-        c: sz(a, 0).saturating_add(n).saturating_add(extra),
+        c: re.compile_work.saturating_add(n).saturating_add(extra),
         m: 0,
         scratch: scratch_bytes(re.insts(), ns as u64),
     }
@@ -107,12 +120,14 @@ pub(super) fn s_captures(a: &Args, re: &Regex) -> Sizes {
     sizes(a, re, re.slots(true), 0)
 }
 
+/// Whether a replacement refers to groups (so its searches track every group's slots).
+fn replacement_groups(re: &Regex, with: Option<&str>) -> bool {
+    with.is_some_and(|w| w.contains('$') && Template::new(re, w).0.uses_groups())
+}
+
 pub(super) fn s_replace(a: &Args, re: &Regex) -> Sizes {
-    let with = a.get(2).and_then(Option::as_ref);
-    let all = with
-        .and_then(Value::as_text)
-        .is_some_and(|w| w.contains('$'));
-    sizes(a, re, re.slots(all), sz(a, 2))
+    let with = a.get(2).and_then(Option::as_ref).and_then(Value::as_text);
+    sizes(a, re, re.slots(replacement_groups(re, with)), sz(a, 2))
 }
 
 // ---- the call's context ----
@@ -125,17 +140,14 @@ struct Call<'a> {
     /// The work charged before running, times four: work past it is debited as it is done.
     allowance: u64,
     work: u64,
+    /// Output built (elements and characters), debited as it is built.
+    out: u64,
+    /// When to check cancellation next between searches (work and output so far).
+    next_check: u64,
 }
 
-impl Call<'_> {
-    fn re(&self) -> &Regex {
-        match &*self.re {
-            Ok(re) => re,
-            // `start` refuses a pattern that did not compile.
-            Err(_) => unreachable!("checked in `start`"),
-        }
-    }
-}
+/// The work between cancellation checks of an iteration (one checkpoint's worth).
+const CHECK_WORK: u64 = 64 * crate::machine::CHECKPOINT;
 
 fn start<'a>(cx: &mut Cx<'_>, args: &'a Args, ns: usize, extra: u64) -> Result<Call<'a>, RtError> {
     let pattern = arg(cx, args, 0)?;
@@ -152,22 +164,17 @@ fn start<'a>(cx: &mut Cx<'_>, args: &'a Args, ns: usize, extra: u64) -> Result<C
             cx.loc,
         ));
     };
-    if let Err(why) = &*re {
-        return Err(raise(
-            cx.p,
-            Kind::Invalid,
-            &format!("an invalid regular expression: {why}"),
-            pattern.labels,
-            cx.loc,
-        ));
-    }
-    let pre = {
-        let Ok(r) = &*re else { unreachable!() };
-        let n = hay.chars().count() as u64;
-        search_work(r.weight(), n, ns as u64)
-            .saturating_add(n)
-            .saturating_add(text(cx, pattern)?.chars().count() as u64)
-            .saturating_add(extra)
+    let pre = match &*re {
+        Err(why) => {
+            return Err(raise(
+                cx.p,
+                Kind::Invalid,
+                &format!("an invalid regular expression: {}", why.message),
+                pattern.labels,
+                cx.loc,
+            ));
+        }
+        Ok(r) => pre_work(r, hay.chars().count() as u64, ns, extra),
     };
     Ok(Call {
         re,
@@ -175,15 +182,41 @@ fn start<'a>(cx: &mut Cx<'_>, args: &'a Args, ns: usize, extra: u64) -> Result<C
         labels,
         allowance: pre.saturating_mul(4),
         work: 0,
+        out: 0,
+        next_check: CHECK_WORK,
     })
 }
 
+fn cancelled(cx: &Cx<'_>) -> RtError {
+    raise(
+        cx.p,
+        Kind::Cancelled,
+        "the evaluation was cancelled",
+        Labels::NONE,
+        cx.loc,
+    )
+}
+
 impl Call<'_> {
-    /// Debits the work past the allowance, or stops when the steps left cannot pay it.
+    fn re(&self) -> &Regex {
+        match &*self.re {
+            Ok(re) => re,
+            // `start` refuses a pattern that did not compile.
+            Err(_) => unreachable!("checked in `start`"),
+        }
+    }
+
+    /// The steps owed beyond the charge debited before running.
+    fn owed(&self) -> u64 {
+        self.work
+            .saturating_sub(self.allowance)
+            .saturating_add(self.out)
+            .div_ceil(64)
+    }
+
+    /// Stops when the steps left cannot pay what is owed.
     fn pay(&self, cx: &mut Cx<'_>) -> Result<(), RtError> {
-        let extra = self.work.saturating_sub(self.allowance).div_ceil(64);
-        if extra > cx.steps_left {
-            cx.work += self.work;
+        if self.owed() > cx.steps_left {
             return Err(raise(
                 cx.p,
                 Kind::Budget("steps"),
@@ -195,10 +228,65 @@ impl Call<'_> {
         Ok(())
     }
 
-    fn done(&self, cx: &mut Cx<'_>) {
-        cx.debit = self.work.saturating_sub(self.allowance).div_ceil(64);
-        cx.work += self.work;
+    /// The next match, paying as it goes.
+    fn next(
+        &mut self,
+        cx: &mut Cx<'_>,
+        m: &mut Matches<'_>,
+    ) -> Result<Option<Vec<usize>>, RtError> {
+        if self.work + self.out >= self.next_check {
+            if cx.cancel.is_cancelled() {
+                return Err(cancelled(cx));
+            }
+            self.next_check = self.work + self.out + CHECK_WORK;
+        }
+        let cancel = cx.cancel.clone();
+        match m.next(&mut self.work, &|| cancel.is_cancelled()) {
+            Ok(found) => {
+                self.pay(cx)?;
+                Ok(found)
+            }
+            Err(Stopped) => Err(cancelled(cx)),
+        }
     }
+
+    /// One search from the start of the text.
+    fn search(&mut self, cx: &Cx<'_>, ns: usize) -> Result<Option<Vec<usize>>, RtError> {
+        let re = Arc::clone(&self.re);
+        let Ok(r) = &*re else {
+            unreachable!("checked in `start`")
+        };
+        let mut vm = r.vm(ns);
+        let cancel = cx.cancel.clone();
+        vm.search(&r.program, self.hay, 0, &mut self.work, &|| {
+            cancel.is_cancelled()
+        })
+        .map_err(|Stopped| cancelled(cx))
+    }
+
+    /// New text for the result, counted as output.
+    fn piece(&mut self, cx: &Cx<'_>, s: &str) -> Result<Value, RtError> {
+        self.out += s.len() as u64 + 1;
+        new_text(cx, s.to_owned(), self.labels)
+    }
+}
+
+/// Debits what the call owes, whether it returned or raised an error a program can see
+/// (`Budget` and `Cancelled` end the turn; nothing more is charged).
+fn settle(
+    cx: &mut Cx<'_>,
+    call: &Call<'_>,
+    result: Result<Value, RtError>,
+) -> Result<Value, RtError> {
+    if result
+        .as_ref()
+        .err()
+        .is_none_or(|e| e.class() == crate::ErrorClass::Catchable)
+    {
+        cx.debit = call.owed();
+    }
+    cx.work += call.work + call.out;
+    result
 }
 
 fn limit(cx: &Cx<'_>, args: &Args, i: usize, labels: Labels) -> Result<u64, RtError> {
@@ -239,53 +327,72 @@ impl Chars<'_> {
     }
 }
 
-fn piece(cx: &Cx<'_>, s: &str, labels: Labels) -> Result<Value, RtError> {
-    new_text(cx, s.to_owned(), labels)
-}
-
 /// `{ text, start, end }`.
 fn match_value(
     cx: &Cx<'_>,
-    call: &Call<'_>,
+    call: &mut Call<'_>,
     pos: &mut Chars<'_>,
     slots: &[usize],
 ) -> Result<Value, RtError> {
     let (s, e) = (slots[0], slots[1]);
     let l = call.labels;
+    call.out += 3;
+    let hay = call.hay;
     let fields = vec![
-        ("text", piece(cx, &call.hay[s..e], l)?),
+        ("text", call.piece(cx, &hay[s..e])?),
         ("start", Value::int(pos.at(s)).with_labels(l)),
         ("end", Value::int(pos.at(e)).with_labels(l)),
     ];
     new_record(cx, fields, l)
 }
 
+/// The named groups' names as values, built once per call and shared by every match.
+fn group_names(cx: &Cx<'_>, call: &mut Call<'_>) -> Result<Vec<(Value, u32)>, RtError> {
+    let names: Vec<(String, u32)> = call.re().names.clone();
+    names
+        .iter()
+        .map(|(n, i)| Ok((call.piece(cx, n)?, *i)))
+        .collect()
+}
+
 /// `{ groups: [S?], named: Map<Str, S> }`: every group (0 the whole match), `none` for one
 /// that did not take part; the named groups that did.
-fn captures_value(cx: &Cx<'_>, call: &Call<'_>, slots: &[usize]) -> Result<Value, RtError> {
+fn captures_value(
+    cx: &Cx<'_>,
+    call: &mut Call<'_>,
+    names: &[(Value, u32)],
+    slots: &[usize],
+) -> Result<Value, RtError> {
     let l = call.labels;
-    let re = call.re();
+    let hay = call.hay;
     let group = |i: usize| match (slots.get(2 * i), slots.get(2 * i + 1)) {
-        (Some(&s), Some(&e)) if s != UNSET && e != UNSET => Some(&call.hay[s..e]),
+        (Some(&s), Some(&e)) if s != UNSET && e != UNSET => Some(&hay[s..e]),
         _ => None,
     };
-    let mut groups = Vec::with_capacity(re.groups as usize);
-    for i in 0..re.groups as usize {
-        groups.push(match group(i) {
-            Some(t) => piece(cx, t, l)?,
-            None => Value::none().with_labels(l),
-        });
+    let count = call.re().groups as usize;
+    let mut groups = Items::new();
+    for i in 0..count {
+        let v = if let Some(t) = group(i) {
+            call.piece(cx, t)?
+        } else {
+            call.out += 1;
+            Value::none().with_labels(l)
+        };
+        groups.push(cx, v, l)?;
     }
     let mut named = Map::empty();
-    for (name, i) in &re.names {
+    for (name, i) in names {
         if let Some(t) = group(*i as usize) {
+            call.out += 1;
+            let v = call.piece(cx, t)?;
             named = named
-                .insert(cx.heap, piece(cx, name, l)?, piece(cx, t, l)?)
+                .insert(cx.heap, name.clone(), v)
                 .map_err(|f| cx.fault(f, l))?;
         }
     }
+    call.out += 2;
     let fields = vec![
-        ("groups", new_list(cx, groups, l)?),
+        ("groups", groups.finish(cx, l)?),
         ("named", Value::new_map(named).with_labels(l)),
     ];
     new_record(cx, fields, l)
@@ -295,32 +402,28 @@ fn captures_value(cx: &Cx<'_>, call: &Call<'_>, slots: &[usize]) -> Result<Value
 
 pub(super) fn is_match(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut call = start(cx, args, 0, 0)?;
-    let mut work = 0;
-    let mut vm = call.re().vm(0);
-    let found = vm
-        .search(&call.re().program, call.hay, 0, &mut work)
-        .is_some();
-    call.work += work;
-    call.done(cx);
-    Ok(Value::bool(found).with_labels(call.labels))
+    let labels = call.labels;
+    let result = call
+        .search(cx, 0)
+        .map(|m| Value::bool(m.is_some()).with_labels(labels));
+    settle(cx, &call, result)
 }
 
 pub(super) fn find(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut call = start(cx, args, 2, 0)?;
-    let mut work = 0;
-    let mut vm = call.re().vm(2);
-    let found = vm.search(&call.re().program, call.hay, 0, &mut work);
-    call.work += work;
-    call.done(cx);
-    let mut pos = Chars {
-        hay: call.hay,
-        byte: 0,
-        ch: 0,
-    };
-    match found {
-        Some(slots) => match_value(cx, &call, &mut pos, &slots),
-        None => Ok(Value::none().with_labels(call.labels)),
-    }
+    let result = (|| {
+        let found = call.search(cx, 2)?;
+        let mut pos = Chars {
+            hay: call.hay,
+            byte: 0,
+            ch: 0,
+        };
+        match found {
+            Some(slots) => match_value(cx, &mut call, &mut pos, &slots),
+            None => Ok(Value::none().with_labels(call.labels)),
+        }
+    })();
+    settle(cx, &call, result)
 }
 
 pub(super) fn find_all(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
@@ -334,37 +437,39 @@ pub(super) fn find_all(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         byte: 0,
         ch: 0,
     };
-    let mut items = Vec::new();
-    while (items.len() as u64) < max {
-        let Some(slots) = matches.next(&mut call.work) else {
-            break;
-        };
-        call.pay(cx)?;
-        items.push(match_value(cx, &call, &mut pos, &slots)?);
-    }
-    call.done(cx);
-    new_list(cx, items, call.labels)
+    let mut items = Items::new();
+    let result = (|| {
+        while (items.len() as u64) < max {
+            let Some(slots) = call.next(cx, &mut matches)? else {
+                break;
+            };
+            let v = match_value(cx, &mut call, &mut pos, &slots)?;
+            items.push(cx, v, call.labels)?;
+            call.pay(cx)?;
+        }
+        items.finish(cx, call.labels)
+    })();
+    settle(cx, &call, result)
 }
 
 pub(super) fn captures(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
-    let ns = match &cx.regex.as_deref() {
+    let ns = match cx.regex.as_deref() {
         Some(Ok(re)) => re.slots(true),
         _ => 2,
     };
     let mut call = start(cx, args, ns, 0)?;
-    let mut work = 0;
-    let mut vm = call.re().vm(ns);
-    let found = vm.search(&call.re().program, call.hay, 0, &mut work);
-    call.work += work;
-    call.done(cx);
-    match found {
-        Some(slots) => captures_value(cx, &call, &slots),
+    let result = (|| match call.search(cx, ns)? {
+        Some(slots) => {
+            let names = group_names(cx, &mut call)?;
+            captures_value(cx, &mut call, &names, &slots)
+        }
         None => Ok(Value::none().with_labels(call.labels)),
-    }
+    })();
+    settle(cx, &call, result)
 }
 
 pub(super) fn captures_all(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
-    let ns = match &cx.regex.as_deref() {
+    let ns = match cx.regex.as_deref() {
         Some(Ok(re)) => re.slots(true),
         _ => 2,
     };
@@ -373,16 +478,20 @@ pub(super) fn captures_all(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtErro
     let re = Arc::clone(&call.re);
     let Ok(r) = &*re else { unreachable!() };
     let mut matches = Matches::new(r, call.hay, ns);
-    let mut items = Vec::new();
-    while (items.len() as u64) < max {
-        let Some(slots) = matches.next(&mut call.work) else {
-            break;
-        };
-        call.pay(cx)?;
-        items.push(captures_value(cx, &call, &slots)?);
-    }
-    call.done(cx);
-    new_list(cx, items, call.labels)
+    let mut items = Items::new();
+    let result = (|| {
+        let names = group_names(cx, &mut call)?;
+        while (items.len() as u64) < max {
+            let Some(slots) = call.next(cx, &mut matches)? else {
+                break;
+            };
+            let v = captures_value(cx, &mut call, &names, &slots)?;
+            items.push(cx, v, call.labels)?;
+            call.pay(cx)?;
+        }
+        items.finish(cx, call.labels)
+    })();
+    settle(cx, &call, result)
 }
 
 pub(super) fn replace(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
@@ -393,78 +502,87 @@ pub(super) fn replace_all(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError
     replacing(cx, args, true)
 }
 
+fn too_long(cx: &Cx<'_>, call: &Call<'_>) -> RtError {
+    raise(
+        cx.p,
+        Kind::Invalid,
+        "the replaced text is longer than 16 MiB",
+        call.labels,
+        cx.loc,
+    )
+}
+
 fn replacing(cx: &mut Cx<'_>, args: &Args, all: bool) -> Result<Value, RtError> {
     let with = text(cx, arg(cx, args, 2)?)?;
-    let groups = with.contains('$');
-    let ns = match &cx.regex.as_deref() {
-        Some(Ok(re)) => re.slots(groups),
+    let ns = match cx.regex.as_deref() {
+        Some(Ok(re)) => re.slots(replacement_groups(re, Some(with))),
         _ => 2,
     };
     let mut call = start(cx, args, ns, with.chars().count() as u64)?;
     let re = Arc::clone(&call.re);
     let Ok(r) = &*re else { unreachable!() };
+    // The template is resolved against the group names once per call.
+    let (template, resolved) = Template::new(r, with);
+    call.work += resolved;
     let mut matches = Matches::new(r, call.hay, ns);
     let mut out = String::new();
     let mut last = 0;
-    let over = |cx: &mut Cx<'_>, call: &Call<'_>, written: u64| {
-        cx.debit = call.work.saturating_add(written).div_ceil(64);
-        cx.work += call.work + written;
-        raise(
-            cx.p,
-            Kind::Invalid,
-            "the replaced text is longer than 16 MiB",
-            call.labels,
-            cx.loc,
-        )
-    };
-    while let Some(slots) = matches.next(&mut call.work) {
-        call.pay(cx)?;
-        let (s, e) = (slots[0], slots[1]);
-        if out.len() + (s - last) > MAX_STR_BYTES {
-            let written = out.len() as u64;
-            return Err(over(cx, &call, written));
-        }
-        out.push_str(&call.hay[last..s]);
-        call.work += (s - last) as u64;
-        match crate::re::expand(r, with, call.hay, &slots, &mut out, MAX_STR_BYTES) {
-            Ok(w) => call.work += w,
-            Err(w) => {
-                call.work += w;
-                return Err(over(cx, &call, 0));
+    let hay = call.hay;
+    let result = (|| {
+        while let Some(slots) = call.next(cx, &mut matches)? {
+            let (s, e) = (slots[0], slots[1]);
+            if out.len() + (s - last) > MAX_STR_BYTES {
+                return Err(too_long(cx, &call));
+            }
+            out.push_str(&hay[last..s]);
+            call.out += (s - last) as u64;
+            match template.expand(hay, &slots, &mut out, MAX_STR_BYTES) {
+                Ok(w) => call.out += w,
+                Err(w) => {
+                    call.out += w;
+                    return Err(too_long(cx, &call));
+                }
+            }
+            call.pay(cx)?;
+            last = e;
+            if !all {
+                break;
             }
         }
-        last = e;
-        if !all {
-            break;
+        if out.len() + (hay.len() - last) > MAX_STR_BYTES {
+            return Err(too_long(cx, &call));
         }
-    }
-    if out.len() + (call.hay.len() - last) > MAX_STR_BYTES {
-        let written = out.len() as u64;
-        return Err(over(cx, &call, written));
-    }
-    out.push_str(&call.hay[last..]);
-    call.work += (call.hay.len() - last) as u64;
-    call.pay(cx)?;
-    call.done(cx);
-    new_text(cx, out, call.labels)
+        out.push_str(&hay[last..]);
+        call.out += (hay.len() - last) as u64 + 1;
+        call.pay(cx)?;
+        new_text(cx, std::mem::take(&mut out), call.labels)
+    })();
+    settle(cx, &call, result)
 }
 
+/// `re.split`: the parts between matches, built as they are found, each charged; more than
+/// 1,000,000 parts is `Invalid`.
 pub(super) fn split(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut call = start(cx, args, 2, 0)?;
     let re = Arc::clone(&call.re);
     let Ok(r) = &*re else { unreachable!() };
     let mut matches = Matches::new(r, call.hay, 2);
-    let mut items = Vec::new();
-    let mut last = 0;
-    while let Some(slots) = matches.next(&mut call.work) {
+    let mut items = Items::new();
+    let hay = call.hay;
+    let result = (|| {
+        let mut last = 0;
+        while let Some(slots) = call.next(cx, &mut matches)? {
+            let v = call.piece(cx, &hay[last..slots[0]])?;
+            items.push(cx, v, call.labels)?;
+            call.pay(cx)?;
+            last = slots[1];
+        }
+        let v = call.piece(cx, &hay[last..])?;
+        items.push(cx, v, call.labels)?;
         call.pay(cx)?;
-        items.push(piece(cx, &call.hay[last..slots[0]], call.labels)?);
-        last = slots[1];
-    }
-    items.push(piece(cx, &call.hay[last..], call.labels)?);
-    call.work += call.hay.len() as u64;
-    call.done(cx);
-    new_list(cx, items, call.labels)
+        items.finish(cx, call.labels)
+    })();
+    settle(cx, &call, result)
 }
 
 pub(super) fn escape(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {

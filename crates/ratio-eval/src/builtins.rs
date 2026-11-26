@@ -175,12 +175,17 @@ impl Builtin {
     }
 
     /// The sizes of a call with these arguments (and pattern, for `re`). A pattern that did
-    /// not compile is charged only the class's constant: the built-in raises `Invalid`.
+    /// not compile is charged the work its refusal took: the built-in raises `Invalid`.
     pub(crate) fn sizes(&self, args: &Args, re: Option<&Compiled>) -> Sizes {
         match (self.size, re) {
             (Sizer::Args(f), _) => f(args),
             (Sizer::Re(f), Some(Ok(re))) => f(args, re),
-            (Sizer::Re(_), _) => Sizes::default(),
+            // A refused pattern is charged the work it took to refuse.
+            (Sizer::Re(_), Some(Err(refusal))) => Sizes {
+                c: refusal.work,
+                ..Sizes::default()
+            },
+            (Sizer::Re(_), None) => Sizes::default(),
         }
     }
 }
@@ -930,9 +935,24 @@ fn text_len(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn text_upper(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
-    let upper = text(cx, s)?.to_uppercase();
-    cx.work += 2 * upper.len() as u64 + 1;
-    new_text(cx, upper, s.labels)
+    let t = text(cx, s)?;
+    // An upper-cased text can be longer than its source (`ß` is `SS`): its size is checked
+    // before it is built.
+    let size: usize = t
+        .chars()
+        .map(|c| c.to_uppercase().map(char::len_utf8).sum::<usize>())
+        .sum();
+    cx.work += 2 * size as u64 + 1;
+    if size > crate::value::MAX_STR_BYTES {
+        return Err(raise(
+            cx.p,
+            Kind::Invalid,
+            "the upper-cased text is longer than 16 MiB",
+            s.labels,
+            cx.loc,
+        ));
+    }
+    new_text(cx, t.to_uppercase(), s.labels)
 }
 
 fn text_trim(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {

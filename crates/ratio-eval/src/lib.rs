@@ -66,7 +66,8 @@ pub use machine::{
 pub use plist::List;
 pub use pmap::Map;
 pub use pool::{
-    JOBS_IN_FLIGHT, OFFLOAD_ELEMENTS, OFFLOAD_TEXT_BYTES, Pool, PoolSession, Thresholds, Waiter,
+    JOBS_IN_FLIGHT, OFFLOAD_ELEMENTS, OFFLOAD_STEPS, OFFLOAD_TEXT_BYTES, Pool, PoolSession,
+    Thresholds, Waiter,
 };
 pub use prepare::{Entry, PrepareError, Prepared, prepare};
 pub use value::{Fault, MAX_DEPTH, MAX_ELEMS, MAX_STR_BYTES, Str, Value};

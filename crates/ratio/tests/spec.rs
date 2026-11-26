@@ -302,7 +302,7 @@ const CLASS_ERRATA: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn implemented_text_and_re_built_ins_have_their_chapter_06_class() {
+fn implemented_data_built_ins_have_their_chapter_06_class() {
     let generated = generate_builtins();
     let spec: BTreeMap<&str, &str> = generated
         .lines()
@@ -313,10 +313,17 @@ fn implemented_text_and_re_built_ins_have_their_chapter_06_class() {
         })
         .collect();
     let implemented = ratio::interp::builtins::implemented();
+    // Every implemented `data` built-in (stage 6's and stage 7's) has its class; every `text`
+    // and `re` built-in of the chapter is implemented (stage 7).
+    let data = |n: &str| {
+        ["text.", "re.", "list.", "map.", "json.", "math."]
+            .iter()
+            .any(|m| n.starts_with(m))
+    };
     let ours = |n: &str| n.starts_with("text.") || n.starts_with("re.");
     let mut problems = Vec::new();
     for (name, class) in &implemented {
-        if !ours(name) {
+        if !data(name) {
             continue;
         }
         let want = CLASS_ERRATA

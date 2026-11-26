@@ -52,16 +52,24 @@ struct Compiler {
 
 type R<T> = Result<T, String>;
 
-pub(crate) fn compile(parsed: &Parsed) -> R<Program> {
+/// Compiles a parsed pattern; a refusal comes with the weight compiled before it (the work
+/// it cost).
+pub(crate) fn compile(parsed: &Parsed) -> Result<Program, (String, u64)> {
     let mut c = Compiler {
         insts: Vec::new(),
         sets: Vec::new(),
         weight: 0,
     };
-    c.emit(Inst::Save(0), 1)?;
-    c.node(&parsed.node)?;
-    c.emit(Inst::Save(1), 1)?;
-    c.emit(Inst::Match, 1)?;
+    let body = |c: &mut Compiler| -> R<()> {
+        c.emit(Inst::Save(0), 1)?;
+        c.node(&parsed.node)?;
+        c.emit(Inst::Save(1), 1)?;
+        c.emit(Inst::Match, 1)?;
+        Ok(())
+    };
+    if let Err(e) = body(&mut c) {
+        return Err((e, c.weight));
+    }
     Ok(Program {
         anchored: starts_anchored(&parsed.node),
         insts: c.insts,
@@ -73,6 +81,18 @@ pub(crate) fn compile(parsed: &Parsed) -> R<Program> {
 
 fn too_large() -> String {
     format!("the pattern compiles to a program larger than the limit of {MAX_PROGRAM} instructions")
+}
+
+/// Whether the node can match the empty string.
+pub(crate) fn can_be_empty(node: &Node) -> bool {
+    match node {
+        Node::Empty | Node::Look(_) => true,
+        Node::Chars(_) | Node::Set(_) | Node::Dot { .. } => false,
+        Node::Group { node, .. } => can_be_empty(node),
+        Node::Concat(v) => v.iter().all(can_be_empty),
+        Node::Alt(v) => v.iter().any(can_be_empty),
+        Node::Repeat { node, min, .. } => *min == 0 || can_be_empty(node),
+    }
 }
 
 /// Whether every path through the node begins with `\A`.
@@ -189,26 +209,35 @@ impl Compiler {
         }
     }
 
-    /// `e{min,max}`: `min` copies, then `max - min` optional copies (or a loop when unbounded).
-    fn repeat(&mut self, node: &Node, min: u32, max: Option<u32>, greedy: bool) -> R<()> {
-        for _ in 0..min {
-            self.node(node)?;
-        }
-        match max {
-            None => {
-                // L: split(body, out); body; jmp L; out:
-                let l = self.emit(Inst::Split(0, 0), 1)?;
-                self.node(node)?;
-                self.emit(Inst::Jmp(l), 1)?;
-                let out = self.pc();
-                let s = Self::split(l + 1, out, greedy);
-                self.patch(l, s);
+    /// One copy of a repeated node. A copy weighs at least 1 even when it emits nothing, so
+    /// nested repetitions of empty bodies (`(?:(?:){1000}){1000}`) reach the size limit
+    /// instead of compiling for ever.
+    fn copy(&mut self, node: &Node) -> R<()> {
+        let before = self.pc();
+        self.node(node)?;
+        if self.pc() == before {
+            self.weight += 1;
+            if self.weight > MAX_PROGRAM {
+                return Err(too_large());
             }
+        }
+        Ok(())
+    }
+
+    /// `e{min,max}`, as regex-automata compiles it (so priorities agree with Rust's `regex`
+    /// when `e` can match empty): `min` copies, then `max - min` optional copies; unbounded,
+    /// `e*` is a loop `split(e, out); e; jmp` when `e` cannot match empty and `(e+)?`
+    /// otherwise, and `e{n,}` is `n - 1` copies and a last one that loops back after itself.
+    fn repeat(&mut self, node: &Node, min: u32, max: Option<u32>, greedy: bool) -> R<()> {
+        match max {
             Some(max) => {
+                for _ in 0..min {
+                    self.copy(node)?;
+                }
                 let mut splits = Vec::new();
                 for _ in min..max {
                     splits.push(self.emit(Inst::Split(0, 0), 1)?);
-                    self.node(node)?;
+                    self.copy(node)?;
                 }
                 let out = self.pc();
                 for s in splits {
@@ -216,7 +245,38 @@ impl Compiler {
                     self.patch(s, inst);
                 }
             }
+            None if min == 0 && !can_be_empty(node) => {
+                // L: split(body, out); body; jmp L; out:
+                let l = self.emit(Inst::Split(0, 0), 1)?;
+                self.copy(node)?;
+                self.emit(Inst::Jmp(l), 1)?;
+                let out = self.pc();
+                let s = Self::split(l + 1, out, greedy);
+                self.patch(l, s);
+            }
+            None if min == 0 => {
+                // (e+)?: split(plus, out); plus; out:
+                let s = self.emit(Inst::Split(0, 0), 1)?;
+                self.at_least_one(node, 1, greedy)?;
+                let out = self.pc();
+                let inst = Self::split(s + 1, out, greedy);
+                self.patch(s, inst);
+            }
+            None => self.at_least_one(node, min, greedy)?,
         }
+        Ok(())
+    }
+
+    /// `e{n,}` for `n ≥ 1`: `n - 1` copies, then `L: e; split(L, out); out:`.
+    fn at_least_one(&mut self, node: &Node, n: u32, greedy: bool) -> R<()> {
+        for _ in 1..n {
+            self.copy(node)?;
+        }
+        let last = self.pc();
+        self.copy(node)?;
+        let s = self.emit(Inst::Split(0, 0), 1)?;
+        let inst = Self::split(last, s + 1, greedy);
+        self.patch(s, inst);
         Ok(())
     }
 }
