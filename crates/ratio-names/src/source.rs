@@ -35,9 +35,8 @@ pub enum Source {
     Std,
     /// The user's `<config>/harnesses/`.
     User,
-    /// An approved plugin's `harnesses/`, named by the plugin (one word of a package name; the
-    /// loader checks the names it reads, and a host making one checks its own).
-    Plugin(String),
+    /// An approved plugin's `harnesses/`, named by the plugin.
+    Plugin(PluginName),
     /// A trusted project's `.imperium/harnesses/`.
     Project,
     /// Written by a model through `write_harness`, in an area.
@@ -121,6 +120,39 @@ impl PackageName {
 }
 
 impl fmt::Display for PackageName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A plugin's name: one word of ASCII letters, digits, `_` and `-`, starting with a letter or
+/// `_`, at most 128 bytes, and not a Windows device name. Only [`PluginName::parse`] makes one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PluginName(String);
+
+impl PluginName {
+    /// Checks a plugin name.
+    ///
+    /// # Errors
+    ///
+    /// A message saying what is wrong with the name.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if text.len() <= MAX_NAME_BYTES && is_word(text) {
+            Ok(PluginName(text.to_owned()))
+        } else {
+            Err(format!(
+                "`{text}` is not a plugin name (one word of ASCII letters, digits, `_` and `-`;                  no device names)"
+            ))
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PluginName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -298,11 +330,9 @@ fn build(
         Some("user") => one(Lookup::In(Source::User)),
         Some("project") => one(Lookup::In(Source::Project)),
         Some("plugin") => match parts {
-            [plugin, name] if plugin.len() <= MAX_NAME_BYTES && is_word(plugin) => {
-                named(Lookup::In(Source::Plugin((*plugin).to_owned())), name)
-            }
+            [plugin, name] => named(Lookup::In(Source::Plugin(PluginName::parse(plugin)?)), name),
             _ => Err(format!(
-                "`{written}` needs the form `plugin:<plugin>/<name>`, the plugin one word"
+                "`{written}` needs the form `plugin:<plugin>/<name>`"
             )),
         },
         Some("authored") => match parts {

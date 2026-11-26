@@ -28,8 +28,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ratio_names::{
-    Area, Code, Loader, Lookup, MemoryRegistry, PackageId, PackageName, QualifiedName, RelPath,
-    Source,
+    Area, Code, Loader, Lookup, MemoryRegistry, PackageId, PackageName, PluginName, QualifiedName,
+    RelPath, Source,
 };
 
 type Expected = (String, String, u32, u32);
@@ -78,7 +78,8 @@ fn roots(world: &Path) -> Vec<(Source, String)> {
             "plugin" => {
                 for plugin in dirs(&root) {
                     let plugin = name(&plugin);
-                    roots.push((Source::Plugin(plugin.clone()), format!("plugin/{plugin}")));
+                    let source = Source::Plugin(PluginName::parse(&plugin).unwrap());
+                    roots.push((source, format!("plugin/{plugin}")));
                 }
             }
             "authored" => {

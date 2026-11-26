@@ -29,8 +29,8 @@ let loaded = Loader::new(&host_registry, &builtin).load(&QualifiedName::parse("u
 - The trait's documentation lists what a host must guarantee, since the loader cannot see the
   file system: open each component from an open handle on the package root without following
   links (package root and source folders included), check attributes on the opened handle,
-  refuse hard links (`nlink > 1`), match names case-exactly, read at most `max_bytes` (the
-  loader re-checks and fails closed). `RegistryError` carries no text, so a host's error never
+  refuse hard links (`nlink > 1`), match names case-exactly, check the size on the opened
+  handle and refuse above `max_bytes` without reading (the loader re-checks and fails closed). `RegistryError` carries no text, so a host's error never
   reaches a diagnostic. Pinning is the host's: the daemon hashes `LoadedModule::source`, and its
   `find` chooses which authored version is current.
 - `MemoryRegistry` keeps packages in memory: the test registry, and the store for built-ins.
@@ -57,7 +57,8 @@ same on every file system.
   `project:kit`, `authored:session/vote`, `authored:env/vote`. In an authored package's import,
   `authored:vote` looks only in the importer's own area; for the host's entry it looks in the
   session's area, then the environment's. Package and plugin names are words of ASCII letters,
-  digits, `_` and `-` joined by `.`, never a device name (`PackageName`, `N0006`). `@"^1.2"` pins a range (`^`, `~` or `=`), checked
+  digits, `_` and `-` joined by `.` (a plugin's name is one such word), at most 128 bytes,
+  never a device name (`PackageName`, `PluginName`, `N0006`). `@"^1.2"` pins a range (`^`, `~` or `=`), checked
   against the `version` of the package's `meta` (`N0008`).
 - A **bare** name (`import debate`) looks in `std`, then `user`. A lower source never shadows a
   higher one, and a plugin's, project's or model-authored package is reached only by its qualified

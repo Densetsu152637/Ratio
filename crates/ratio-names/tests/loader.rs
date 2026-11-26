@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use ratio_names::prelude::PreludeName;
 use ratio_names::{
     Area, Binding, Code, Limits, Loaded, Loader, MemoryRegistry, PackageId, PackageName,
-    QualifiedName, Registry, RegistryError, RelPath, Resolution, Source,
+    PluginName, QualifiedName, Registry, RegistryError, RelPath, Resolution, Source,
 };
 
 fn id(source: Source, name: &str) -> PackageId {
@@ -89,7 +89,7 @@ fn the_host_registry_is_never_asked_for_std() {
 
 #[test]
 fn the_trust_rules_per_source() {
-    let plugin = |p: &str| Source::Plugin(p.to_owned());
+    let plugin = |p: &str| Source::Plugin(PluginName::parse(p).unwrap());
     let session = Source::Authored(Area::Session);
     let env = Source::Authored(Area::Env);
     let all = [
@@ -517,6 +517,7 @@ fn names_outside_ascii_and_device_names_are_refused() {
         "user:a\u{202e}b",
         "user:critic~1",
         "plugin:\u{430}cme/review",
+        "plugin:a.b/review",
     ] {
         assert!(QualifiedName::parse(text).is_err(), "{text:?}");
     }

@@ -30,7 +30,9 @@ use crate::source::{PackageId, PackageName, Source};
 /// - Match every component's name case-exactly against the name on disk, even on a
 ///   case-insensitive file system, and treat a name that only matches case-insensitively as
 ///   [`RegistryError::NotFound`].
-/// - Read at most `max_bytes`; the loader checks the length again and refuses a longer answer.
+/// - Check the file's size on the opened handle before reading, and answer
+///   [`RegistryError::TooLarge`] without reading when it is over `max_bytes`; never read more
+///   than `max_bytes`. The loader checks the length again and refuses a longer answer.
 ///
 /// **Pinning is the host's.** The loader hands back every file's text
 /// ([`LoadedModule::source`](crate::LoadedModule::source)); the daemon pins a package by hashing
