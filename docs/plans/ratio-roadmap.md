@@ -199,7 +199,7 @@ PC-4 and PC-9 in 11b).
   every dimension (the suite Imperium's `RatioHost::open_frame` must also pass, stage 13); the
   throwaway Imperium `RatioHost` spike's result against the candidate commit is recorded in the PR
   before merge (the spike code is never merged).
-- Status: pending. On merge: message "Imperium Implementation" (G6).
+- Status: in review. On merge: message "Imperium Implementation" (G6).
 
 ### Stage 11b: Control, rand, time, state
 
