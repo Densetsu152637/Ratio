@@ -357,7 +357,14 @@ fn result_value(cx: &Cx<'_>, ok: bool, v: Value) -> Result<Value, RtError> {
     })?;
     let payload =
         Value::new_record(cx.heap, layout, vec![v]).map_err(|f| cx.fault(f, Labels::NONE))?;
-    Value::new_variant(cx.heap, e, index, Some(payload)).map_err(|f| cx.fault(f, Labels::NONE))
+    Value::new_variant(
+        cx.heap,
+        e,
+        index,
+        cx.p.variant_weight(e, index),
+        Some(payload),
+    )
+    .map_err(|f| cx.fault(f, Labels::NONE))
 }
 
 // ---- control ----
@@ -867,7 +874,13 @@ fn text_join(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn text_show(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let v = arg(cx, args, 0)?;
-    new_text(cx, crate::ops::show(cx.p, v), v.quick())
+    let shown = crate::ops::show(cx.p, v);
+    if shown.len() > crate::value::MAX_STR_BYTES {
+        // The writer stopped just past the limit: what it rendered is charged before the
+        // refusal, as a returned result's would be.
+        cx.debit = (shown.len() as u64).div_ceil(64);
+    }
+    new_text(cx, shown, v.quick())
 }
 
 fn text_repeat(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {

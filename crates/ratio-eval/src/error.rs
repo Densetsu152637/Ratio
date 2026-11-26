@@ -52,7 +52,7 @@ impl RtError {
     #[must_use]
     pub fn kind(&self, p: &Prepared) -> String {
         match self.value.field("kind").map(|k| k.repr) {
-            Some(crate::value::Repr::Variant(e, i)) => variant_name(p, e, i),
+            Some(crate::value::Repr::Variant(e, i, _)) => variant_name(p, e, i),
             Some(crate::value::Repr::VariantP(v)) => variant_name(p, v.enum_, v.index),
             _ => "?".to_owned(),
         }
@@ -74,7 +74,7 @@ impl RtError {
             return None;
         };
         match v.payload.field("which")?.repr {
-            crate::value::Repr::Variant(e, i) => Some(variant_name(p, e, i)),
+            crate::value::Repr::Variant(e, i, _) => Some(variant_name(p, e, i)),
             _ => None,
         }
     }
@@ -159,7 +159,7 @@ fn kind_value(p: &Prepared, kind: Kind<'_>) -> Value {
                 Value::new_record(
                     &heap,
                     Arc::clone(layout),
-                    vec![Value::new_variant(&heap, bk, w, None).ok()?],
+                    vec![Value::new_variant(&heap, bk, w, p.variant_weight(bk, w), None).ok()?],
                 )
                 .ok()
             })
@@ -171,7 +171,7 @@ fn kind_value(p: &Prepared, kind: Kind<'_>) -> Value {
                 Value::new_record(
                     &heap,
                     Arc::clone(layout),
-                    vec![Value::new_variant(&heap, db, b, None).ok()?],
+                    vec![Value::new_variant(&heap, db, b, p.variant_weight(db, b), None).ok()?],
                 )
                 .ok()
             })
@@ -186,7 +186,8 @@ fn kind_value(p: &Prepared, kind: Kind<'_>) -> Value {
         }),
         _ => None,
     };
-    Value::new_variant(&heap, ek, index, payload).unwrap_or_else(|_| Value::unit())
+    Value::new_variant(&heap, ek, index, p.variant_weight(ek, index), payload)
+        .unwrap_or_else(|_| Value::unit())
 }
 
 /// A JSON `null`.

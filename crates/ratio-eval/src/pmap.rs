@@ -48,7 +48,7 @@ pub(crate) fn key_cmp(a: &Value, b: &Value) -> Ordering {
         (Repr::Str(x), Repr::Str(y)) => x.as_str().cmp(y.as_str()),
         (Repr::Int(x), Repr::Int(y)) => x.cmp(y),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
-        (Repr::Variant(e1, i1), Repr::Variant(e2, i2)) => (e1, i1).cmp(&(e2, i2)),
+        (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
         // Keys the checker accepts beyond the four kinds (variants with payloads, tuples):
         // the natural order, which is total on them.
         _ if rank(a) == rank(b) => crate::ops::cmp_natural(a, b),

@@ -25,7 +25,7 @@ use ratio_ir::{ArgFrom, AssignOp, BinOp, Loc, UnOp};
 
 use crate::builtins::{BUILTINS, Class, Imp, Resume, Task, TaskStep, output_size, pre_work};
 use crate::error::{Class as ErrClass, Kind, RtError, raise};
-use crate::heap::Heap;
+use crate::heap::{Charge, Heap};
 use crate::labels::Labels;
 use crate::ops::{self, steps_for};
 use crate::plist::{Cursor, List};
@@ -131,6 +131,9 @@ pub(crate) struct Cx<'a> {
     pub heap: &'a Heap,
     pub loc: Loc,
     pub type_args: &'a [u32],
+    /// Steps for work a built-in did before failing (a rendering refused as too long): the
+    /// machine debits them whether the built-in returns or raises.
+    pub debit: u64,
 }
 
 impl Cx<'_> {
@@ -218,6 +221,39 @@ enum Phase {
     Body,
 }
 
+/// The values a frame has gathered so far (a node's children, `par` results, a section's
+/// values, an assignment's indexes), charged to the heap a slot each as they arrive and given
+/// back when the frame is done: a program's own nesting cannot hold memory the ledger does not
+/// see.
+#[derive(Debug)]
+struct Held {
+    vals: Vec<Value>,
+    charge: Charge,
+}
+
+impl Held {
+    fn new() -> Held {
+        Held {
+            vals: Vec::new(),
+            charge: Charge::none(),
+        }
+    }
+
+    fn push(&mut self, heap: &Heap, v: Value) -> Result<(), Fault> {
+        self.charge.grow(heap, crate::heap::cost::SLOT)?;
+        self.vals.push(v);
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        self.vals.len()
+    }
+
+    fn into_vals(self) -> Vec<Value> {
+        self.vals
+    }
+}
+
 /// A continuation frame: what to do with the value the walk returns next.
 #[derive(Debug)]
 enum K {
@@ -225,7 +261,7 @@ enum K {
     Collect {
         node: NodeId,
         next: u32,
-        vals: Vec<Value>,
+        vals: Held,
     },
     Block {
         node: NodeId,
@@ -238,7 +274,7 @@ enum K {
         block: NodeId,
         stmt: u32,
         next: u32,
-        vals: Vec<Value>,
+        vals: Held,
     },
     Defers {
         pending: Vec<NodeId>,
@@ -281,7 +317,7 @@ enum K {
     Par {
         node: NodeId,
         next: u32,
-        vals: Vec<Value>,
+        vals: Held,
     },
     Race {
         node: NodeId,
@@ -297,7 +333,7 @@ enum K {
     Section {
         list: u32,
         idx: u32,
-        vals: Vec<Value>,
+        vals: Held,
     },
     PromptIf(u32, u32),
     PromptForInit {
@@ -618,7 +654,7 @@ impl Machine {
             }
             PPat::Lit(l) => ops::eq(v, l),
             PPat::Variant(e, i, fields) => match &v.repr {
-                Repr::Variant(e2, i2) => (e, i) == (e2, i2) && fields.is_none(),
+                Repr::Variant(e2, i2, _) => (e, i) == (e2, i2) && fields.is_none(),
                 Repr::VariantP(vd) => {
                     if (vd.enum_, vd.index) != (*e, *i) {
                         return Ok(false);
@@ -835,9 +871,15 @@ impl Machine {
             heap: &heap,
             loc,
             type_args,
+            debit: 0,
         };
         match builtin.imp {
             Imp::Pure(f) => match f(&mut cx, args) {
+                // Work done before a refusal is paid for too.
+                Err(e) if cx.debit > 0 => match self.charge(cx.debit, loc) {
+                    Ok(()) => self.fail(e),
+                    Err(budget) => self.fail(budget),
+                },
                 Ok(v) => {
                     if builtin.class == Class::Linear
                         && let Err(e) = self.charge_output(sizes.n, output_size(&v), loc)
@@ -887,6 +929,7 @@ impl Machine {
             heap: &heap,
             loc,
             type_args: &[],
+            debit: 0,
         };
         match task.resume(&mut cx, input) {
             Ok(TaskStep::Call(f, args)) => {
@@ -1111,7 +1154,7 @@ impl Machine {
                 self.ctl.push(K::Par {
                     node,
                     next: 1,
-                    vals: Vec::with_capacity(xs.len()),
+                    vals: Held::new(),
                 });
                 self.mode = Mode::Eval(*first);
             }
@@ -1120,7 +1163,7 @@ impl Machine {
                     self.ctl.push(K::Collect {
                         node,
                         next: 1,
-                        vals: Vec::new(),
+                        vals: Held::new(),
                     });
                     self.mode = Mode::Eval(first);
                 }
@@ -1184,7 +1227,7 @@ impl Machine {
                         block: node,
                         stmt: u32::try_from(i).unwrap_or(u32::MAX),
                         next: 0,
-                        vals: Vec::new(),
+                        vals: Held::new(),
                     });
                     self.assign_next();
                 }
@@ -1261,7 +1304,7 @@ impl Machine {
             let Some(K::Assign { vals, .. }) = self.ctl.pop() else {
                 return;
             };
-            self.assign(block, stmt_i, vals);
+            self.assign(block, stmt_i, vals.into_vals());
         }
     }
 
@@ -1700,10 +1743,14 @@ impl Machine {
                 out.map(|()| Value::new_map(m))
                     .map_err(|f| fault(&p, f, Labels::NONE, loc))
             }
-            PKind::Variant { enum_, index, .. } => {
-                Value::new_variant(&heap, *enum_, *index, vals.into_iter().next())
-                    .map_err(|f| fault(&p, f, Labels::NONE, loc))
-            }
+            PKind::Variant { enum_, index, .. } => Value::new_variant(
+                &heap,
+                *enum_,
+                *index,
+                p.variant_weight(*enum_, *index),
+                vals.into_iter().next(),
+            )
+            .map_err(|f| fault(&p, f, Labels::NONE, loc)),
             PKind::Unary(op, _) => {
                 let v = vals.into_iter().next().unwrap_or_default();
                 let labels = v.labels;
@@ -1756,7 +1803,7 @@ impl Machine {
             PKind::Is(_, e, i) => {
                 let v = vals.into_iter().next().unwrap_or_default();
                 let is = match &v.repr {
-                    Repr::Variant(e2, i2) => (e2, i2) == (e, i),
+                    Repr::Variant(e2, i2, _) => (e2, i2) == (e, i),
                     Repr::VariantP(vd) => (vd.enum_, vd.index) == (*e, *i),
                     _ => false,
                 };
@@ -1871,7 +1918,9 @@ impl Machine {
                 next,
                 mut vals,
             } => {
-                vals.push(v);
+                if let Err(f) = vals.push(&self.heap, v) {
+                    return self.fault_at(f, Labels::NONE, p.node(node).loc);
+                }
                 match self.kid(node, next) {
                     Some(x) => {
                         self.ctl.push(K::Collect {
@@ -1881,7 +1930,7 @@ impl Machine {
                         });
                         self.mode = Mode::Eval(x);
                     }
-                    None => self.finish(node, vals),
+                    None => self.finish(node, vals.into_vals()),
                 }
             }
             K::Block { node, next, defers } => {
@@ -1906,7 +1955,9 @@ impl Machine {
                 next,
                 mut vals,
             } => {
-                vals.push(v);
+                if let Err(f) = vals.push(&self.heap, v) {
+                    return self.fault_at(f, Labels::NONE, Loc::default());
+                }
                 self.ctl.push(K::Assign {
                     block,
                     stmt,
@@ -2136,7 +2187,9 @@ impl Machine {
                 mut vals,
             } => {
                 self.level = self.level.saturating_sub(1);
-                vals.push(v);
+                if let Err(f) = vals.push(&self.heap, v) {
+                    return self.fault_at(f, Labels::NONE, p.node(node).loc);
+                }
                 let PKind::Par(xs) = &p.node(node).kind else {
                     return;
                 };
@@ -2150,7 +2203,7 @@ impl Machine {
                         });
                         self.mode = Mode::Eval(*x);
                     }
-                    None => self.finish(node, vals),
+                    None => self.finish(node, vals.into_vals()),
                 }
             }
             K::Race { .. } => {
@@ -2176,7 +2229,9 @@ impl Machine {
                 idx,
                 mut vals,
             } => {
-                vals.push(v);
+                if let Err(f) = vals.push(&self.heap, v) {
+                    return self.fault_at(f, Labels::NONE, Loc::default());
+                }
                 self.section_next(list, idx, vals);
             }
             K::PromptIf(then, else_) => match v.as_bool() {
@@ -2363,7 +2418,7 @@ impl Machine {
             }
             PPrompt::Section(..) => {
                 self.ctl.push(K::PromptRun { list, idx: idx + 1 });
-                self.section_next(list, idx, Vec::new());
+                self.section_next(list, idx, Held::new());
             }
             PPrompt::If(c, then, else_) => {
                 self.ctl.push(K::PromptRun { list, idx: idx + 1 });
@@ -2378,7 +2433,7 @@ impl Machine {
         }
     }
 
-    fn section_next(&mut self, list: u32, idx: u32, vals: Vec<Value>) {
+    fn section_next(&mut self, list: u32, idx: u32, vals: Held) {
         let p = Arc::clone(&self.p);
         let Some(PPrompt::Section(kind, xs)) = p.prompts[list as usize].get(idx as usize) else {
             return;
@@ -2388,6 +2443,7 @@ impl Machine {
             self.mode = Mode::Eval(*x);
             return;
         }
+        let vals = vals.into_vals();
         let loc = p.node(xs.first().copied().unwrap_or(0)).loc;
         let mut built: Vec<Section> = Vec::new();
         // `include` splices the included prompt's sections: copying them is charged, steps in

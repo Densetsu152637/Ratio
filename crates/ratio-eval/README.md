@@ -62,7 +62,8 @@ layout; text caches its character count and an ASCII flag. Values nest at most 2
 (`Invalid` beyond), so every walk and comparison of a value fits a small stack; dropping a value
 never recurses at all (every container frees its children through a work-list). Rendering a
 value as text (`text.show`, interpolation, the `json` spec) stops writing as soon as the text is
-longer than 16 MiB, and the result is refused.
+longer than 16 MiB, and the result is refused; `text.show` is then charged for what it wrote
+(`⌈len / 64⌉`) as well, so a refusal costs what a result would.
 
 ## Limits and charges
 
@@ -78,18 +79,18 @@ cost-class charge `1 + ⌈w / 64⌉` (chapter 06, `data`), its argument part deb
 (so a `product` built-in over large inputs raises `Budget` without running) and a `linear`
 built-in's output part on return; `+` on text and interpolation `1 + ⌈m / 64⌉` for an `m`-character
 result; a formatted part `1 + ⌈(n + m) / 64⌉`; comparisons of containers or text `⌈n / 64⌉` over
-the operands' weights (a record's weight counts its field names); `in` and indexing `Json`
+the operands' weights (a record's weight counts its field names, a variant's its name); `in` and indexing `Json`
 linear, list `+` and spreads `log`; a map lookup or update (`map.get`, `map.set`, `m[k]`, `k in
 m`, `m[k] = v`) `1 + ⌈log2(n + 1) · |k| / 64⌉`, since every comparison walks the key;
 `list.sort_by` its class's charge plus `⌈W · log2(n + 1) / 64⌉` for keys of total weight `W`;
 a prompt's `include` `1 + ⌈s / 64⌉` for the `s` sections and values it copies. The **heap**
 ledger charges every allocation a fixed, platform-independent size before it is made and credits
 it when the value is freed, so it counts live values: values, each prompt section as it is
-built, and the buffers built-ins gather into (a slot per element). What it does not count is the
-evaluator's continuation stack: at most one frame per IR node being evaluated, each holding at
-most its node's children (a number fixed by the program text), per call, for at most
-`call_depth` calls; so it is bounded by `call_depth` times the deepest function body's size, not
-by the data. `Budget` and `Cancelled` pass through every
+built, and the buffers built-ins gather into (a slot per element). The values the evaluator's frames gather while they work (a node's children, `par`
+results, a section's values, an assignment's indexes) are charged a slot each as they arrive
+and given back when the frame is done, so every value the evaluation holds is on the ledger;
+what remains uncharged is the frames' fixed part (a few words each, at most one per IR node
+being evaluated per call, for at most `call_depth` calls). `Budget` and `Cancelled` pass through every
 `catch`; `defer` blocks run on every exit, in reverse order (the first error wins when one
 raises).
 

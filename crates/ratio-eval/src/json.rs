@@ -52,7 +52,7 @@ fn number(f: f64, out: &mut String) {
 fn key_text(p: &Prepared, k: &Value) -> String {
     match &k.repr {
         Repr::Str(s) => s.as_str().to_owned(),
-        Repr::Variant(e, i) => p
+        Repr::Variant(e, i, _) => p
             .enums
             .get(*e as usize)
             .and_then(|en| en.variants.get(*i as usize))
@@ -124,7 +124,7 @@ pub(crate) fn write(p: &Prepared, v: &Value, out: &mut String) {
             }
             out.push('}');
         }
-        Repr::Variant(e, i) => {
+        Repr::Variant(e, i, _) => {
             let en = p.enums.get(*e as usize);
             let name = en
                 .and_then(|en| en.variants.get(*i as usize))
@@ -588,7 +588,7 @@ pub(crate) fn encode(
             }
             Json::Object(entries.into_boxed_slice())
         }
-        (Type::Enum(e, args), Repr::Variant(_, i)) => {
+        (Type::Enum(e, args), Repr::Variant(_, i, _)) => {
             let name = variant_json(p, *e, *i);
             let unit_only = p.enums.get(*e as usize).is_some_and(|en| en.unit_only);
             let _ = args;
@@ -911,7 +911,10 @@ impl Decoder<'_> {
                 match index {
                     None => self.bad("no variant of that `kind`"),
                     Some(i) => match payload_type(self.p, *e, i) {
-                        None => Some(Value::new_variant(heap, *e, i, None)?.with_labels(labels)),
+                        None => Some(
+                            Value::new_variant(heap, *e, i, self.p.variant_weight(*e, i), None)?
+                                .with_labels(labels),
+                        ),
                         Some(pt) => {
                             let env2 = enum_env(self.p, *e, args);
                             let rest: Vec<(Value, Value)> = entries
@@ -923,8 +926,14 @@ impl Decoder<'_> {
                                 Some(Type::Record(fields)) => {
                                     match self.record(&rest, &fields, &env2, depth, Labels::NONE)? {
                                         Some(payload) => Some(
-                                            Value::new_variant(heap, *e, i, Some(payload))?
-                                                .with_labels(labels),
+                                            Value::new_variant(
+                                                heap,
+                                                *e,
+                                                i,
+                                                self.p.variant_weight(*e, i),
+                                                Some(payload),
+                                            )?
+                                            .with_labels(labels),
                                         ),
                                         None => None,
                                     }
@@ -943,7 +952,8 @@ impl Decoder<'_> {
     fn unit_variant(&self, e: u32, name: &str) -> Option<Value> {
         let en = self.p.enums.get(e as usize)?;
         let i = en.variants.iter().position(|v| &*v.json == name)?;
-        Value::new_variant(&Heap::unmetered(), e, u32::try_from(i).ok()?, None).ok()
+        let i = u32::try_from(i).ok()?;
+        Value::new_variant(&Heap::unmetered(), e, i, self.p.variant_weight(e, i), None).ok()
     }
 
     fn record(

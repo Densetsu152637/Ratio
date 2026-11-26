@@ -411,3 +411,57 @@ fn deep_tree_is_refused() {
     );
     assert!(ratio_ir::canon::canonical_text(&prog, 0).is_none());
 }
+
+// ---- round 2 ----
+
+#[test]
+fn r2_1_rendering_unit_variant_names_is_charged() {
+    let name = format!("A{}", "a".repeat(4000));
+    let src = format!(
+        "enum E {{ {name} }}\nfn main() -> Int {{\n  var xs = [E.{name}]\n  repeat 13 {{ xs = xs + xs }}\n  var fails = 0\n  repeat 2000 {{\n    let r = try {{ text.len(text.show(xs)) }} catch e {{ fails += 1; 0 }}\n  }}\n  fails\n}}\n"
+    );
+    let p = prepared(&src);
+    // 8,192 names of 4,001 characters: each `text.show` is charged for about 32 MB of names, so
+    // the steps run out after a few, instead of rendering 16 MiB 2,000 times for free.
+    let (kind, took, _) = raised_in(&p, Vec::new(), Limits::default());
+    assert_eq!(kind, "Budget");
+    assert!(took < Duration::from_secs(20), "{took:?}");
+}
+
+#[test]
+fn r2_1_a_refused_rendering_is_charged_for_what_it_wrote() {
+    let p = prepared(
+        r#"
+fn main(show: Bool) -> Int {
+  var s = "\""
+  repeat 23 { s = s + s }
+  if show {
+    try { text.len(text.show([s])) } catch e { 0 }
+  } else {
+    0
+  }
+}
+"#,
+    );
+    let without = run(&p, "main", vec![Value::bool(false)]).steps;
+    let with = run(&p, "main", vec![Value::bool(true)]).steps;
+    // 8 Mi quotes render as 16 MiB of `\"` and are refused; the class's charge on the input
+    // (2^23 / 64) and the rendered length (about 2^24 / 64) are both debited.
+    assert!(
+        with - without > (1 << 23) / 64 + (1 << 23) / 64,
+        "{without} {with}"
+    );
+}
+
+#[test]
+fn r2_2_values_a_frame_gathers_are_charged_to_the_heap() {
+    let zeros = "0,".repeat(50_000);
+    let src = format!(
+        "fn f(n: Int) -> Int {{\n  if n == 0 {{ return 0 }}\n  let xs = [{zeros} f(n - 1)]\n  1\n}}\nfn main() -> Int {{ f(500) }}\n"
+    );
+    let p = prepared(&src);
+    match run(&p, "main", Vec::new()).outcome {
+        Outcome::Raised(e) => assert_eq!(e.budget(&p).as_deref(), Some("heap")),
+        Outcome::Returned(_) => panic!("500 frames of 50,000 gathered values fit in 64 MiB"),
+    }
+}

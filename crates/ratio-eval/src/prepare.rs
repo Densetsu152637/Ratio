@@ -317,6 +317,14 @@ impl Prepared {
         &self.nodes[id as usize]
     }
 
+    /// The length of a variant's name as a rendering writes it (its weight as a value).
+    pub(crate) fn variant_weight(&self, enum_: u32, index: u32) -> u32 {
+        self.enums
+            .get(enum_ as usize)
+            .and_then(|e| e.variants.get(index as usize))
+            .map_or(0, |v| u32::try_from(v.json.len()).unwrap_or(u32::MAX))
+    }
+
     pub(crate) fn layout_of(&self, enum_: u32, index: u32) -> Option<&Arc<Layout>> {
         self.enums
             .get(enum_ as usize)?

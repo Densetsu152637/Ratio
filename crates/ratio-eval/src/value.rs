@@ -203,6 +203,8 @@ pub(crate) struct RecordData {
 pub(crate) struct VariantData {
     pub enum_: u32,
     pub index: u32,
+    /// The length of the variant's name.
+    pub name_len: u32,
     /// The payload record.
     pub payload: Value,
     pub meta: Meta,
@@ -299,8 +301,9 @@ pub(crate) enum Repr {
     Record(Arc<RecordData>),
     List(List),
     Map(Map),
-    /// A unit variant: the enum (by prepared index) and the variant.
-    Variant(u32, u32),
+    /// A unit variant: the enum (by prepared index), the variant, and the length of its name
+    /// (what a rendering writes, so it counts in the value's weight).
+    Variant(u32, u32, u32),
     VariantP(Arc<VariantData>),
     /// A declared function, prompt or harness, by prepared item index.
     Item(u32),
@@ -458,20 +461,26 @@ impl Value {
         plain(Repr::Map(map))
     }
 
+    /// A variant; `name_len` is its name's length (see [`Prepared::variant_weight`]).
+    ///
+    /// [`Prepared::variant_weight`]: crate::Prepared
     pub(crate) fn new_variant(
         heap: &Heap,
         enum_: u32,
         index: u32,
+        name_len: u32,
         payload: Option<Value>,
     ) -> Result<Value, Fault> {
         let Some(payload) = payload else {
-            return Ok(plain(Repr::Variant(enum_, index)));
+            return Ok(plain(Repr::Variant(enum_, index, name_len)));
         };
-        let meta = Meta::of([&payload]).check()?;
+        let mut meta = Meta::of([&payload]).check()?;
+        meta.weight = meta.weight.saturating_add(u64::from(name_len));
         let charge = heap.alloc(cost::AGG)?;
         Ok(plain(Repr::VariantP(Arc::new(VariantData {
             enum_,
             index,
+            name_len,
             payload,
             meta,
             _charge: charge,
@@ -662,6 +671,7 @@ impl Value {
     pub fn weight(&self) -> u64 {
         match &self.repr {
             Repr::Str(s) | Repr::Tool(s) => s.chars().max(1),
+            Repr::Variant(_, _, name_len) => u64::from(*name_len).max(1),
             _ => self.meta().map_or(1, |m| m.weight),
         }
     }
@@ -739,9 +749,13 @@ impl Value {
                 }
                 Value::new_map(out)
             }
-            Repr::VariantP(v) => {
-                Value::new_variant(heap, v.enum_, v.index, Some(f(&v.payload, heap)?))?
-            }
+            Repr::VariantP(v) => Value::new_variant(
+                heap,
+                v.enum_,
+                v.index,
+                v.name_len,
+                Some(f(&v.payload, heap)?),
+            )?,
             Repr::Closure(c) => {
                 let captured = c
                     .captured

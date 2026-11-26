@@ -117,7 +117,7 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
             }
             true
         }
-        (Repr::Variant(e1, i1), Repr::Variant(e2, i2)) => (e1, i1) == (e2, i2),
+        (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1) == (e2, i2),
         (Repr::VariantP(x), Repr::VariantP(y)) => {
             (x.enum_, x.index) == (y.enum_, y.index) && eq(&x.payload, &y.payload)
         }
@@ -210,14 +210,14 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
         (Repr::Float(x), Repr::Int(y)) => float_cmp(*x, *y as f64),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
         (Repr::Str(x), Repr::Str(y)) => x.as_str().cmp(y.as_str()),
-        (Repr::Variant(e1, i1), Repr::Variant(e2, i2)) => (e1, i1).cmp(&(e2, i2)),
+        (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
         (Repr::VariantP(x), Repr::VariantP(y)) => (x.enum_, x.index)
             .cmp(&(y.enum_, y.index))
             .then_with(|| cmp_natural(&x.payload, &y.payload)),
-        (Repr::Variant(e1, i1), Repr::VariantP(y)) => {
+        (Repr::Variant(e1, i1, _), Repr::VariantP(y)) => {
             (e1, i1).cmp(&(&y.enum_, &y.index)).then(Ordering::Less)
         }
-        (Repr::VariantP(x), Repr::Variant(e2, i2)) => {
+        (Repr::VariantP(x), Repr::Variant(e2, i2, _)) => {
             (&x.enum_, &x.index).cmp(&(e2, i2)).then(Ordering::Greater)
         }
         (Repr::Tuple(x), Repr::Tuple(y)) => lex(x.items.iter().cloned(), y.items.iter().cloned()),
@@ -394,7 +394,7 @@ pub(crate) fn show(p: &Prepared, v: &Value) -> String {
         Repr::Float(f) => float_text(*f),
         Repr::Duration(d) => duration_text(*d),
         Repr::Money(m) => money_text(*m),
-        Repr::Variant(e, i) => p
+        Repr::Variant(e, i, _) => p
             .enums
             .get(*e as usize)
             .and_then(|en| en.variants.get(*i as usize))
