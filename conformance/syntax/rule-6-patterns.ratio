@@ -1,4 +1,10 @@
 // expect: parse-ok
+// tree: (module - [(item [] [] - (fn patterns [] [(param v (named [Verdict] []) -)] - (block [(expr (match (name v)
+// tree: [(arm (pat-name Pass) - (int 1)) (arm (pat-variant [Verdict Pass] -) - (int 2)) (arm (pat-variant [Fail]
+// tree: (record-pat [(field-pat reason -)] -)) - (int 3)) (arm (pat-variant [Verdict Fail] (record-pat [(field-pat
+// tree: reason (pat-name r))] ..)) - (int 4)) (arm (pat-name other) - (int 5))])) (expr (try (block [(expr (int 1))])
+// tree: (catch-arms [(arm (pat-variant [Denied] (record-pat [(field-pat by -)] -)) - (int 1)) (arm (pat-name
+// tree: ToolFailed) - (int 2)) (arm (pat-name e) - (int 3))])))])))])
 
 // Rule 6: a qualified name or a name with a payload is a variant pattern; a bare name binds
 // (the checker decides whether a bare name is a variant).

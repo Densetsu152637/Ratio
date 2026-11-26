@@ -1,4 +1,14 @@
 // expect: parse-ok
+// tree: (module - [(item [] [] - (fn bar [] [(param xs (list (named [Int] [])) -)] - (block [(expr (call (name map) []
+// tree: [(arg - (name xs)) (arg - (closure [(cparam (pat-name x) -)] (name x)))])) (expr (call (name map) [] [(arg -
+// tree: (name xs)) (arg - (closure [] (int 1)))])) (expr (match (name x) [(arm (or [(pat-lit (int 1)) (pat-lit (int
+// tree: 2)) (pat-lit (int 3))]) - (str short ["small"])) (arm (wild) - (str short ["big"]))])) (let (or [(pat-lit (int
+// tree: 1)) (pat-lit (int 2))]) - (name n)) (expr (call (name map) [] [(arg - (name xs)) (arg - (closure [(cparam
+// tree: (pat-tuple [(pat-name a) (pat-name b)]) -)] (name a)))])) (expr (call (name map) [] [(arg - (name xs)) (arg -
+// tree: (closure [(cparam (pat-name a) -) (cparam (pat-name b) -)] (name a)))])) (let (pat-name f) - (closure [(cparam
+// tree: (pat-name x) -)] (bin |> (name x) (name g)))) (expr (match (name x) [(arm (or [(pat-name A) (pat-variant [B]
+// tree: (record-pat [(field-pat n (or [(pat-lit (int 1)) (pat-lit (int 2))]))] -))]) - (int 1)) (arm (wild) - (int
+// tree: 2))]))])))])
 
 // Rule 5: `|` begins a closure in primary position and separates patterns in a pattern.
 

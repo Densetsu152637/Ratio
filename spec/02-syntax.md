@@ -369,7 +369,9 @@ section         = "system" , expr
      `loop`, `repeat`, `try`, `catch`, `defer`, `do`, `fn`, `harness`, `test`) and after the head
      expression of `if c`, `while c`, `for p in xs`, `repeat n` and `with timeout d`, `{` starts a
      block. Directly after `catch`, `{` starts the arm list; after `match x` and `enum E`, the
-     arm list and the enum body.
+     arm list and the enum body. After a `:`, `fn()` is a function expression, whose `{` starts a
+     block, when a `{` follows it or its result type (`{ run: fn() {} }`, `g(a: fn() -> T { x })`);
+     otherwise it is a function type (`let f: fn() -> T = h`).
    - **`with` and a record.** After a `with` that begins an expression (not `with timeout`, not a
      call override after `)`, not a harness's configuration in its declaration head), the first
      `{` is the configuration record and the next one the block. In a declaration head,

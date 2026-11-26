@@ -20,7 +20,13 @@ workflow creates a release, given the tag ruleset. Also in 0.8: in a type declar
 `format` section a line-ending `??` that ends a type ends the statement, like `>`; chapter 06's
 `type Sampling` example uses a `//` comment (there are no block comments) and `ToolChoice`'s
 `none` variant is renamed `no_tools` (`none` is a keyword; chapter 05 follows); chapter 07's
-nesting row says the limit counts tree depth, chain links included.
+nesting row says the limit counts tree depth, chain links included. Chapter 02 also records
+the token reader's reach: after a `:`, `fn()` is a function expression when a `{` follows it or
+its result type, and a closure's parameter commas do not end a `match` arm; and the canonical
+form (a new subsection): the printer's explicit `;` after a statement ending in `>`, `??` or a
+`fn` or `harness` type, no trailing comma in an `import` list, `{ x, }` for a one-field
+shorthand record, canonical quantity, duration and money units, ranges without spaces, long and
+raw long string layout. Chapter 10 says what a `tree:` line is.
 
 **Changes in draft 0.7** (kept for reference). Errata from the stage 1 review and the repository-split review.
 Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;

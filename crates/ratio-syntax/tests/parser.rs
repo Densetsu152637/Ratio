@@ -864,3 +864,23 @@ fn the_corpus_uses_every_assignment_operator() {
         );
     }
 }
+
+#[test]
+fn the_reader_gives_fn_heads_and_closure_arms_their_braces() {
+    // `a: fn() {}` and `a: fn() -> T { x }` are function expressions, `a: fn() -> T` a type.
+    for src in [
+        "fn f() { let r = { a: fn() -> T { x } } }",
+        "fn f() { g(a: fn() {}) }",
+        "fn f() { let r = {a: fn() {}} }",
+        "fn f() { g(a: fn() -> { b: Int } { { b: 1 } }) }",
+        "fn f() { match q { a => |x, y| match n { _ => 1 }, } }",
+        "fn f(a: fn() -> T, b: { c: fn() -> Int }) { let g: fn() -> T = h\ng }",
+        "type F = fn(A) -> B\ntype G = Int",
+        "type F = fn() -> { a: Int }\ntype G = Int",
+        "prompt p() { format fn() -> Int\n steps \"x\" }",
+        "type X = Int??\ntype Y = List<Int>\nfn f() {}",
+    ] {
+        let parsed = parse(src);
+        assert!(parsed.is_clean(), "{src}: {:?}", parsed.diagnostics);
+    }
+}
