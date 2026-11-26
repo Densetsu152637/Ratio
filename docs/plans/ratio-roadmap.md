@@ -9,8 +9,9 @@ Goals (each verified by the named check):
   stages 2R and 2S are outside this count (2S has its own spec PR).
 - G2: before each squash-merge, CI is fully green on the final pushed head (`gh pr checks <n>`), and
   an independent critic review of that head is recorded in the PR description. The review is
-  security-focused for stages 5, 6, 10, 11, 12 and the Ratio parts of 21, 23 and 24 (untrusted input,
-  secrets, frames or the `Host` boundary).
+  security-focused for stages 2, 3, 5, 6, 9, 10, 11, 12 and the Ratio parts of 21, 23 and 24
+  (hostile source, import escape, untrusted input, `path`/`url`/`codec`, secrets, frames or the `Host`
+  boundary).
 - G3: every rule a stage implements has a conformance file under `conformance/`, every conformance
   directory is mapped in `conformance/spec-map.txt`, and the `conformance` CI job (runner plus the
   `spec` test) passes.
@@ -86,7 +87,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
     - (d) `record_pattern` allows `{ .. }` and a trailing comma:
       `"{" [ ( field_pattern {"," field_pattern} ["," ".."] | ".." ) [","] ] "}"`;
     - (e) the grammar is applied strictly: trailing commas only where allowed, jumps are not
-      operands, `()` is not an expression.
+      operands, `()` is not an expression;
+    - (f) `>` can end a statement inside a type declaration or a format section (the gap below).
   - Gap to fix: insertion condition 2 excludes `>`, so `type T = List<Int>` followed by a newline
     fails, as does `format Map<K,V>` in a prompt. Decision: inside a type declaration or a format
     section, `>` can end a statement. This needs a lexer change, a `check_insertions` update and a
@@ -171,7 +173,8 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   identical event streams; replayed values keep labels and are untrusted; divergence tests; real
   concurrency; every secrecy sink refuses a labelled value at the guard and at the unguarded host;
   the contract suite's frame cases refuse a wider child scope in every dimension (the suite Imperium's
-  `RatioHost::open_frame` must also pass, stage 13).
+  `RatioHost::open_frame` must also pass, stage 13); the throwaway Imperium `RatioHost` spike's result
+  against the candidate commit is recorded in the PR before merge (the spike code is never merged).
 - Status: pending. On merge: message "Imperium Implementation" (G6).
 
 ## Stage 12: Model and think (security review)
