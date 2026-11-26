@@ -24,6 +24,13 @@ use crate::ops::{cmp_natural, eq, size};
 use crate::plist::{Cursor, List};
 use crate::value::{Fault, Json, Repr, Value};
 
+mod json;
+mod list;
+mod map;
+mod nfa;
+mod util;
+mod validate;
+
 /// A pure built-in's cost class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
@@ -80,7 +87,9 @@ pub(crate) fn pre_work(class: Class, s: Sizes) -> u64 {
         Class::Const => 1,
         // A map's key comparisons walk the key: `n2` is its weight (0 when there is none).
         Class::Log => crate::ops::log_work(s.n).saturating_mul(s.n2.max(1)),
-        Class::NLogN => s.n.saturating_mul(crate::ops::log_work(s.n)),
+        // A comparison walks the values it compares: built-ins that compare whole elements give
+        // their weight in `n2`, and the charge is that weight times `⌈log2(n + 1)⌉`.
+        Class::NLogN => s.n.max(s.n2).saturating_mul(crate::ops::log_work(s.n)),
         Class::Product => s.n.saturating_mul(s.n2).saturating_add(s.c),
         Class::Output => s.m,
         Class::Linear => s.n,
@@ -225,7 +234,7 @@ pub(crate) fn output_size(v: &Value) -> u64 {
 // ---- the table ----
 
 macro_rules! table {
-    ($($name:literal, $class:ident, $size:ident, $imp:expr;)*) => {
+    ($($name:literal, $class:ident, $size:path, $imp:expr;)*) => {
         pub(crate) const BUILTINS: &[Builtin] = &[
             $(Builtin { name: $name, class: Class::$class, size: $size, imp: $imp },)*
         ];
@@ -265,6 +274,65 @@ table! {
     "json.decode", Linear, s_weight_first, Imp::Pure(json_decode);
     "json.get", Linear, s_two, Imp::Pure(json_get);
     "json.encode", Linear, s_weight_first, Imp::Pure(json_encode);
+    // ---- stage 8 (data II): the rest of json, list and map (chapter 06, data) ----
+    "list.is_empty", Const, s_none, Imp::Pure(list::is_empty);
+    "list.last", Const, s_none, Imp::Pure(list::last);
+    "list.insert", Log, s_first, Imp::Pure(list::insert);
+    "list.remove_at", Log, s_first, Imp::Pure(list::remove_at);
+    "list.concat", Log, s_two, Imp::Pure(list::concat);
+    "list.flatten", Linear, s_weight_first, Imp::Pure(list::flatten);
+    "list.range", Output, list::s_range, Imp::Pure(list::range);
+    "list.repeat", Output, list::s_repeat, Imp::Pure(list::repeat);
+    "list.map_indexed", Linear, s_first, Imp::Task(list::map_indexed);
+    "list.flat_map", Linear, s_first, Imp::Task(list::flat_map);
+    "list.reduce", Linear, s_first, Imp::Task(list::reduce);
+    "list.find", Linear, s_first, Imp::Task(list::find);
+    "list.find_index", Linear, s_first, Imp::Task(list::find_index);
+    "list.index_of", Linear, s_weight_two, Imp::Pure(list::index_of);
+    "list.any", Linear, s_first, Imp::Task(list::any);
+    "list.all", Linear, s_first, Imp::Task(list::all);
+    "list.count", Linear, s_first, Imp::Task(list::count);
+    "list.min", Linear, s_weight_first, Imp::Pure(list::min);
+    "list.max", Linear, s_weight_first, Imp::Pure(list::max);
+    "list.min_by", Linear, s_first, Imp::Task(list::min_by);
+    "list.max_by", Linear, s_first, Imp::Task(list::max_by);
+    "list.sort", NLogN, list::s_compare, Imp::Pure(list::sort);
+    "list.reverse", Linear, s_first, Imp::Pure(list::reverse);
+    "list.unique", NLogN, list::s_compare, Imp::Pure(list::unique);
+    "list.unique_by", NLogN, s_first, Imp::Task(list::unique_by);
+    "list.group_by", NLogN, s_first, Imp::Task(list::group_by);
+    "list.partition", Linear, s_first, Imp::Task(list::partition);
+    "list.chunk", Linear, s_first, Imp::Pure(list::chunk);
+    "list.window", Linear, list::s_window, Imp::Pure(list::window);
+    "list.zip", Linear, s_two, Imp::Pure(list::zip);
+    "list.unzip", Linear, s_first, Imp::Pure(list::unzip);
+    "list.enumerate", Linear, s_first, Imp::Pure(list::enumerate);
+    "list.drop", Log, s_first, Imp::Pure(list::take_rest);
+    "list.take_while", Linear, s_first, Imp::Task(list::take_while);
+    "list.slice", Log, s_first, Imp::Pure(list::slice);
+    "map.from", NLogN, list::s_compare, Imp::Pure(map::from);
+    "map.len", Const, s_none, Imp::Pure(map::len);
+    "map.is_empty", Const, s_none, Imp::Pure(map::is_empty);
+    "map.has", Log, s_map_key, Imp::Pure(map::has);
+    "map.remove", Log, s_map_key, Imp::Pure(map::remove);
+    "map.update", Log, s_map_key, Imp::Task(map::update);
+    "map.values", Linear, s_first, Imp::Pure(map::values);
+    "map.entries", Linear, s_first, Imp::Pure(map::entries);
+    "map.merge", Linear, s_weight_two, Imp::Pure(map::merge);
+    "map.map_values", Linear, s_first, Imp::Task(map::map_values);
+    "map.filter", Linear, s_first, Imp::Task(map::filter);
+    "map.count_by", NLogN, s_first, Imp::Task(map::count_by);
+    "json.stringify", Linear, s_weight_first, Imp::Pure(json::stringify);
+    "json.schema", Linear, s_none, Imp::Pure(json::schema);
+    "json.validate", Product, s_product, Imp::Pure(json::validate_);
+    "json.set", Linear, s_two, Imp::Pure(json::set);
+    "json.keys", Linear, s_first, Imp::Pure(json::keys);
+    "json.type_of", Const, s_none, Imp::Pure(json::type_of);
+    "json.merge", Linear, s_weight_two, Imp::Pure(json::merge);
+    "json.patch", Product, json::s_patch, Imp::Pure(json::patch);
+    "json.diff", Product, s_product, Imp::Pure(json::diff_);
+    "json.equal", Linear, s_weight_two, Imp::Pure(json::equal);
+    // ---- end of stage 8 ----
     "math.abs", Const, s_none, Imp::Pure(math_abs);
     "math.min", Const, s_none, Imp::Pure(math_min);
     "math.max", Const, s_none, Imp::Pure(math_max);
@@ -760,17 +828,22 @@ impl Task for SortTask {
                 weight.saturating_mul(crate::ops::log_work(n)).div_ceil(64),
             ));
         }
-        let mut order: Vec<usize> = (0..self.items.len()).collect();
         let keys = &self.keys.items;
-        if self.descending {
-            order.sort_by(|a, b| cmp_natural(&keys[*b], &keys[*a]));
-        } else {
-            order.sort_by(|a, b| cmp_natural(&keys[*a], &keys[*b]));
-        }
+        let descending = self.descending;
+        let order = util::merge_sort(cx, self.items.len(), &mut |a, b| {
+            if descending {
+                cmp_natural(&keys[b], &keys[a])
+            } else {
+                cmp_natural(&keys[a], &keys[b])
+            }
+        })?;
         // The order depends on every key.
         let decided = self.keys.items.iter().fold(self.own, |l, k| l | k.quick());
-        let items = order.into_iter().map(|i| self.items[i].clone()).collect();
-        Ok(TaskStep::Done(new_list(cx, items, decided)?))
+        let mut out = util::Gather::with_capacity(cx, order.indexes.len() as u64, decided)?;
+        for &i in &order.indexes {
+            out.push(cx, self.items[i].clone())?;
+        }
+        Ok(TaskStep::Done(out.finish(cx, decided)?))
     }
 }
 

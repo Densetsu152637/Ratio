@@ -21,7 +21,7 @@ use crate::value::{Fault, Json, MAX_DEPTH, Repr, Str, Value};
 /// The deepest JSON `parse` and `decode` accept (chapter 07: 128).
 pub const MAX_JSON_DEPTH: usize = 128;
 
-fn quote(s: &str, out: &mut String) {
+pub(crate) fn quote(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -41,7 +41,7 @@ fn quote(s: &str, out: &mut String) {
     out.push('"');
 }
 
-fn number(f: f64, out: &mut String) {
+pub(crate) fn number(f: f64, out: &mut String) {
     if f.is_finite() {
         let _ = write!(out, "{f:?}");
     } else {
@@ -1069,16 +1069,15 @@ pub(crate) fn get(j: &Value, pointer: &str) -> Result<Value, Fault> {
     if pointer.is_empty() {
         return Ok(j.clone());
     }
-    let Some(rest) = pointer.strip_prefix('/') else {
-        return Err(Fault::Invalid("a JSON pointer starts with `/`".to_owned()));
-    };
+    // A pointer with more tokens than values nest deep names nothing: a miss, without
+    // splitting it (a pointer of 16 MiB of slashes would make millions of tokens).
+    if pointer.bytes().filter(|b| *b == b'/').count() > crate::jsonedit::MAX_TOKENS {
+        return crate::jsonedit::tokens_checked(pointer)
+            .map(|()| Value::none().with_labels(j.quick()));
+    }
     let mut cur = j.clone();
-    for raw in rest.split('/') {
-        let token = raw.replace("~1", "/").replace("~0", "~");
-        let at = token
-            .parse::<u64>()
-            .ok()
-            .filter(|_| token == "0" || !token.starts_with(['0', '+']));
+    for token in crate::jsonedit::tokens(pointer)? {
+        let at = crate::jsonedit::index_token(&token);
         match child(&cur, Some(token.as_str()), at) {
             Ok(v) => cur = v,
             Err(miss) => return Ok(miss),

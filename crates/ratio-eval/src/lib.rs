@@ -31,6 +31,7 @@ mod drop;
 mod error;
 mod heap;
 mod json;
+mod jsonedit;
 mod labels;
 mod machine;
 mod ops;
@@ -39,9 +40,11 @@ mod pmap;
 mod prepare;
 #[cfg(test)]
 mod properties;
+mod schema;
 pub mod sink;
 mod stack;
 mod value;
+pub mod work;
 
 use std::sync::Arc;
 

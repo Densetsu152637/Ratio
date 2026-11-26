@@ -59,7 +59,7 @@ fn internal<T>(what: impl Into<String>) -> Res_<T> {
 }
 
 /// The prelude enums the interpreter builds values of itself (errors and results).
-pub const RUNTIME_ENUMS: [&str; 4] = ["ErrorKind", "BudgetKind", "DeniedBy", "Result"];
+pub const RUNTIME_ENUMS: [&str; 5] = ["ErrorKind", "BudgetKind", "DeniedBy", "Result", "JsonType"];
 
 /// Whether the built-in a program calls by `name` is pure (its table entry has `@pure`).
 fn pure_builtins() -> &'static HashMap<String, bool> {

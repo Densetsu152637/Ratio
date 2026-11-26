@@ -62,6 +62,7 @@ pub(crate) fn is_scalar(v: &Value) -> bool {
 /// IEEE 754 (`NaN != NaN`); functions compare by identity; a record's absent optional field
 /// equals `none`; JSON objects compare regardless of key order.
 pub(crate) fn eq(a: &Value, b: &Value) -> bool {
+    crate::work::add(1);
     match (&a.repr, &b.repr) {
         (Repr::Unit, Repr::Unit) | (Repr::None, Repr::None) => true,
         (Repr::Bool(x), Repr::Bool(y)) => x == y,
@@ -73,7 +74,10 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
             reason = "IEEE 754 equality is the specified semantics"
         )]
         (Repr::Float(x), Repr::Float(y)) => x == y,
-        (Repr::Str(x), Repr::Str(y)) | (Repr::Tool(x), Repr::Tool(y)) => x.as_str() == y.as_str(),
+        (Repr::Str(x), Repr::Str(y)) | (Repr::Tool(x), Repr::Tool(y)) => {
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
+            x.as_str() == y.as_str()
+        }
         (Repr::Range(x), Repr::Range(y)) => {
             (x.start, x.end, x.inclusive) == (y.start, y.end, y.inclusive)
         }
@@ -201,6 +205,7 @@ fn float_cmp(x: f64, y: f64) -> Ordering {
 /// payload, tuples and lists lexicographically, records field by field in name order.
 #[allow(clippy::cast_precision_loss, reason = "Int and Float compare by value")]
 pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
+    crate::work::add(1);
     match (&a.repr, &b.repr) {
         (Repr::Int(x), Repr::Int(y))
         | (Repr::Duration(x), Repr::Duration(y))
@@ -209,7 +214,11 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
         (Repr::Int(x), Repr::Float(y)) => float_cmp(*x as f64, *y),
         (Repr::Float(x), Repr::Int(y)) => float_cmp(*x, *y as f64),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
-        (Repr::Str(x), Repr::Str(y)) => x.as_str().cmp(y.as_str()),
+        (Repr::Str(x), Repr::Str(y)) => {
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
+            x.as_str().cmp(y.as_str())
+        }
+        (Repr::Json(x), Repr::Json(y)) => json_cmp(&x.node, &y.node),
         (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
         (Repr::VariantP(x), Repr::VariantP(y)) => (x.enum_, x.index)
             .cmp(&(y.enum_, y.index))
@@ -224,6 +233,55 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
         (Repr::List(x), Repr::List(y)) => lex(x.to_vec().into_iter(), y.to_vec().into_iter()),
         (Repr::Record(x), Repr::Record(y)) => lex(x.items.iter().cloned(), y.items.iter().cloned()),
         _ => kind_rank(a).cmp(&kind_rank(b)),
+    }
+}
+
+fn json_rank(j: &Json) -> u8 {
+    match j {
+        Json::Null => 0,
+        Json::Bool(_) => 1,
+        Json::Int(_) | Json::Float(_) => 2,
+        Json::Str(_) => 3,
+        Json::Array(_) => 4,
+        Json::Object(_) => 5,
+    }
+}
+
+/// The natural order of JSON values: `null`, booleans, numbers by value, text by code point,
+/// arrays lexicographically, objects as their entries sorted by key (so key order does not
+/// matter, as for `==`). Total, so a sort or a map of JSON keys is well defined.
+#[allow(clippy::cast_precision_loss, reason = "Int and Float compare by value")]
+fn json_cmp(a: &Json, b: &Json) -> Ordering {
+    match (a, b) {
+        (Json::Bool(x), Json::Bool(y)) => x.cmp(y),
+        (Json::Int(x), Json::Int(y)) => x.cmp(y),
+        (Json::Float(x), Json::Float(y)) => float_cmp(*x, *y),
+        (Json::Int(x), Json::Float(y)) => float_cmp(*x as f64, *y),
+        (Json::Float(x), Json::Int(y)) => float_cmp(*x, *y as f64),
+        (Json::Str(x), Json::Str(y)) => {
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
+            x.as_str().cmp(y.as_str())
+        }
+        (Json::Array(x), Json::Array(y)) => lex(x.cursor_values(), y.cursor_values()),
+        (Json::Object(x), Json::Object(y)) => {
+            let sorted = |e: &[(Value, Value)]| {
+                let mut v: Vec<(String, Value)> = e
+                    .iter()
+                    .map(|(k, x)| (k.as_text().unwrap_or("").to_owned(), x.clone()))
+                    .collect();
+                v.sort_by(|p, q| p.0.cmp(&q.0));
+                v
+            };
+            let (sx, sy) = (sorted(x), sorted(y));
+            for (p, q) in sx.iter().zip(sy.iter()) {
+                let o = p.0.cmp(&q.0).then_with(|| cmp_natural(&p.1, &q.1));
+                if o != Ordering::Equal {
+                    return o;
+                }
+            }
+            sx.len().cmp(&sy.len())
+        }
+        _ => json_rank(a).cmp(&json_rank(b)),
     }
 }
 
