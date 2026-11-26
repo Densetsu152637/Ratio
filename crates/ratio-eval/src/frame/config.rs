@@ -122,11 +122,6 @@ fn tools(v: &Value) -> Result<ToolRequest, String> {
     Ok(ToolRequest { need, want })
 }
 
-/// Reads a configuration record.
-///
-/// # Errors
-///
-/// A message for `Invalid` when a field cannot be read exactly.
 /// The work of reading a configuration's lists: one per entry and per 16 bytes of text, and
 /// the cover filter over each list (quadratic in its length, up to the limit).
 pub(crate) fn parse_work(cfg: &Value) -> u64 {
@@ -159,6 +154,11 @@ pub(crate) fn parse_work(cfg: &Value) -> u64 {
     work
 }
 
+/// Reads a configuration record.
+///
+/// # Errors
+///
+/// A message for `Invalid` when a field cannot be read exactly.
 pub(crate) fn read(p: &Prepared, cfg: &Value) -> Result<(Request, Settings), String> {
     let mut r = Request::default();
     if let Some(t) = field(cfg, "tools") {
