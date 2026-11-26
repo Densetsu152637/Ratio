@@ -3,7 +3,7 @@
 Task DESIGN-LOOPS (user request: "make looping and vectorised operations compatible and
 optimised", widened to "also add in other function syntax", then to "`Result<T>` types and
 monadic chain expressions", under the style "a nice fusion between Haskell and Java").
-Revision 3 applies the 17 accepted findings of the critic review. Revision 2: the user adopted FS-1, FS-2, FS-3 and `scan`/`zip_with`, and added
+Revision 4 closes the critic's last six items; revision 3 applied its 17 findings. Revision 2: the user adopted FS-1, FS-2, FS-3 and `scan`/`zip_with`, and added
 [Style](#style), [Result and monadic chains](#result-and-monadic-chains) and re-evaluates the
 syntax options (revision 2). Reviewed against `main` at
 `4837678` (stages 1 to 7, specification draft 0.14) and the in-flight branches
@@ -100,8 +100,8 @@ and method syntax already gives the Java reading (`r.and_then(f)` reads as `r.an
 | FS-7 | `list.scan`, `list.zip_with` | Stdlib | Adopted (user) | D4 | Low |
 | FS-5, 8–13 | Multi-clause functions, fold sugar, arrow lambdas, lazy sequences, … | Syntax | Options / rejected | — | — |
 | R-1 | Keep `Result<T>` with the fixed `Error`; no user generic enums | Types | Accept | — | — |
-| R-2 | `outcome.*` and `maybe.*` combinators (methods on `Result<T>` and `T?`) | Stdlib | Adopt | D4 | Low |
-| R-3 | `outcome.sequence`, `outcome.traverse` | Stdlib | Adopt | D4 | Low |
+| R-2 | `either.*` and `maybe.*` combinators (methods on `Result<T>` and `T?`) | Stdlib | Adopt | D4 | Low |
+| R-3 | `either.sequence`, `either.traverse` | Stdlib | Adopt | D4 | Low |
 | R-4 | Postfix `?`: unwrap `Ok` or re-raise | Syntax | Adopt | F | Medium |
 | R-5 | Chain blocks `do { a <- f(x); … }` over `Result<T>` and `T?` | Syntax | Adopt | F | Medium |
 | R-6 | Lint: branching combinators and `?` as guards in `C0039` | Checker | Adopt | F | Low |
@@ -522,24 +522,30 @@ Desugaring (innermost first):
 | Form | Core IR |
 | --- | --- |
 | `[e for p in xs]` | `list.map(xs, \|p\| e)` |
-| `[e for p in xs if c]` | `list.flat_map(xs, \|p\| list.filter([()], \|_\| c) \|> .map(\|_\| e))` |
+| `[e for p in xs if c]` | `list.comprehend(xs, \|p\| c, \|p\| e)` (several `if`s join with `and`) |
 | `[e for p in xs for q in ys …]` | `list.flat_map(xs, \|p\| [e for q in ys …])` |
 | source a map `m` | `map.entries(m)` in its place (pairs in key order, as `for`) |
 | source a range `a..b` | `list.range(a, b)`: a range of more than 1,000,000 elements raises `Invalid` before any element is produced, as `list.range` does (a `for` loop over it does not) |
 
 `flat_map` keeps the loop's interleaving (the condition, then the element, element by element),
 so effects and errors come in the same order as in the canonical loop, and it never collapses
-`T??` as a `filter_map` would. The one-element `filter` gives the condition **filter
-semantics**: its result's own labels carry the labels of `c`, so the comprehension's result is
-labelled as `list.filter`'s is, without Q2 (chapter 03 states it: "a comprehension's result
-carries the labels of every condition that decided which elements it kept"). A refutable pattern
+`T??` as a `filter_map` would. `list.comprehend` is an internal callback built-in (stage D4;
+lowering emits it, and naming it in source is a check error):
+`<T, U>(xs: [T], keep: fn(T) -> Bool, f: fn(T) -> U) -> [U]`, `linear`. For each element in
+index order it calls `keep`, and calls `f` only when `keep` returned `true`, so the order of
+evaluation is the loop's (condition, then element, element by element). It has **filter
+semantics**: the result's own labels are the list's own labels plus the labels of every
+`keep` result, so the comprehension is labelled as `list.filter` then `list.map` would be,
+without Q2 (chapter 03 states it: "a comprehension's result carries the labels of every
+condition that decided which elements it kept"). Its steps are the two callbacks' nodes plus
+`1 + ⌈n/64⌉ + ⌈m/64⌉`, so E-5's bound holds. A refutable pattern
 raises `Invalid` on a mismatch, as in `for`. **Jumps.** The clauses and the element are closure
 bodies, so `return`, `break` and `continue` there, and assigning a `var` declared outside, are
 check errors naming the comprehension ("a comprehension's element cannot `break` the enclosing
 loop; use a `for` loop").
 
 **Equivalence.** By construction a comprehension *is* its vectorised form, so E-1 to E-6 relate it
-to the loop: labels equal `list.filter` then `list.map`, ⊇ the loop's.
+to the loop: labels equal `list.filter` then `list.map`, ⊇ the loop's; steps within E-5.
 **Cost.** Parser, checker (element type from the source), lowering, printer, about 400 lines
 with tests. **Risk.** Low. **Interchangeability.** High: it is the loop's shape with the
 built-in's semantics.
@@ -675,12 +681,14 @@ user enums without function-typed fields (covariant by construction), and `?` on
 ### R-2 and R-3 (adopt): combinators on `Result<T>` and `T?`
 
 Two modules whose first parameter is the receiver, so every row is also a method
-(`r.map(f).and_then(g).unwrap_or(d)`): `outcome` for `Result<T>` and `maybe` for `T?`. Names: `maybe` (Haskell's
-`Maybe`, for options) and `outcome`. `result` is taken by the control function `result(f)`, and
+(`r.map(f).and_then(g).unwrap_or(d)`): `either` for `Result<T>` and `maybe` for `T?`, after
+Haskell's `Data.Either` and `Data.Maybe`, which hold the same combinators. `result` is taken by the control function `result(f)`, and
 the short `res` and `opt` are common local names that would draw the shadowing warning
-(`spec/03-semantics.md:394-398`) in ordinary code; neither `maybe` nor `outcome` is a std module,
-a prelude name or a local in the corpus, `std` or the spec (`outcome` appears only as a parameter
-name of `think.reflect`'s signature, which shadows nothing). Method lookup goes
+(`spec/03-semantics.md:394-398`) in ordinary code. Rejected: `either` (too close to the prelude's
+`Outcome` enum, the type of `ToolResult.outcome`) and `results` (a function `results()` in
+`conformance/types/enums-and-variants.ratio` would shadow it). Neither `maybe` nor `either` is a
+std module, a prelude name, or a name declared anywhere in the corpus, `std` or the spec
+(`either` occurs only in a comment). Method lookup goes
 by the receiver's static type, so `x.map(f)` on `[Int]?` is `maybe.map` and `x?.map(f)` keeps its
 optional-chaining meaning (`list.map` on the present value).
 
@@ -694,34 +702,34 @@ and `traverse` are `linear` (`1 + ⌈n/64⌉` before, the output part on return)
 
 | Built-in | Signature | Result and labels |
 | --- | --- | --- |
-| `outcome.map` | `<T, U>(r: Result<T>, f: fn(T) -> U) -> Result<U>` | `Ok { f(v) }` or `r`; own labels `+ Lr` |
-| `outcome.and_then` | `<T, U>(r: Result<T>, f: fn(T) -> Result<U>) -> Result<U>` | `f(v)` or `r`; `+ Lr` |
-| `outcome.map_err` | `<T>(r: Result<T>, f: fn(Error) -> Error) -> Result<T>` | `Err { f(e) }` or `r`; `+ Lr` |
-| `outcome.or_else` | `<T>(r: Result<T>, f: fn(Error) -> Result<T>) -> Result<T>` | `f(e)` or `r`; `+ Lr` |
-| `outcome.unwrap_or` | `<T>(r: Result<T>, d: T) -> T` | `v` or `d`; `+ Lr` |
-| `outcome.unwrap_or_else` | `<T>(r: Result<T>, f: fn(Error) -> T) -> T` | `v` or `f(e)`; `+ Lr` |
-| `outcome.or_raise` | `<T>(r: Result<T>) -> T` | `v + Lr`, or `raise e` with `Lr` added to the error value's own labels; the target of R-4 |
-| `outcome.ok` | `<T>(r: Result<T>) -> T?` | `v` or `none`; `+ Lr` |
-| `outcome.is_ok`, `outcome.is_err` | `<T>(r: Result<T>) -> Bool` | `Lr` |
-| `outcome.zip` | `<A, B>(a: Result<A>, b: Result<B>) -> Result<(A, B)>` | the first `Err` in argument order, else `Ok { (x, y) }`; `+ La + Lb` |
-| `outcome.sequence` | `<T>(rs: [Result<T>]) -> Result<[T]>` | the first `Err` by index, else `Ok` of the values; own labels: the list's own and `Lr` of every element read |
-| `outcome.traverse` | `<T, U>(xs: [T], f: fn(T) -> Result<U>) -> Result<[U]>` | stops calling `f` at the first `Err`; labels as `sequence`, plus `xs`'s own |
+| `either.map` | `<T, U>(r: Result<T>, f: fn(T) -> U) -> Result<U>` | `Ok { f(v) }` or `r`; own labels `+ Lr` |
+| `either.and_then` | `<T, U>(r: Result<T>, f: fn(T) -> Result<U>) -> Result<U>` | `f(v)` or `r`; `+ Lr` |
+| `either.map_err` | `<T>(r: Result<T>, f: fn(Error) -> Error) -> Result<T>` | `Err { f(e) }` or `r`; `+ Lr` |
+| `either.or_else` | `<T>(r: Result<T>, f: fn(Error) -> Result<T>) -> Result<T>` | `f(e)` or `r`; `+ Lr` |
+| `either.unwrap_or` | `<T>(r: Result<T>, d: T) -> T` | `v` or `d`; `+ Lr` |
+| `either.unwrap_or_else` | `<T>(r: Result<T>, f: fn(Error) -> T) -> T` | `v` or `f(e)`; `+ Lr` |
+| `either.or_raise` | `<T>(r: Result<T>) -> T` | `v + Lr`, or `raise e` with `Lr` added to the error value's own labels; the target of R-4 |
+| `either.ok` | `<T>(r: Result<T>) -> T?` | `v` or `none`; `+ Lr` |
+| `either.is_ok`, `either.is_err` | `<T>(r: Result<T>) -> Bool` | `Lr` |
+| `either.zip` | `<A, B>(a: Result<A>, b: Result<B>) -> Result<(A, B)>` | the first `Err` in argument order, else `Ok { (x, y) }`; `+ La + Lb` |
+| `either.sequence` | `<T>(rs: [Result<T>]) -> Result<[T]>` | the first `Err` by index, else `Ok` of the values; own labels: the list's own and `Lr` of every element read |
+| `either.traverse` | `<T, U>(xs: [T], f: fn(T) -> Result<U>) -> Result<[U]>` | stops calling `f` at the first `Err`; labels as `sequence`, plus `xs`'s own |
 | `maybe.map` | `<T, U>(x: T?, f: fn(T) -> U) -> U?` | `f(v)` or `none`; `+ Lx` (a `U` that is itself an option collapses, `T??` is `T?`) |
 | `maybe.and_then` | `<T, U>(x: T?, f: fn(T) -> U?) -> U?` | `f(v)` or `none`; `+ Lx` |
 | `maybe.or_else` | `<T>(x: T?, f: fn() -> T?) -> T?` | `x` or `f()`; `+ Lx` |
-| `maybe.unwrap_or` | `<T>(x: T?, d: T) -> T` | not a built-in: the checker resolves the method and lowering writes `x ?? d`, so `d` is evaluated only when `x` is `none` |
+| `maybe.unwrap_or` | `<T>(x: T?, d: T) -> T` | not a built-in: the checker resolves the method `x.unwrap_or(d)` or the call `maybe.unwrap_or(x, d)` and lowering writes `x ?? d` (naming it as a function value is a check error), so `d` is evaluated only when `x` is `none` |
 | `maybe.unwrap_or_else` | `<T>(x: T?, f: fn() -> T) -> T` | `v` or `f()`; `+ Lx` |
 | `maybe.ok_or` | `<T>(x: T?, err: Error) -> Result<T>` | `Ok { v }` or `Err { err }`; `+ Lx` |
 | `maybe.filter` | `<T>(x: T?, p: fn(T) -> Bool) -> T?` | `x` or `none`; `+ Lx +` the labels of `p`'s result |
 | `maybe.zip` | `<A, B>(a: A?, b: B?) -> (A, B)?` | `+ La + Lb` |
 | `maybe.is_some`, `maybe.is_none` | `<T>(x: T?) -> Bool` | `Lx` |
 
-`outcome.sequence(par_map_settled(xs, f))` is `par_map` without cancellation whose error is the first
+`either.sequence(par_map_settled(xs, f))` is `par_map` without cancellation whose error is the first
 by index (E-4's `par_map` exception does not apply).
 
 ### R-4 (adopt): postfix `?`
 
-`e?`, for `e: Result<T>`, is `outcome.or_raise(e)`: the `Ok` value, or exactly `raise e.error`. It is the bridge from `Result` values back to raised errors, as `result(|| …)` is the
+`e?`, for `e: Result<T>`, is `either.or_raise(e)`: the `Ok` value, or exactly `raise e.error`. It is the bridge from `Result` values back to raised errors, as `result(|| …)` is the
 bridge the other way: `result(|| r?)` equals `r` in value. Grammar: `postfix = … | "?"`
 (level 11, with calls and fields). Only on `Result`: on a `T?` it is a check error suggesting
 `x ?? d` or `x.ok_or(err)?` (Rust's `?` on an option returns `none` from the function; Ratio
@@ -794,7 +802,7 @@ with at least one bind is a **chain block**:
 
   ```text
   do { p1 <- e1; s1…; p2 <- e2; s2…; e }
-    ⇒ outcome.and_then(e1, |p1| { s1…; outcome.and_then(e2, |p2| { s2…; Ok { value: e } }) })
+    ⇒ either.and_then(e1, |p1| { s1…; either.and_then(e2, |p2| { s2…; Ok { value: e } }) })
   ```
 
   `maybe.and_then` and a bare `e` for an option chain. A refutable pattern that does not match
@@ -809,7 +817,7 @@ with at least one bind is a **chain block**:
 
 **With comprehensions (FS-1).** A comprehension builds a list and does not short-circuit: over a
 function returning `Result<U>` it gives `[Result<U>]`. To stop at the first `Err`, use
-`outcome.traverse(xs, f)` (stops calling `f`) or `outcome.sequence([f(x) for x in xs])` (calls every
+`either.traverse(xs, f)` (stops calling `f`) or `either.sequence([f(x) for x in xs])` (calls every
 `f`); `[f(x)? for x in xs]` raises at the first `Err` by index. Comprehensions are deliberately
 not made monadic: the same brackets would then mean two things.
 
@@ -820,10 +828,12 @@ not made monadic: the same brackets would then mean two things.
 
 `C0039` reports an effect whose only guards are model-derived conditions. The new forms hide a
 branch inside a call, so the lint must see it: the callback of a branching combinator
-(`outcome.map`, `and_then`, `map_err`, `or_else`, `unwrap_or_else`, and the `maybe.*` rows with a
+(`either.map`, `and_then`, `map_err`, `or_else`, `unwrap_or_else`, and the `maybe.*` rows with a
 callback) is treated as guarded by its receiver (a model-only guard when the receiver is
 derived); the statements after a `?` on a derived `Result` are guarded by it; chain blocks follow
-from their desugaring. `r.is_ok()` as an `if` condition is already handled as a derived
+from their desugaring. In a comprehension, an `if` clause guards its element and every later
+clause, and the `for` patterns' bindings are derived as closure parameters are (a
+`conformance/taint/` case: an effect in the element under a model-derived `if` clause warns). `r.is_ok()` as an `if` condition is already handled as a derived
 condition. **Stage.** F (`lint.rs`, after stage C).
 
 ### Equivalence for results (E-7 to E-9)
@@ -850,17 +860,18 @@ When an expression raises, A, B and D propagate the raise, and C returns it as a
 value, labels and steps; `x.map(f)` equals `if let v = x { f(v) }
 else { none }` in value, with labels ⊇ (the `if let` drops `Lx` on `none`, an implicit flow).
 
-**E-9 Lists of results.** `outcome.traverse(xs, f)`, `result(|| list.map(xs, |x| f(x)?))` and the loop
+**E-9 Lists of results.** `either.traverse(xs, f)`, `result(|| list.map(xs, |x| f(x)?))` and the loop
 `for x in xs { out = out.push(f(x)?) }` inside `result` agree on value and on the first failing
-index, and none calls `f` after it; `outcome.sequence(list.map(xs, f))` agrees on value but calls `f`
+index, and none calls `f` after it; `either.sequence(list.map(xs, f))` agrees on value but calls `f`
 on every element.
 
-**Errata.** `spec/06-stdlib/README.md:144` (a note: the combinators live in `outcome` and `maybe`);
-`spec/06-stdlib/data.md` (two new sections `outcome` and `maybe`, rows in the submodule table and the
+**Errata.** `spec/06-stdlib/README.md:144` (a note: the combinators live in `either` and `maybe`);
+`spec/06-stdlib/data.md` (two new sections `either` and `maybe`, rows in the submodule table and the
 `const`/`linear` classes); `spec/06-stdlib/control.md:124` (`result(|| r?)` equals `r`);
 `spec/03-semantics.md:480` (after `result`: the `?` operator and chain blocks, with E-7);
 `spec/03-semantics.md:228` (implicit flows: state what the machine already does, that `and`,
-`or` and `??` add the labels of the value that chose the result, and FS-1's comprehension rule);
+`or`, `??` and `?.` add the labels of the value that chose the result, that `if let` does not
+add labels today (Q2 would change that), and FS-1's comprehension rule);
 `spec/02-syntax.md` (`postfix` gains `"?"`, `bind_stmt` in `do` blocks, `where` after a body, a
 note at `:178` that the token reader still reads `<` then `-`, and new disambiguation rules for
 `<-` and `?`).
@@ -891,9 +902,9 @@ directive, labelled ones with `secret` (source 0).
 | 14 | `par_map(xs, f)` | `list.map(xs, f)` | one failing element | same error kind and element |
 | 15 | loop of length 10,000 | `list.map` | steps left 5,000 | `Budget { which: steps }` in both (kind only) |
 | 16 | E-7 forms C and D | chain A, combinators B | `f` gives a secret `Ok 1`, `g` an `Err` `User { tag: "b" }` | `Err` tag `b`, same site in all four; labels `A = B ⊇ C ⊇ D`; steps `A = B` |
-| 17 | `result(\|\| list.map(rs, \|r\| r?))` | `outcome.sequence(rs)` | `[Ok 1, Err a, Err b]` | `Err a` in both |
+| 17 | `result(\|\| list.map(rs, \|r\| r?))` | `either.sequence(rs)` | `[Ok 1, Err a, Err b]` | `Err a` in both |
 | 18 | `x ?? d` | `x.unwrap_or(d)` | `x` present, `d` a call that raises | no raise in both (`d` not evaluated); identical value, labels and steps; the same IR |
-| 19 | loop with `f(x)?` inside `result` | `outcome.traverse(xs, f)` | `f` fails at index 1 of 3 | `Err` of index 1; `f` called twice in both |
+| 19 | loop with `f(x)?` inside `result` | `either.traverse(xs, f)` | `f` fails at index 1 of 3 | `Err` of index 1; `f` called twice in both |
 | 20 | `par_fold` with `step` using `r?` | `par_map` | one failing element | the same error kind |
 | 21 | `try { xs = list.push(xs, f(x)) } catch e { }` (LV-8) | the same with fast paths off | `f` raises | `xs` unchanged in both; identical values, labels, steps |
 | 22 | loop body at the depth limit | `list.map` | `call_depth` set to the loop's depth + 1 | loop completes; built-in raises `Budget { which: call_depth }` (E-4) |
@@ -923,9 +934,9 @@ model-derived `Result` and after a `?` on one.
 | **P1** built-in-local | LV-4a, LV-6 | stages 8 and 9 merged; runs beside 11a; before D4 (both own `builtins/list.rs`) | `plist.rs`, `builtins/util.rs`, `builtins/list.rs`, `builtins/vec.rs`, `builtins/math.rs`, `tests/data3_limits.rs` | none: 10 and 11a do not touch these files (11a owns `control` and the machine) |
 | **P2** machine hot path | LV-1, LV-2, LV-3, LV-4b, LV-5 | stage 11a merged (10 and 11a rewrite `machine.rs`: frames, scheduler) | `machine.rs` (and a new `machine/fast.rs`), `prepare.rs`, `stack.rs`, `heap.rs`, `builtins.rs` (`Task` protocol), `builtins/list.rs`, `builtins/map.rs` | 11b (control, `par_fold`) also touches `machine.rs` and `builtins.rs`: land P2 before 11b starts, or after it merges, never both open |
 | **P2b** | LV-8 | P2 merged | `prepare.rs`, `machine.rs`, `plist.rs`, `pmap.rs` | as P2 |
-| **Q2** (optional, user decision) | the value of `if`, `if let`, `match` and `while let` carries the labels of the condition or scrutinee that chose the branch (own labels, and for `match` the labels the tested patterns read); statements unchanged | 11a merged | `machine.rs`, `spec/03-semantics.md`, `crates/ratio-eval/tests/labels.rs` | as P2; never open beside P2 |
-| **D4** built-ins | R-2, R-3 (`outcome.*`, `maybe.*`), FS-7 (`list.scan`, `zip_with`) | stages 8, 9, 10 and C merged (C owns the checker's signatures; 10 edits the built-in tables); after P0 (both edit `data.md`) and P1 (both own `builtins/list.rs`) | `crates/ratio-eval/src/builtins/{outcome,maybe}.rs` (new), `builtins/list.rs`, one new block in `builtins.rs`'s table, `crates/ratio-check/src/builtins.rs` (signatures), `conformance/builtins.txt`, `conformance/data/{outcome,maybe}-*.ratio`, `spec/06-stdlib/data.md`, `spec/06-stdlib/README.md` | 11a adds control rows to `builtins.rs`'s table: a separate block, rebased by whichever lands second |
-| **F** functional syntax | FS-1 to FS-4, FS-6, R-4 to R-6 | D4 merged (the desugarings call `outcome.and_then` and `outcome.or_raise`); stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body,lint}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md`, `spec/06-stdlib/control.md`, `conformance/syntax/**`, `conformance/types/**`, `conformance/taint/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
+| **Q2** (optional, user decision) | the value of `if`, `if let`, `while let` and `match` carries the condition's own labels; for `if let`, `while let` and `match`, the own labels of every value node any tested pattern examined, in the arms tried up to and including the chosen one, plus every guard result evaluated (including `catch` arm guards); hardening only: statements, `var` assignment, `break v` and early `return` stay implicit flows, so T11's residual risk is unchanged | 11a merged | `machine.rs`, `spec/03-semantics.md`, `crates/ratio-eval/tests/labels.rs` | as P2; never open beside P2 |
+| **D4** built-ins | R-2, R-3 (`either.*`, `maybe.*`), FS-7 (`list.scan`, `zip_with`), the internal `list.comprehend` (FS-1) | stages 8, 9, 10 and C merged (C owns the checker's signatures; 10 edits the built-in tables); after P0 (both edit `data.md`) and P1 (both own `builtins/list.rs`) | `crates/ratio-eval/src/builtins/{either,maybe}.rs` (new), `builtins/list.rs`, one new block in `builtins.rs`'s table, `crates/ratio-check/src/builtins.rs` (signatures), `conformance/builtins.txt`, `conformance/data/{either,maybe}-*.ratio`, `spec/06-stdlib/data.md`, `spec/06-stdlib/README.md` | 11a adds control rows to `builtins.rs`'s table: a separate block, rebased by whichever lands second |
+| **F** functional syntax | FS-1 to FS-4, FS-6, R-4 to R-6 | D4 merged (the desugarings call `either.and_then` and `either.or_raise`); stages C and 10 merged (C rewrites `ratio-check`'s `body.rs`, `call.rs`, `expr.rs`, `lint.rs`; 10 edits `lower.rs`) and before stage L (the linter needs the final syntax) | `crates/ratio-syntax/**` (token reader, parser, printer), `crates/ratio-check/src/{expr,call,body,lint}.rs`, `crates/ratio-ir/src/lower.rs`, `spec/02-syntax.md`, `spec/03-semantics.md`, `spec/06-stdlib/control.md`, `conformance/syntax/**`, `conformance/types/**`, `conformance/taint/**` | FS-1 needs stage 8's `flat_map` and `map.entries` at run time; the checker side needs none |
 
 Every spec-bearing slice takes the next free draft at merge time. P1, then D4, then F can run beside 11a; P2 is the only slice that waits for the scheduler. The
 deferred items (LV-9, LV-10) and the remaining options wait for stage 24's measurements.
@@ -936,10 +947,11 @@ Decided by the user: FS-1, FS-2, FS-3 and FS-7 (the former Q1). Recorded as foll
 recommendations: Q4 (the fixed `Error`), Q5 (`return` keeps its function meaning), Q6 (bare
 `<-` with the nested-block hint); Q7 defers FS-5 and FS-10, pending the user. Remaining:
 
-- **Q2 (implicit flows in values).** FS-1 no longer depends on it (its filter keeps the labels in
-  lowering). Adopt the optional Q2 slice after 11a, so that `if secret { a } else { b }` and
-  `match` values are labelled (statements unchanged)? Recommended yes; it relabels existing
-  programs' values, so it is the user's call.
+- **Q2 (implicit flows in values).** FS-1 no longer depends on it. Adopt the optional slice after
+  11a, under which a branch's value carries the condition's own labels; for `if let`, `while let` and `match`, the own labels of every value node any tested pattern examined, in the arms tried up to and including the chosen one, plus every guard result evaluated (including `catch` arm guards)? It is hardening, not a guarantee:
+  statements, `var` assignment, `break v` and early `return` stay implicit flows, so T11's
+  residual risk is unchanged. Recommended yes; it relabels existing programs' values, so it is
+  the user's call.
 - **Q3 (calibration).** Agree that stage 24 calibrates the 64-units-per-step rate only after
   LV-1 to LV-3 land, since they widen the wall-time gap between interpreted and built-in steps
   from 4–8× to an *estimated* 10–20×?
