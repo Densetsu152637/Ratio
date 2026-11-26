@@ -20,7 +20,7 @@ Goals (each verified by the named check):
   with a draft bump and an erratum line in `spec/README.md`, and is assigned to a stage below.
 - G5: `bash scripts/check-rust.sh` exits 0 on each stage PR's head before it is pushed.
 - G6: "Imperium Implementation" is sent a message (recorded in this plan's outcome for the stage)
-  when stage 11's `Host` trait is on `main`, and whenever the user creates a release tag.
+  when stage 11a's `Host` trait is on `main`, and whenever the user creates a release tag.
 
 Scope / non-goals:
 

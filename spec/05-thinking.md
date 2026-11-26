@@ -182,5 +182,5 @@ a passing result from a cut-off one.
 
 At the token level, `sampling.stop` sequences, `max_tokens` (which admission may lower to what the
 budgets can pay for, chapter 04) and `model.stream`'s `until` predicate (chapter 06, `model`) end a
-single generation; at the loop level, `model.loop` ends when the model makes no tool call, when `max_steps` is reached, or
-when its `until` predicate holds after a step.
+single generation; at the loop level, `model.loop` ends when the model makes no tool call, when
+`max_steps` is reached, or when its `until` predicate holds after a step.

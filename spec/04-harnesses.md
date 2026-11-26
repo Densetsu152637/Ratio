@@ -193,8 +193,9 @@ can be **reserved** on the frame's ledgers and every ancestor's before it starts
   with the effective `max_tokens`, so no reply can overshoot any ancestor's cap, a child frame's
   included, however many branches call models at once. Lowering `max_tokens` changes the request,
   which is recorded and digested like any other request field.
-- Cost is reserved at the model card's prices for the input plus the effective output; local
-  models price at zero. A hosted model without an explicitly configured price (a configured price
+- Cost is reserved at the model card's prices for the input plus the effective output; a model
+  whose location is `local` prices at zero, which counts as priced. A **hosted** model (any
+  location other than `local`) without an explicitly configured price (a configured price
   of 0 counts as priced) is not admitted while any ledger it would be charged to (its frame's, an
   ancestor's or the session's) has a cost cap, and
   raises `Budget { which: cost }`, so an unpriced model can never overshoot a cost cap.

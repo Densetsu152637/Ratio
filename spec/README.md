@@ -11,8 +11,9 @@ deferred). No grammar change.
 - One **turn sequence** numbers every scheduling event (ledger, cancellation, cache and ordering
   events); replay verifies it against the tape alone (chapter 01).
 - Budgets admit effects by **bounded reservation** with an effective `max_tokens` and a reply
-  floor (`ratio.limits.min_reply_tokens`, default 256); a hosted model without an explicitly
-  configured price is refused under a cost cap; budget decisions and readings are sequenced and
+  floor (`ratio.limits.min_reply_tokens`, default 256); a hosted model (any location other than
+  `local`) without an explicitly configured price is refused under a cost cap, while a `local`
+  model's price of 0 counts as priced; budget decisions and readings are sequenced and
   verified in replay (chapters 04, 07).
 - Every cancelled branch's cancellation point is recorded, whatever cancelled it (chapter 03).
 - Width counts **running** branches only; parked branches release their slot, so nested fan-out
@@ -24,21 +25,25 @@ deferred). No grammar change.
 - New built-in `par_fold` and the types `Fold`, `FoldOrder`, `Folded` (chapter 06 `control` and
   README; `control` 30 built-ins, 479 in all).
 - `cached`, `memo` and `once` are **single-flight**, with recorded and verified waits;
-  session caches keep labels, and a labelled hit is refused without `sees.secrets` (chapters 03,
-  04, 06 `control`).
-- Pure data built-ins are charged by **cost class**, with required representations and label
-  summaries (chapter 06 `data`, chapter 07).
-- The interpreter yields every 1,000 steps, offloads large built-ins to a bounded pool, uses
+  session caches keep labels, a labelled hit is refused without `sees.secrets`, and headless
+  tapes record labelled cache keys only by redaction digest (chapters 01, 03, 04, 06 `control`).
+- Pure data built-ins are charged by **cost class** (including `product` for `text.similarity`,
+  `diff.*` on lines or words, and `json.diff`), debited before running from the input sizes, with
+  required representations and label summaries (chapters 01, 06 `data`, 07).
+- The interpreter yields every 1,000 steps, offloads large built-ins to a bounded pool (heap
+  accounted before dispatch), uses
   `Send` values and a prepared form that is never hashed (chapters 01, 07).
 - Tapes: entries for input-bearing effects only, suppressed output effects and an end-of-turn
-  reply digest, `strict` mode, content-addressed blobs, chained conversation digests, zstd files,
+  reply digest, a `full` recording mode, content-addressed blobs, chained conversation digests, zstd files,
   and replayed labels that can only be added (chapters 01, 03, 08).
 - Per-branch random generators: `rand` draws need no tape entries (chapter 06 `data`).
 - `model.stream` gains `until` and returns `Streamed`; `think.self_consistency` and
-  `think.best_of` gain `early_stop` (chapters 05, 06 `model`, `think`, README).
+  `think.best_of` gain `early_stop` (`best_of` refuses it without `good_enough`) (chapters 05,
+  06 `model`, `think`, README).
 - Chapter 08 states Imperium's host requirements: the class table, a conservative read-only
-  command allowlist (none until stage 14 or later), read-only MCP tools from user configuration
-  only, drain clamps, atomic withdrawal, and refusal of unpriced models (from stage 13).
+  command allowlist (stage 17; until then no command is read-only), read-only MCP tools from user
+  configuration only, drain clamps, atomic withdrawal, and refusal of unpriced hosted models
+  (from stage 13).
 - Chapter 10: the `Host` sketch gains `EffectCtx`, `tool_class` and `conversation_digest`;
   `TAPE_VERSION` notes; ownership rows; stage 11 splits into **11a** (trait, tape, keys,
   scheduler) and **11b** (`control`, `par_fold`, single-flight caches, `rand`, `time`, `state`),

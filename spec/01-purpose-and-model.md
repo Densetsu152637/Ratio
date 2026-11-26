@@ -80,9 +80,12 @@ pub harness turn(turn: Turn) -> Reply {
   checking cancellation, so a long pure stretch never holds a runtime worker that other sessions
   and the agent's own branches need. A pure built-in whose input exceeds an implementation
   threshold (for example 64 KiB of text or 16,384 elements) runs on a bounded blocking pool while
-  its branch awaits it, with the same result, labels and charges; built-ins that take callbacks
+  its branch awaits it, with the same result, labels and charges, its heap accounted before
+  dispatch; built-ins that take callbacks
   never run there, so program code always stays on the agent's task. Values are `Send + Sync`
-  (shared by atomic reference counts) for that reason.
+  (shared by atomic reference counts) for that reason. A pure built-in's charge for its input
+  size is debited before it runs, so one the steps left cannot pay for raises
+  `Budget { which: steps }` without running (chapter 06, `data`).
 - **The host** is a trait the engine implements (chapter 10). Every effect of every built-in goes
   through it, so the interpreter never touches the network, the file system, a process or a
   clock directly.
@@ -172,7 +175,7 @@ to a live session again; the replay's own event stream (for `harnesses.replay` a
 is produced by the tape host and redacted as live events are. The tape ends each turn with a
 **reply digest**, the digest of the entry's returned `Reply` or `Report` or of its uncaught error,
 and replay compares it, so a divergence in an output-only effect is caught at the next
-input-bearing effect or at the end of the turn. A tape recorded with `--ratio-tape-mode strict`
+input-bearing effect or at the end of the turn. A tape recorded with `--ratio-tape-mode full`
 also holds a digest-only entry for each output-only effect, which replay checks where it happens.
 
 **The turn sequence.** In record mode the tape host gives every **scheduling event** of a turn one
@@ -207,7 +210,8 @@ lift a limit on what the replay really consumes (chapter 07, T13).
   Labels are stored with the reference. Loading a tape verifies every blob against its digest and
   rejects the tape on a mismatch. In a headless tape a labelled body is never named by a plain
   hash, which would reveal a low-entropy secret, only by the per-session redaction digest
-  (chapter 03).
+  (chapter 03); so are labelled cache keys and `memo` argument hashes of labelled arguments in
+  cache events (chapter 06, `control`).
 - A chat request's digest is `H(chain head, tools digest, options digest)`, where the chain head
   is the conversation's chained digest `d(k) = H(d(k−1), H(message k with its labels))`, kept by
   the engine per message (so a rollback restores it) and read through the host (chapter 10).

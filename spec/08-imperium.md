@@ -316,7 +316,7 @@ are requirements on `RatioHost` and the engine behind it, checked by the host co
   and records a call that already reached a remote server as `abandoned`.
 - **Read-only commands.** The command classifier that makes a `run_command` `abort`-class is a
   conservative allowlist owned by Imperium, in its permission broker: a command line it does not
-  recognise is not read-only. It is built in stage 14 or later; until then no command is
+  recognise is not read-only. It is built in stage 17; until then no command is
   read-only, so every command is `drain` and is killed only at its deadline.
 - **Read-only MCP tools** come only from the user's configuration (a per-tool flag in the user's
   or an environment's MCP settings, never a project's files and never the server's own
@@ -335,9 +335,11 @@ are requirements on `RatioHost` and the engine behind it, checked by the host co
 - **Session stop is unchanged**: it drains every in-flight call whatever its class, as the native
   loop does.
 - **Unpriced models under a cost cap.** Imperium admits unpriced models under a cost cap today.
-  With Ratio, `BudgetGate` refuses a model call under any cost cap unless the model has an
-  explicitly configured price (a price of 0 counts as priced), so admission by reservation
-  (chapter 04) can always bound cost; Imperium implements this from stage 13.
+  With Ratio, `BudgetGate` refuses a call to a hosted model (any location other than `local`,
+  chapter 04) under any cost cap unless the model has an explicitly configured price (a price of
+  0 counts as priced); the card Imperium gives a `local` model has price 0, which counts as
+  priced. So admission by reservation (chapter 04) can always bound cost; Imperium implements
+  this from stage 13.
 - **Conversation digests.** The engine keeps each conversation's chained digest per message,
   restored by rollback, and exposes the head through the host (chapter 01, tape storage).
 
@@ -349,7 +351,7 @@ are requirements on `RatioHost` and the engine behind it, checked by the host co
 | --- | --- |
 | `--harness <name \| path.ratio>` | The root agent's harness: `native` (default), a registered package, or a file. A file is loaded as a package of its own source root, with user-source trust |
 | `--subagent-harness <name \| path.ratio>` | The harness for every subagent the run starts (item 58's per-subagent selection in evals); `spawn_agent`'s own `harness` still wins unless `--force-subagent-harness` |
-| `--ratio-tape <file>` | Record every effect to the file (`--ratio-tape-mode record`, the default when the file does not exist) or answer effects from it (`replay`, the default when it does; `lenient` falls through to live calls on a mismatch). `strict` records like `record` and adds a digest-only entry for every output-only effect (chapter 01). A file name ending in `.jsonl.zst` is zstd-compressed |
+| `--ratio-tape <file>` | Record every effect to the file (`--ratio-tape-mode record`, the default when the file does not exist) or answer effects from it (`replay`, the default when it does; `lenient` falls through to live calls on a mismatch). `full` records like `record` and adds a digest-only entry for every output-only effect (chapter 01). A file name ending in `.jsonl.zst` is zstd-compressed |
 | `--flag ratio.<limit>=<n>` | Lowers a Ratio limit for the run |
 
 `--subagent-replay` keeps working and is consulted before the tape for subagent reports.

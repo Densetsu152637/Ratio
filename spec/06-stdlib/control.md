@@ -96,7 +96,9 @@ All three are **single-flight**:
   it is itself computing raises `Invalid`.
 - Every miss that starts a producer, every wait, every hit, every producer's success, failure or
   cancellation, and every promotion is an event on the turn sequence (chapter 01), naming the
-  branch paths involved. Replay checks them against recorded events only: a recorded wait must
+  branch paths involved. In a headless tape, a labelled `cached` or `once` key, and a `memo`
+  argument hash derived from a labelled argument, is recorded only by the per-session redaction
+  digest, as labelled blobs are. Replay checks them against recorded events only: a recorded wait must
   name a producer whose recorded miss for the same key comes earlier in the sequence and whose
   recorded end does not; the recorded waits, taken in sequence order together with the
   branch-ancestry edges of the recorded branch paths (a branch waits for its own descendants),
