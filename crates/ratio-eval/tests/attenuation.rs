@@ -78,7 +78,10 @@ const RULES: [&str; 5] = [
 
 fn tool_set(r: &mut Rng, max: u64) -> ToolSet {
     let n = r.below(max + 1);
-    ToolSet::of((0..n).map(|_| ToolPat::parse(r.pick(&TOOLS)).unwrap()))
+    ToolSet::of((0..n).map(|_| {
+        let t: &&str = r.pick(&TOOLS[..]);
+        ToolPat::parse(t).unwrap()
+    }))
 }
 
 fn rules(r: &mut Rng) -> BTreeSet<Arc<str>> {
@@ -103,7 +106,10 @@ fn sees(r: &mut Rng) -> Sees {
 
 fn folders(r: &mut Rng) -> Vec<Folder> {
     (0..r.below(3))
-        .map(|_| Folder::parse(r.pick(&FOLDERS)).unwrap())
+        .map(|_| {
+            let f: &&str = r.pick(&FOLDERS[..]);
+            Folder::parse(f).unwrap()
+        })
         .collect()
 }
 

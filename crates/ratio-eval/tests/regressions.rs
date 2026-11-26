@@ -432,3 +432,76 @@ harness h6() -> Int with { budget: { steps: 400 } } { let a = try { inner() } ca
     // A callee's own cap: its caller catches it.
     assert_eq!(got("h6"), returned("-1"));
 }
+
+/// The merge with stage 7: a built-in that debits as it goes (an `re` iteration) is given the
+/// frame's steps left, not the turn's, and the `Budget` it raises is the frame's own: the
+/// harness cannot catch it and its caller can, inline and on the pool alike.
+#[test]
+fn a_pure_built_in_runs_out_of_its_frames_steps_and_only_the_caller_catches_it() {
+    use ratio_eval::{Pool, Thresholds};
+    let p = support::prepared(
+        r#"
+harness h(s: Str) -> Int with { budget: { steps: 3000 } } {
+  try { re.find_all(".*z|a", s, limit: 1000000).len() } catch e { -1 }
+}
+fn direct(s: Str) -> Int { h(s) }
+fn caught(s: Str) -> Int {
+  try { h(s) } catch e { if e.kind is Budget { -2 } else { -3 } }
+}
+"#,
+    );
+    let pool = Pool::with_thresholds(
+        1,
+        Thresholds {
+            text_bytes: 0,
+            elements: 0,
+            steps: 0,
+        },
+    );
+    let session = pool.session();
+    for pooled in [false, true] {
+        let run = |name: &str| {
+            let entry = p.find("main.ratio", name).unwrap();
+            let mut eval = ratio_eval::evaluate(
+                Arc::clone(&p),
+                entry,
+                vec![Value::text(&"a".repeat(2_000))],
+                Limits::default(),
+                CancelToken::new(),
+            )
+            .unwrap();
+            if pooled {
+                eval = eval.offload_to(session.clone());
+            }
+            let f = ratio_eval::block_on(&mut eval);
+            #[cfg(debug_assertions)]
+            {
+                let log = eval.machine().work_log();
+                assert_eq!(
+                    log.iter().any(|w| w.name == "re.find_all" && w.offloaded),
+                    pooled,
+                    "{log:?}"
+                );
+                // It stopped at the frame's 3,000 steps, not at the turn's 5,000,000: the
+                // work it did is bounded by the frame's cap, not the whole quadratic scan.
+                let work: u64 = log
+                    .iter()
+                    .filter(|w| w.name == "re.find_all")
+                    .map(|w| w.work)
+                    .sum();
+                assert!(work > 0 && work <= 3_000 * 64 * 8, "work {work}: {log:?}");
+            }
+            f.outcome
+        };
+        assert_eq!(
+            kind_of(&p, &run("direct")),
+            ("Budget".to_owned(), Some("steps".to_owned())),
+            "pooled: {pooled}"
+        );
+        assert_eq!(
+            kind_of(&p, &run("caught")),
+            ("returned".to_owned(), Some("-2".to_owned())),
+            "pooled: {pooled}"
+        );
+    }
+}
