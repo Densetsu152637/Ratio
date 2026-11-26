@@ -148,13 +148,13 @@ json.stringify	<T>(v: T, pretty: Bool = false) -> S	pure	linear
 json.decode	<T>(j: Json) -> Untrusted<T>	pure	linear
 json.encode	<T>(v: T) -> Json	pure	linear
 json.schema	<T>() -> Json	pure	linear
-json.validate	(j: Json, schema: Json) -> [Violation]	pure	linear
+json.validate	(j: Json, schema: Json) -> [Violation]	pure	product
 json.get	(j: Json, pointer: Str) -> Json?	pure	linear
 json.set	(j: Json, pointer: Str, v: Json) -> Json	pure	linear
 json.keys	(j: Json) -> [Untrusted<Str>]	pure	linear
 json.type_of	(j: Json) -> JsonType	pure	const
 json.merge	(a: Json, b: Json) -> Json	pure	linear
-json.patch	(j: Json, ops: Json) -> Json	pure	linear
+json.patch	(j: Json, ops: Json) -> Json	pure	product
 json.diff	(a: Json, b: Json) -> Json	pure	product
 json.equal	(a: Json, b: Json) -> Bool	pure	linear
 list.len	<T>(xs: [T]) -> Int	pure	const

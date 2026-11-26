@@ -23,7 +23,7 @@ mod lower;
 mod stack;
 
 pub use ir::*;
-pub use lower::{LowerError, RUNTIME_ENUMS, lower};
+pub use lower::{FRAME_ENUMS, LowerError, RUNTIME_ENUMS, lower};
 
 /// The version of the canonical IR serialisation, the IR hash and the effect keys (chapter 10,
 /// "Versions"). Hashes from another version are not comparable. The prepared form is not

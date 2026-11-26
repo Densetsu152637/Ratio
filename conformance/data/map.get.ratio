@@ -1,0 +1,40 @@
+// builtin: map.get, map.has
+// case main: value [1, null, true, false]
+// case operators: value [2, true, false]
+// case missing_key: error NotFound
+// labels lookup(k): "a"
+// labels lookup_miss(k): "zz"
+// labels lookup_in(xs): [7] ; inner 0
+// labels stored_key(k): "q"
+// labels has(k): "a"
+// labels has_not(k): "zz"
+fn main() -> (Int?, Int?, Bool, Bool) {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  (map.get(m, "a"), m.get("z"), map.has(m, "b"), m.has("z"))
+}
+fn operators() -> (Int, Bool, Bool) {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  (m["b"], "a" in m, "z" in m)
+}
+fn missing_key() -> Int {
+  let m: Map<Str, Int> = { a: 1 }
+  m["z"]
+}
+fn lookup(k: Str) -> Int? {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.get(m, k)
+}
+fn lookup_miss(k: Str) -> Int? {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.get(m, k)
+}
+fn lookup_in(xs: [Int]) -> Int? { map.get(map.from(xs.map(|x| ("a", x))), "a") }
+fn stored_key(k: Str) -> Int? { map.get(map.from([(k, 1), ("b", 2)]), "zz") }
+fn has(k: Str) -> Bool {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.has(m, k)
+}
+fn has_not(k: Str) -> Bool {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.has(m, k)
+}

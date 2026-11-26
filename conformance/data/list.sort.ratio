@@ -1,0 +1,22 @@
+// builtin: list.sort, list.sort_by
+// case main: value [[1, 2, 3], ["a", "b", "c"], [1.5, 2.5]]
+// case stable: value [["c", 0], ["a", 1], ["b", 1]]
+// case descending: value [3, 2, 1]
+// case descending_is_stable: value [["a", 1], ["b", 1], ["c", 0]]
+// case empty: value []
+// case raises: error User
+// labels sort(xs): [3, 1, 2] ; inner 0
+// labels sort_by(xs, d): [3, 1, 2] | false ; inner 0
+fn main() -> ([Int], [Str], [Float]) {
+  ([3, 1, 2].sort(), ["c", "a", "b"].sort(), list.sort([2.5, 1.5]))
+}
+fn stable() -> [(Str, Int)] { [("a", 1), ("b", 1), ("c", 0)].sort_by(|(name, n)| n) }
+fn descending() -> [Int] { list.sort_by([2, 3, 1], |x| x, true) }
+fn descending_is_stable() -> [(Str, Int)] { [("a", 1), ("b", 1), ("c", 0)].sort_by(|(name, n)| n, true) }
+fn empty() -> [Int] {
+  let xs: [Int] = []
+  xs.sort()
+}
+fn raises() -> [Int] { list.sort_by::<Int, Int>([1, 2], |x| raise fail("boom", "key")) }
+fn sort(xs: [Int]) -> [Int] { list.sort(xs) }
+fn sort_by(xs: [Int], d: Bool) -> [Int] { list.sort_by(xs, |x| x, d) }

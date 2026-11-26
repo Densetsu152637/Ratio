@@ -1,0 +1,7 @@
+// builtin: list.push
+// case main: value [1, 2, 3]
+// case steps: steps 9
+// labels push(xs, x): [1, 2] | 3 ; inner 0
+fn main() -> [Int] { list.push([1, 2], 3) }
+fn steps() -> [Int] { [1, 2].push(3) }
+fn push(xs: [Int], x: Int) -> [Int] { list.push(xs, x) }

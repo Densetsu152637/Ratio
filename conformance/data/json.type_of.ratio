@@ -1,0 +1,15 @@
+// builtin: json.type_of
+// case main: value ["null", "bool", "number", "number", "string", "array", "object"]
+// case matched: value ["string", "number"]
+// labels kind(n): 5
+fn main() -> [JsonType] {
+  [json.type_of(json.parse("null")), json.type_of(json.parse("true")), json.type_of(json.parse("1")), json.type_of(json.parse("1.5")), json.type_of(json.parse(r""""s" """)), json.type_of(json.parse("[]")), json.parse(r"""{} """).type_of()]
+}
+fn matched() -> [Str] {
+  [json.parse(r""""s" """), json.parse("2")].map(|j| match json.type_of(j) {
+    JsonType.string => "string",
+    JsonType.number => "number",
+    _ => "other",
+  })
+}
+fn kind(n: Int) -> JsonType { json.type_of(json.encode(n)) }

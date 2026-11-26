@@ -1,0 +1,18 @@
+// builtin: list.unique, list.unique_by
+// case main: value [[1, 2, 3], ["a", "b"], ["a", "cc"]]
+// case floats: value [1.5, 2.5]
+// case empty: value []
+// case raises: error User
+// labels unique(xs): [1, 2, 1] ; inner 0
+// labels unique_by(xs): ["a", "bb", "c"] ; inner 0
+fn main() -> ([Int], [Str], [Str]) {
+  (list.unique([1, 2, 1, 3, 2]), ["a", "b", "a"].unique(), ["a", "b", "cc", "d"].unique_by(|s| text.len(s)))
+}
+fn floats() -> [Float] { [1.5, 2.5, 1.5].unique() }
+fn empty() -> [Int] {
+  let xs: [Int] = []
+  xs.unique()
+}
+fn raises() -> [Str] { list.unique_by::<Str, Int>(["a"], |s| raise fail("boom", "key")) }
+fn unique(xs: [Int]) -> [Int] { list.unique(xs) }
+fn unique_by(xs: [Str]) -> [Str] { list.unique_by(xs, |s| text.len(s)) }

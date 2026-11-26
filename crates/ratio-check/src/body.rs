@@ -376,14 +376,16 @@ impl Checker<'_> {
                 // `return` and its own effect log, then the defaults and the body.
                 let mut b = Body::new(module, Ret::Forbidden);
                 self.bind_params(&mut b, &decl.params, &sig);
+                // The parameter defaults and the configuration are both evaluated before the
+                // frame opens, so both must be effect-free (stage 10): one log for both.
+                self.check_defaults(&mut b, &decl.params, &sig);
                 if let Some(config) = &decl.config {
                     let want = self.known_type("HarnessConfig");
                     let got = self.record_lit(&mut b, config, Some(want), Code::RecordFields);
                     self.mismatch(&b, config.span, got, want);
-                    self.config_logs.insert(r, std::mem::take(&mut b.log));
                 }
+                self.config_logs.insert(r, std::mem::take(&mut b.log));
                 b.fns[0].ret = Ret::Known(sig.ret);
-                self.check_defaults(&mut b, &decl.params, &sig);
                 self.expect_block(&mut b, &decl.body, sig.ret);
                 self.logs.insert(r, b.log);
             }

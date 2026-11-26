@@ -263,7 +263,8 @@ literal. The type-parameter names `S` (any text, normalised to `Str` or `Untrust
 (with `log`, `trace` and `state`), `eval`, `memory`, `meta`, `model`, `session`, `think` and
 `tools`, and of `rand` and `time` (their run time is stage 11b), with the types they need in
 the prelude (provisional where chapter 06 gives a record only in prose, chosen by chapter 03's
-effect rule). How the attributes were decided:
+effect rule). `question` and `meta.frame`, `caller`, `depth`, `limits` and `permissions`
+come from stage 10's frames block (below). How the attributes were decided:
 
 - **Sinks.** Every built-in that sends its arguments off the machine, to another agent, to the
   person or into persisted or published state is `@secrecy_sink`: the network, browser, MCP and
@@ -313,11 +314,26 @@ effect rule). How the attributes were decided:
   `fn(..) -> Bool = none`, since chapter 06's `(fn(..) -> Bool)?` is an option of a
   one-element tuple; a closure where an optional function is expected is shaped by it.
 
-**Scope cut**: `json`, `list` and `map` are completed by stage 8 and `math` to `codec` by
-stage 9; `tests/signatures.rs` lists them as pending and checks everything else against
+**Scope cut**: `math` to `codec` are completed by stage 9; `tests/signatures.rs` lists them
+as pending and checks everything else against
 `conformance/builtins.txt` (every built-in present, with chapter 06's parameter names, order
 and defaults). A standard name the table lacks is reported with its own code, `C0034` ("no
 signature yet"), so it is never confused with a name that does not exist (`C0001`).
+
+The frames block at the end of `src/builtins.rs` (`FRAME_PRELUDE`, `FRAME_MODULES`, stage 10)
+adds `question` to `control`, `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions`, and the provisional types they return (`FrameInfo`, `CallerInfo`,
+`FrameLimits`, `PermissionView`, `Rule`); a module named in more than one table has its sources
+joined in table order, so the block grows without touching the tables of other stages.
+`FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword. A
+harness's parameter defaults are checked under the same rule as its declared configuration
+(both run before its frame opens): no effects, and no calls of function values, since a
+parameter's value may be the caller's closure (`C0016`). A built-in named twice across the
+joined tables is an internal error, and a check with internal errors is never clean.
+
+`list`, `map` and `json` are complete since stage 8 (47, 15 and 14 built-ins, with `repeat_` for `list.repeat`), and the
+prelude gained `JsonType` (`json.type_of`) and `Violation` (`{ pointer, message }`, both
+untrusted text; `json.validate`), which the chapter names without a shape.
 
 ## Bounds
 
@@ -399,7 +415,7 @@ refuses nesting beyond 12.
   says `check-ok`, or lists `check-error CODE at LINE:COL [in FILE]` and `check-warning …`
   lines, all of the checker's diagnostics in any order. Every code has a file.
 - `tests/signatures.rs`: the table against `conformance/builtins.txt`, by module, with the
-  modules stages 8 and 9 add listed as pending.
+  modules stage 9 adds listed as pending.
 - `tests/attributes.rs`: `@pure` exactly where the Needs column says `pure` (or a callback
   combinator's `as f`), `@tool(...)` exactly its `tool:` names (`mcp__*` for the MCP rows),
   every parameter type as chapter 06 writes it but for a listed set of documented differences,

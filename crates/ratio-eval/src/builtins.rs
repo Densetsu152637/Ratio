@@ -20,8 +20,14 @@
 
 use std::fmt::Debug;
 
+mod ecma;
+mod json;
+mod list;
+mod map;
 mod regex;
 mod text;
+mod util;
+mod validate;
 
 pub(crate) use regex::{Compiled, ReCache};
 
@@ -91,7 +97,9 @@ pub(crate) fn pre_work(class: Class, s: Sizes) -> u64 {
         Class::Const => 1,
         // A map's key comparisons walk the key: `n2` is its weight (0 when there is none).
         Class::Log => crate::ops::log_work(s.n).saturating_mul(s.n2.max(1)),
-        Class::NLogN => s.n.saturating_mul(crate::ops::log_work(s.n)),
+        // A comparison walks the values it compares: built-ins that compare whole elements give
+        // their weight in `n2`, and the charge is that weight times `⌈log2(n + 1)⌉`.
+        Class::NLogN => s.n.max(s.n2).saturating_mul(crate::ops::log_work(s.n)),
         Class::Product => s.n.saturating_mul(s.n2).saturating_add(s.c),
         Class::Output => s.m,
         Class::Linear => s.n,
@@ -388,9 +396,70 @@ table! {
     "json.decode", Linear, A(s_weight_first), NONE, Imp::Pure(json_decode);
     "json.get", Linear, A(s_two), NONE, Imp::Pure(json_get);
     "json.encode", Linear, A(s_weight_first), NONE, Imp::Pure(json_encode);
+    // ---- stage 8 (data II): the rest of json, list and map (chapter 06, data) ----
+    "list.is_empty", Const, A(s_none), OFFLOAD, Imp::Pure(list::is_empty);
+    "list.last", Const, A(s_none), OFFLOAD, Imp::Pure(list::last);
+    "list.insert", Log, A(s_first), OFFLOAD, Imp::Pure(list::insert);
+    "list.remove_at", Log, A(s_first), OFFLOAD, Imp::Pure(list::remove_at);
+    "list.concat", Log, A(s_two), OFFLOAD, Imp::Pure(list::concat);
+    "list.flatten", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::flatten);
+    "list.range", Output, A(list::s_range), OFFLOAD, Imp::Pure(list::range);
+    "list.repeat", Output, A(list::s_repeat), OFFLOAD, Imp::Pure(list::repeat);
+    "list.map_indexed", Linear, A(s_first), NONE, Imp::Task(list::map_indexed);
+    "list.flat_map", Linear, A(s_first), NONE, Imp::Task(list::flat_map);
+    "list.reduce", Linear, A(s_first), NONE, Imp::Task(list::reduce);
+    "list.find", Linear, A(s_first), NONE, Imp::Task(list::find);
+    "list.find_index", Linear, A(s_first), NONE, Imp::Task(list::find_index);
+    "list.index_of", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(list::index_of);
+    "list.any", Linear, A(s_first), NONE, Imp::Task(list::any);
+    "list.all", Linear, A(s_first), NONE, Imp::Task(list::all);
+    "list.count", Linear, A(s_first), NONE, Imp::Task(list::count);
+    "list.min", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::min);
+    "list.max", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::max);
+    "list.min_by", Linear, A(s_first), NONE, Imp::Task(list::min_by);
+    "list.max_by", Linear, A(s_first), NONE, Imp::Task(list::max_by);
+    "list.sort", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(list::sort);
+    "list.reverse", Linear, A(s_first), OFFLOAD, Imp::Pure(list::reverse);
+    "list.unique", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(list::unique);
+    "list.unique_by", NLogN, A(s_first), NONE, Imp::Task(list::unique_by);
+    "list.group_by", NLogN, A(s_first), NONE, Imp::Task(list::group_by);
+    "list.partition", Linear, A(s_first), NONE, Imp::Task(list::partition);
+    "list.chunk", Linear, A(s_first), OFFLOAD, Imp::Pure(list::chunk);
+    "list.window", Linear, A(list::s_window), OFFLOAD, Imp::Pure(list::window);
+    "list.zip", Linear, A(s_two), OFFLOAD, Imp::Pure(list::zip);
+    "list.unzip", Linear, A(s_first), OFFLOAD, Imp::Pure(list::unzip);
+    "list.enumerate", Linear, A(s_first), OFFLOAD, Imp::Pure(list::enumerate);
+    "list.drop", Log, A(s_first), OFFLOAD, Imp::Pure(list::take_rest);
+    "list.take_while", Linear, A(s_first), NONE, Imp::Task(list::take_while);
+    "list.slice", Log, A(s_first), OFFLOAD, Imp::Pure(list::slice);
+    "map.from", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(map::from);
+    "map.len", Const, A(s_none), OFFLOAD, Imp::Pure(map::len);
+    "map.is_empty", Const, A(s_none), OFFLOAD, Imp::Pure(map::is_empty);
+    "map.has", Log, A(s_map_key), OFFLOAD, Imp::Pure(map::has);
+    "map.remove", Log, A(s_map_key), OFFLOAD, Imp::Pure(map::remove);
+    "map.update", Log, A(s_map_key), NONE, Imp::Task(map::update);
+    "map.values", Linear, A(s_first), OFFLOAD, Imp::Pure(map::values);
+    "map.entries", Linear, A(s_first), OFFLOAD, Imp::Pure(map::entries);
+    "map.merge", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(map::merge);
+    "map.map_values", Linear, A(s_first), NONE, Imp::Task(map::map_values);
+    "map.filter", Linear, A(s_first), NONE, Imp::Task(map::filter);
+    "map.count_by", NLogN, A(s_first), NONE, Imp::Task(map::count_by);
+    "json.stringify", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(json::stringify);
+    "json.schema", Linear, A(s_none), OFFLOAD, Imp::Pure(json::schema);
+    "json.validate", Product, A(s_product), OFFLOAD, Imp::Pure(json::validate_);
+    "json.set", Linear, A(s_two), OFFLOAD, Imp::Pure(json::set);
+    "json.keys", Linear, A(s_first), OFFLOAD, Imp::Pure(json::keys);
+    "json.type_of", Const, A(s_none), OFFLOAD, Imp::Pure(json::type_of);
+    "json.merge", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(json::merge);
+    "json.patch", Product, A(json::s_patch), OFFLOAD, Imp::Pure(json::patch);
+    "json.diff", Product, A(s_product), OFFLOAD, Imp::Pure(json::diff_);
+    "json.equal", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(json::equal);
+    // ---- end of stage 8 ----
     "math.abs", Const, A(s_none), NONE, Imp::Pure(math_abs);
     "math.min", Const, A(s_none), NONE, Imp::Pure(math_min);
     "math.max", Const, A(s_none), NONE, Imp::Pure(math_max);
+    // ---- frames (stage 10) ----
+    "question", Const, A(s_none), NONE, Imp::Pure(crate::frame::meta::question);
 }
 
 /// The table index of the built-in a program calls `name`.
@@ -883,17 +952,22 @@ impl Task for SortTask {
                 weight.saturating_mul(crate::ops::log_work(n)).div_ceil(64),
             ));
         }
-        let mut order: Vec<usize> = (0..self.items.len()).collect();
         let keys = &self.keys.items;
-        if self.descending {
-            order.sort_by(|a, b| cmp_natural(&keys[*b], &keys[*a]));
-        } else {
-            order.sort_by(|a, b| cmp_natural(&keys[*a], &keys[*b]));
-        }
+        let descending = self.descending;
+        let order = util::merge_sort(cx, self.items.len(), &|i| keys[i].weight(), &mut |a, b| {
+            if descending {
+                cmp_natural(&keys[b], &keys[a])
+            } else {
+                cmp_natural(&keys[a], &keys[b])
+            }
+        })?;
         // The order depends on every key.
         let decided = self.keys.items.iter().fold(self.own, |l, k| l | k.quick());
-        let items = order.into_iter().map(|i| self.items[i].clone()).collect();
-        Ok(TaskStep::Done(new_list(cx, items, decided)?))
+        let mut out = util::Gather::with_capacity(cx, order.indexes.len() as u64, decided)?;
+        for &i in &order.indexes {
+            out.push(cx, self.items[i].clone())?;
+        }
+        Ok(TaskStep::Done(out.finish(cx, decided)?))
     }
 }
 
@@ -1133,7 +1207,7 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = m.labels | k.labels;
     Ok(match map(cx, m)?.get_entry(k) {
-        Some((stored, v)) => v.clone().with_labels(labels | stored.labels),
+        Some((stored, v)) => v.clone().with_labels(labels | stored.quick() | k.quick()),
         // A miss depends on every key the probe was compared with.
         None => Value::none().with_labels(labels | m.quick()),
     })
@@ -1141,8 +1215,9 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k, v) = (arg(cx, args, 0)?, arg(cx, args, 1)?, arg(cx, args, 2)?);
-    // Whether the key set grew depends on the key.
-    let labels = m.labels | k.labels;
+    // Whether the key set grew depends on the key, and on the keys it was compared with.
+    let (_, path) = map(cx, m)?.probe(k);
+    let labels = m.labels | k.labels | path;
     let out = map(cx, m)?
         .insert(cx.heap, k.clone(), v.clone())
         .map_err(|f| cx.fault(f, labels))?;
@@ -1152,8 +1227,12 @@ fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 fn map_keys(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let m = arg(cx, args, 0)?;
     let mut keys = Vec::new();
-    map(cx, m)?.for_each(&mut |k, _| keys.push(k.clone().with_labels(m.labels)));
-    new_list(cx, keys, m.labels)
+    let mut own = m.labels;
+    map(cx, m)?.for_each(&mut |k, _| {
+        own |= k.quick();
+        keys.push(k.clone().with_labels(m.labels));
+    });
+    new_list(cx, keys, own)
 }
 
 // ---- json ----

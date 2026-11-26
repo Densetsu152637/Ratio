@@ -1,8 +1,9 @@
 # ratio-eval
 
 Ratio's core interpreter: the second half of stage 6 of the
-[implementation plan](../../spec/10-implementation.md), and stage 7's data built-ins (`text`,
-`re`), cost classes and offload pool. Hosts reach it through the
+[implementation plan](../../spec/10-implementation.md), stage 7's data built-ins (`text`,
+`re`), cost classes and offload pool, and the `json`, `list` and `map` built-ins of stage 8
+([below](#stage-8-json-list-and-map)). Hosts reach it through the
 [`ratio` facade](../ratio/README.md) (`ratio::prepare`, `ratio::evaluate`, `ratio::interp`).
 
 ```rust
@@ -35,9 +36,8 @@ code always runs on the walk's own stack. Values are `Send + Sync`, and so is th
 brings real concurrency) and enforce the branch restriction: a `var` declared outside a branch
 cannot be assigned inside it. That is a program defect, not a recoverable error: it raises
 `Invalid` with the class `Fatal`, which no `catch`, `result` or sibling `race` branch can
-swallow. Harness calls, `with` blocks, call overrides, `with
-timeout`, tool sets and `state` raise `Unsupported` until frames (stage 10) and the host (stage
-11) exist.
+swallow. `with timeout` and `state` raise `Unsupported` until the host (stage 11) exists;
+harness calls, `with` blocks, call overrides and tool sets open frames (below).
 
 ## Values and secrecy labels
 
@@ -60,7 +60,7 @@ it; debug builds scan every value and assert that the summary covers the scan.
 Lists are persistent AVL ropes with leaves of up to 32 elements (O(log n) push, get, set, slice
 and concatenation); maps are persistent AVL trees in key order; records have a fixed, sorted
 layout; text caches its character count and an ASCII flag. Values nest at most 256 deep
-(`Invalid` beyond), so every walk and comparison of a value fits a small stack; dropping a value
+(`Invalid` beyond), so every walk and comparison of a value fits a small stack in a release build (in a debug build the frames of stage 6's recursive walks (`==` and order on lists and records, `json.encode`, `json.decode`) are larger and a 256 KiB stack may not hold a value nested near the limit; stage 8's JSON walks are iterative and are tested on 256 KiB in debug); dropping a value
 never recurses at all (every container frees its children through a work-list). Rendering a
 value as text (`text.show`, interpolation, the `json` spec) stops writing as soon as the text is
 longer than 16 MiB, and the result is refused; `text.show` is then charged for what it wrote
@@ -185,8 +185,192 @@ calibrated at one unit an element, an open item for stage 24's measurements. No 
 runs the queued jobs and joins every worker; a job submitted after that runs where it is
 submitted. Without a pool, everything runs inline.
 
+## Stage 8: `json`, `list` and `map`
+
+Every `json.*`, `list.*` and `map.*` built-in of chapter 06 (`data`): 14, 47 and 15 rows, in
+`src/builtins/` (`json.rs`, `list.rs`, `map.rs`; `util.rs` holds what they share, `validate.rs`
+the schema validator, `ecma.rs` its `pattern` front end), on stage 6's persistent lists
+(`plist.rs`) and maps (`pmap.rs`, with `probe` and `from_sorted` added), `Json` with labels
+(`json.rs`) and the charging framework. `jsonedit.rs` edits JSON (pointers, `set`, `merge`,
+`patch`, `diff`, rendering, equality and order); `schema.rs` derives `json.schema::<T>()`.
+
+**Charges** (the class's work `w`, charged `1 + ⌈w / 64⌉`, debited before the built-in runs
+from the arguments' sizes, with saturating arithmetic; `n` is a length, `W` a weight, `|k|` a
+key's weight, `L = ⌈log2(n + 1)⌉`):
+
+| Class | Built-ins and their `w` |
+| --- | --- |
+| `const` | `list.is_empty`, `list.last`, `map.len`, `map.is_empty`, `json.type_of` |
+| `log` | `list.insert`, `remove_at`, `drop`, `slice`: `L`; `list.concat`: `L` over both lengths; `map.has`, `remove`, `update`: `L · \|k\|` |
+| `nlogn` | `list.sort`, `unique`, `map.from`: `W · L` over the whole list (elements are compared whole); `list.unique_by`, `group_by`, `map.count_by`: `n · L`, then `W_keys · L` once the keys are known, as `list.sort_by` does |
+| `output` | `list.range`, `list.repeat`: the number of elements the arguments fix (at most 1,000,000, else `Invalid` before anything is built) |
+| `linear` | everything else; `n` is the length, or the weight where values are compared or walked (`list.flatten`, `index_of`, `min`, `max`, `map.merge`, `json.stringify`, `set`, `merge`, `equal`), and for `list.window` `n + windows · (L + 64)` since each window is a slice |
+| `product` | `json.diff` and, **as the specification's `linear` is unsound for them**, `json.validate` (the product of the instance's and the schema's weights: each pair of nodes may be visited) and `json.patch` (`(W_doc + W_ops) · W_ops`: each operation may copy a path through the document) |
+
+`json.schema::<T>()` has no arguments to size: its work is bounded by the type (an output of
+at most 1 MiB and a work budget) and its output is charged on return.
+
+**Labels.** Every result carries the labels of everything that decided it: a lookup or update
+the labels of every key on its path (`Map::probe`), a scan the labels of every callback result it
+examined (`find`, `any`, `take_while`, `partition`, ...), an order-dependent result (`sort`,
+`unique`, `min`, `index_of`, `json.diff`, `json.validate`) the labels anywhere in its inputs, a
+rebuilt JSON container its old labels, the pointer's or patch's, and its keys'. A failure's
+message carries the same labels.
+
+**Resources.** Every buffer proportional to an input is charged to the heap when it is made
+(`util::Gather`: one slot per element, charged up front when the size is known, at most
+1,000,000 elements); sorting uses a stable merge sort that cannot panic on an odd order;
+long loops check for cancellation every checkpoint's worth of work (`util::Pace`).
+`json.parse`, JSON equality and order, `merge`, `set`, `patch`, `diff` and rendering keep their
+nesting on an explicit stack; the recursive walks that remain (`json.validate`'s, and the
+derivation of `json.schema`) are bounded (192 levels of nesting, `$ref` hops counted apart, at
+most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 12
+levels, and on the large-stack worker the preparation pass uses (its counted work added to the
+caller's) beyond that. `json.validate` also counts its visits of a schema node to an instance
+node and raises `Budget { which: steps }` past four units a pair of nodes of its charge (plus a floor), so shared
+sub-schemas reached over and over (`$ref` into `allOf`) cannot do more work than was paid for;
+a failing or finished `json.schema` is charged one step for each unit of its derivation work. `json.stringify` stops writing at 16 MiB and is charged for
+what it wrote.
+
+**The work counters (one API for stages 7 to 9).** A built-in's work is counted in two places,
+and the machine adds them: `Cx::work`, which a body with a `Cx` increments directly (stage 7's
+text and `re` bodies), and the thread-local `work` module (`work::add(units)`), which code
+without a `Cx` (the persistent lists and maps, `ops::eq` and `cmp_natural`, `jsonedit`, the
+built-ins' own loops) calls. Around each **pure** built-in call, on whichever thread runs it
+(inline or on the pool), `run_pure` does `work::reset()`, runs the body, and returns
+`cx.work + work::total()` as `Ran::work`; `Machine::work_log()` (debug builds) records it with
+the call's steps as a `BuiltinWork { name, steps, work, offloaded }`. A test compares `work` with
+`64 × FACTOR × steps` per entry; stage 7's `tests/data.rs` and stage 8's `tests/data_limits.rs`
+both read that one log (`tests/support`'s `run_logged` gives it). New code in a built-in
+counts what it does with `work::add(n)` (one unit per element visited, node built or character
+compared; pace long loops with `Pace::tick`, which counts too), and a body that hands work to
+another thread (`json.validate`'s large-stack worker) adds that thread's `work::total()` back
+into its own counter before it returns. Release builds count nothing. Callbacks (tasks) are not
+logged: they have no single call to measure.
+
+**What the specification leaves open, and this stage decided.** `json.validate` reads the
+keywords `$ref` (into the same schema only), `type`, `enum`, `const`, the numeric, string, array
+and object keywords, `allOf`, `anyOf`, `oneOf`, `not` and `if/then/else`, and ignores the rest
+(`format`, `unevaluated*`, annotations); `pattern` goes through the
+linear-time `re` engine of stage 7 behind a front end (`ecma.rs`) that accepts only chapter 03's
+`@pattern` subset (`ratio_check::regex_problem`) and makes it mean what ECMAScript means: `.`
+stops at `\r`, U+2028 and U+2029, `\d` and `\w` are ASCII, `\s` is ECMAScript's white space,
+a character outside the basic plane is one character (the `u` flag); `\b`, `\B`, `\D`-style
+escapes inside a class and a class starting `]` or `^]` are refused (`Invalid`). Compiling and
+searching are debited as steps (never more than the steps left) before they run. A pointer is strict RFC 6901 (`~` is followed by `0` or
+`1`) and names at most 257 tokens. `list.insert` takes an index in `0..=len` and `remove_at` one in
+`0..len`: negative indexes are `Invalid`. `list.unique`, `unique_by`, `group_by`, `count_by` and
+`map.from` take keys equal when the natural order says so (so every `NaN` is one key).
+The natural order compares an `Int` with a `Float` through `f64`, so beyond 2^53 it is not transitive
+(a sort still terminates and never panics, but its order among such numbers is arbitrary).
+`json.keys` and `json.stringify` give an object's keys in the order the IR keeps (a record's
+fields are in name order). `json.stringify` returns `Untrusted<Str>`, as `text.show` does.
+
+## Frames
+
+Stage 10 (chapter 04). The frame model lives in [`src/frame/`](src/frame/mod.rs), inside this
+crate rather than a crate of its own: opening a frame reads configuration values, labels and
+the step counter of the machine, so it belongs with the evaluator, while its pure half (scopes,
+attenuation, ledgers) depends on nothing else here and is public as `ratio_eval::frame`
+(`ratio::frame` through the facade) for a host to mirror.
+
+**Opening a frame.** A harness call evaluates its arguments, then its call's overrides
+(`f(x) with { … }`) in the caller's frame, then binds its parameters and evaluates its declared
+`with { … }` with them bound (the IR lowers the declaration in the harness's own frame for
+that), and opens its frame; an entry that is a harness opens its frame from the host's
+`Session` the same way, and a `with { … } { … }` block opens a frame at its frame's depth
+around its body. The parameter defaults and the declared configuration run before the frame
+opens, so both must be effect-free: the checker refuses effects there, including calls of
+function-valued parameters (`C0016`), and the machine refuses any effect reached while a
+harness is being set up. The configuration record is read into a `Request` (overrides win
+field by field, and within `budget`, `limits`, `sees` and `permissions` sub-field by
+sub-field; `deny` and `ask` rules of both apply); a value that cannot be read exactly (a
+negative cap, a tool pattern with an inner `*`, a folder that is not absolute or holds `..`,
+a width of 0, a list of more than 256 tools, folders or rules) raises `Invalid`. Opening is
+charged a step per comparison it makes, before it makes them: reading the lists (an entry,
+16 bytes of text and the cover filter), the tools' and paths' meets in both directions, the
+cover filters over their results, and `check_within`; a test keeps the time of a 256-folder
+opening within a fixed multiple of a pure loop's time per step.
+
+**Attenuation.** `frame::attenuate(parent, room, request, kind)` gives the child's `Scope` as
+the meet of the parent's and the request in every dimension: tools (names and prefix patterns
+intersected exactly; a missing `need` tool is `Denied { by: attenuation }`, a missing `want`
+tool is dropped), the permission mode (`plan < ask < default < auto, accept_edits < full`),
+rules (the caller's plus the callee's `deny` and `ask`, never an `allow`), paths (folders
+intersected component-wise: every folder is absolute, under a POSIX root `/`, a drive
+root matched without case (`C:/`; a bare `C:` is that drive's current directory and is
+refused), or a UNC share, and different roots never contain each other),
+location (`local` if either is; asking for `cloud` under `local`
+is refused), each budget cap (at most the request, the parent's cap and what the parent's
+ledgers have left), `sees` (fresh and `none` frames see nothing unless they ask; fork frames,
+blocks and entries inherit; asking beyond the caller is refused), depth (one more per harness
+call; past the limit, `Budget { which: depth }`), width, heap, attended (an unattended caller
+cannot open an attended frame), memory writes, and the context mode (`main` only in an entry's
+own frame). `frame::check_within(parent, child, kind)` is the independent check, a pure
+function of two scopes: the machine runs it on every frame it opens, and a host runs it
+against its own record of the parent (Imperium's `RatioHost::open_frame`), so a forged parent
+scope cannot widen a child. The host must take `kind` and the parent's depth from its own
+record too, never from the `FrameCtx`: a forged `kind` (a harness call passed off as a block)
+would skip the depth check.
+
+**`sees` and secrets.** A labelled value entering a frame whose `sees` lacks `secrets` raises
+`Denied { by: sees }`: any bound parameter (given or defaulted), any configuration value of the
+call's overrides or the declaration, any setting the frame holds (model, effort, thinking,
+sampling, system prompt, title; inherited ones included), a result or error leaving a frame
+into one, an effect answered with a labelled value or error in one, and a `with` block that
+dropped `secrets` reading a labelled local of its enclosing scope (by name, by capturing it
+in a closure, or by a compound assignment or an assignment into part of it). The ambient reads chapter 04
+gates (`session.turn`, `session.plan`, `memory.index`, …: `frame::gate`) are refused before
+the host is asked.
+
+**Budgets and the ledgers.** `frame::Ledgers` is the frame tree's ledgers, one node per frame
+under its caller's, behind one lock; a closed node is freed once nothing is held on it and it
+has no children (node ids carry a generation), and a closed node admits and opens nothing
+below it. An effect is admitted by reserving its charge on its
+frame's node and every ancestor's at once: a tool call one `tool_calls`; a model call one
+`model_calls`, its counted input and its effective `max_tokens` (the smallest of the requested
+`max_tokens`, the model's maximum output or window less the input, and what every ledger can
+still cover in tokens and in cost after the input), which the host sends. Below the reply
+floor (the smallest of `min_reply_tokens`, the request and the model's maximum, at least one)
+an admission waits while a reservation is held on the ledger whose cap binds, and is refused
+once none is; the same holds when the input alone cannot be covered. `Admission::Wait` carries
+the release epoch read under the lock: `wait_for_release` blocks the calling thread (for hosts and tests on threads of
+their own) and `register_waker` wakes an async waiter once a release moves it, so no release
+is lost; stage 11a's scheduler uses `register_waker` on the interpreter's thread, and wakers
+are woken after the ledgers' lock is dropped. A hosted
+model without prices is refused under any cost cap on the path, and a `local` model or a
+price of 0 counts as priced. Completion replaces the reservation with the actual charge, so
+unspent budget stays with the caller; a charge above the reservation is debited in full and
+returned as the overshoot, which the host records (stage 11a). A `Reservation` belongs to its
+tree and is given back once: another tree's, or a second give-back, is a `LedgerError`. Every
+sum saturates towards "spent". The `steps` ledger is the
+same tree's: the machine keeps its frame's limit as an absolute step count and debits the
+ledgers at every frame boundary and effect. A `Budget` raised because a frame's own cap ran
+out (a harness's, or a `with` block's) passes every `catch` and `result` inside that frame and
+becomes catchable once it leaves it; the turn's never does. Running-branch slots
+(`acquire_slot`, `release_slot`) are the width's ledger for the scheduler (stage 11a): a
+parked branch gives its slot back.
+
+**What a host receives.** Every `EffectRequest` carries the `FrameCtx` (the frame path, its
+parent's path, its kind and harness, the attenuated `Scope`, the `Ledgers` and its node, and the
+settings: model, effort, thinking, sampling, system prompt and title, inherited where left out)
+and the branch path within the frame. Frame paths follow chapter 01: `turn/critic@s41#0`, each
+element preceded by the branch path the call was made in (`c12#0.b2/`); a `with` block is an
+element named `with`. `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions` are answered from the frame without the host; `question(text, options)`
+builds the `Question` error a callee raises to its caller, which propagates and is caught like
+any error (and is refused by `sees` like any other value).
+
 ## Tests
 
+`tests/data_ii.rs` runs the `json.*`, `list.*` and `map.*` files of `conformance/data/`, one file per `json`, `list` and `map` row (values,
+failures, steps, and label propagation for each argument: `labels NAME: args`), and checks that
+the files cover the chapter's tables; `tests/data_limits.rs` holds the debug-build work counters
+against each built-in's charge, the refusal without running (`Budget { which: steps }`), the
+O(N log N) loops of pushes and sets, hostile nesting on a 256 KiB stack, cancellation and the
+heap; `tests/data_review.rs` holds the regressions of the security review (a bounded `$ref` walk, labels of `patch` paths and composite keys, ECMAScript patterns, linear record `==`); `tests/data_props.rs` compares the built-ins with `Vec` and `BTreeMap` models and
+round-trips random JSON through `diff`, `patch`, `set` and `get`; `tests/schema.rs` compares
+`json.schema` with the checker's own derivation byte for byte.
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`
 expectations); `tests/labels.rs` covers label propagation for every operator and built-in,
 `Json`, `declassify` and the sink check; `src/properties.rs` checks the persistent structures
@@ -206,3 +390,18 @@ ReDoS probes (`(a+)+$`, `(a|a)*b`, `(.*a){20}`, …) finish on 1 MiB of `a`s; `s
 `src/pool.rs` unit-test the engine (syntax, refusals, the size limit) and the pool (the cap,
 shutdown, panics); `src/offload_tests.rs` checks that a cancelled branch's job keeps its place,
 steps and heap until it ends, and that a waiting evaluation is woken when its job finishes.
+
+Frames: `conformance.rs` also runs `conformance/frames/` (harness calls, configuration and
+overrides, attenuation of tools, modes, locations, `sees`, attended and context, scoped
+`steps` and depth budgets caught only outside their scope, questions, `meta`, frame paths);
+`tests/attenuation.rs` is the monotonicity property over random parents and requests in every
+dimension (with a folder-containment oracle written over the source strings, independent of
+`Folder::contains`), the check refusing a child widened in any dimension and a child of a
+forged parent, and the folder rules; `tests/ledgers.rs` checks the effective `max_tokens` formula, the reply floor, unpriced
+models under cost caps, and that concurrent model calls never pass a token cap (in a frame or a
+child frame with a lower cap) under a deterministic interleaving harness and under threads;
+`tests/frames.rs` covers the `sees` refusals of labelled arguments, results and errors, the
+frame context effects carry, and harness entries in a host's session; `tests/regressions.rs`
+holds the security review's probes (effects in defaults and configuration, secrets in
+settings and in blocks, bounded and charged opening, freed ledger nodes, which scope catches a
+`Budget`).

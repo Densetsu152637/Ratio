@@ -954,6 +954,19 @@ impl Checker<'_> {
         }
     }
 
+    /// Notes a call of a function value: a harness value makes effects; any other is noted
+    /// for the rule on harness defaults and configuration.
+    fn log_value_call(&mut self, b: &mut Body, span: Span, harness: bool) {
+        if harness {
+            b.log
+                .direct
+                .push((span, "calling a harness makes effects".to_owned()));
+            self.records.harness_calls.push((b.module, span));
+        } else {
+            b.log.values.push(span);
+        }
+    }
+
     /// A call of a function value. It adds nothing to the body's effects: every function value
     /// was noted where it was made (a closure's body is checked in place) or named (a
     /// declaration, a built-in), so its effects are already counted there.
@@ -1034,12 +1047,7 @@ impl Checker<'_> {
                 }
             }
         }
-        if harness {
-            b.log
-                .direct
-                .push((span, "calling a harness makes effects".to_owned()));
-            self.records.harness_calls.push((b.module, span));
-        }
+        self.log_value_call(b, span, harness);
         let given: Vec<TypeId> = receiver
             .map(|(rt, _)| rt)
             .into_iter()

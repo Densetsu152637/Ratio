@@ -1,0 +1,17 @@
+// builtin: list.get
+// case main: value [20, 30, 10, null, null]
+// case missing: value null
+// labels at(xs, i): [10, 20, 30] | 1
+// labels first_of(xs, i): [10, 20, 30] | 0 ; inner 0
+// labels late(xs, i): [10, 20, 30] | 7
+fn main() -> [Int?] {
+  let xs = [10, 20, 30]
+  [list.get(xs, 1), list.get(xs, -1), list.get(xs, -3), list.get(xs, -4), list.get(xs, 3)]
+}
+fn missing() -> Int? {
+  let blank: [Int] = []
+  list.get(blank, 0)
+}
+fn at(xs: [Int], i: Int) -> Int? { list.get(xs, i) }
+fn first_of(xs: [Int], i: Int) -> Int? { list.get(xs, i) }
+fn late(xs: [Int], i: Int) -> Int? { list.get(xs, i) }

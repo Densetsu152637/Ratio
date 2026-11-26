@@ -26,7 +26,11 @@ The IR is a tree of expressions in which:
   `ModelRef.Named` variants.
 
 `par`, `race`, `with timeout`, `with` and call overrides stay explicit nodes: their branch and
-site ids are what effect keys will name (stage 11).
+site ids are what effect keys will name (stage 11). A harness's declared configuration is
+lowered in the harness's own frame, after its parameters, since it is evaluated with them
+bound (chapter 04). Every program holds the prelude enums the interpreter builds values of
+(`RUNTIME_ENUMS`) and those `meta`'s frame readers build (`FRAME_ENUMS`, stage 10); the
+canonical form names only the enums a package refers to, so neither changes an IR hash.
 
 ## The canonical form and the hash
 

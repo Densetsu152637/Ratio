@@ -1,0 +1,25 @@
+// builtin: json.get
+// case main: value [{"b": 1}, 1, 7, null, null, null, 3]
+// case escapes: value [null, 2]
+// case root: value [[1, 2]]
+// case bad_pointer: error Invalid
+// case bad_escape: error Invalid
+// case long_pointer: value null
+// labels get(p): "/a/b"
+// labels get_in(xs, p): [1, 2] | "/1" ; inner-inert 0
+// labels miss(k): "z"
+// labels miss_in(xs): [1, 2] ; inner 0
+fn doc() -> Json { json.parse(r"""{"a": {"b": 1}, "list": [5, 6, 7], "a/b": 2, "m~n": 3} """) }
+fn main() -> [Json?] {
+  let d = doc()
+  [json.get(d, "/a"), json.get(d, "/a/b"), json.get(d, "/list/2"), json.get(d, "/list/3"), json.get(d, "/list/-"), json.get(d, "/list/01"), d.get("/m~0n")]
+}
+fn escapes() -> [Json?] { [json.get(doc(), "/a~1b/"), json.get(doc(), "/a~1b")] }
+fn root() -> [Json] { [json.get(json.parse("[1, 2]"), "") ?? json.parse("0")] }
+fn bad_pointer() -> Json? { json.get(doc(), "a") }
+fn bad_escape() -> Json? { json.get(doc(), "/a~2") }
+fn long_pointer() -> Json? { json.get(doc(), text.repeat("/", 1000)) }
+fn get(p: Str) -> Json? { json.get(json.parse(r"""{"a": {"b": 1}} """), p) }
+fn get_in(xs: [Int], p: Str) -> Json? { json.get(json.encode(xs), p) }
+fn miss(k: Str) -> Json? { json.get(json.encode(map.from([(k, 1)])), "/zz") }
+fn miss_in(xs: [Int]) -> Json? { json.get(json.encode(xs), "/9") }

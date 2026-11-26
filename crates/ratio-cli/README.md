@@ -118,5 +118,5 @@ the root; packages importing each other and a `std:` import; links and hard link
 junctions and file links (Windows, made with `mklink /J`; skipped with a note where that is not
 possible); a file over the size limit; escape sequences and bidi controls in a source line, an
 import path, a path argument and (Unix) a file name, which never reach the terminal; and the eight example packages of chapter 09, which must check clean but
-for the built-ins stages 8 and 9 add and the listed errata and lint warnings.
+for the built-ins stage 9 adds and the listed errata and lint warnings.
 `src/render.rs` has unit tests of the two output forms and the JSON escaping.

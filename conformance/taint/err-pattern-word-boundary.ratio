@@ -1,0 +1,8 @@
+// expect: check-error C0038 at 7:3
+
+// \b and \B read word characters differently in ECMAScript and in `re`, so they are not in
+// the `@pattern` subset.
+
+type T = {
+  @pattern(r"\bfoo") a: Str,
+}

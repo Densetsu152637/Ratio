@@ -1,0 +1,29 @@
+// builtin: map.map_values, map.filter
+// case main: value [{"a": 2, "b": 4}, {"b": 2, "c": 3}]
+// case empty: value [{}, {}]
+// case map_raises: error User
+// case filter_raises: error User
+// labels map_values(v): 5
+// labels filter(v): 5
+// labels filter_inner(xs): [1, 2, 3] ; inner 0
+// labels map_inner(xs): [1, 2] ; inner 0
+fn main() -> (Map<Str, Int>, Map<Str, Int>) {
+  let m: Map<Str, Int> = { a: 1, b: 2, c: 3 }
+  (map.map_values(m, |v| v * 2).filter(|k, v| k != "c"), map.filter(m, |k, v| v > 1))
+}
+fn empty() -> (Map<Str, Int>, Map<Str, Int>) {
+  let m: Map<Str, Int> = {}
+  (m.map_values(|v| v + 1), m.filter(|k, v| true))
+}
+fn map_raises() -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1 }
+  map.map_values(m, |v| raise fail("boom", "map_values"))
+}
+fn filter_raises() -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1 }
+  map.filter(m, |k, v| raise fail("boom", "filter"))
+}
+fn map_values(v: Int) -> Map<Str, Int> { map.map_values(map.from([("a", v)]), |x| x + 1) }
+fn filter(v: Int) -> Map<Str, Int> { map.filter(map.from([("a", v), ("b", 0)]), |k, x| x > 1) }
+fn filter_inner(xs: [Int]) -> Map<Untrusted<Str>, Int> { map.filter(map.from(xs.map(|x| (text.show(x), x))), |k, x| x > 1) }
+fn map_inner(xs: [Int]) -> Map<Untrusted<Str>, Int> { map.map_values(map.from(xs.map(|x| (text.show(x), x))), |x| x + 1) }

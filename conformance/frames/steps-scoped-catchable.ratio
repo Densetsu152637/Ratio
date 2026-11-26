@@ -1,0 +1,20 @@
+// expect: value "caught steps"
+
+// A scoped `steps` budget: `result` inside the block cannot swallow it; the code that opened
+// the block can.
+fn spin() -> Int {
+  var i = 0
+  loop { i = i + 1 }
+  i
+}
+
+fn main() -> Str {
+  try {
+    with { budget: { steps: 200 } } {
+      let r = result(|| spin())
+      "result swallowed it"
+    }
+  } catch e {
+    if e.kind is Budget { "caught steps" } else { "other" }
+  }
+}

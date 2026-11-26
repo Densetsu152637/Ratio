@@ -438,12 +438,12 @@ const EXAMPLE_FINDINGS: &[(usize, u32, &str, &str)] = &[
     ),
 ];
 
-/// Whether a diagnostic of an example comes from a built-in a later stage adds (stage 8's
-/// `json`, `list`, `map`; stage 9's `math` to `codec`): a missing signature, a missing list
-/// method, or a closure whose parameter type would have come from one.
+/// Whether a diagnostic of an example comes from a built-in a later stage adds (stage 9's
+/// `math` to `codec`): a missing signature, a missing list method, or a closure whose parameter
+/// type would have come from one.
 fn pending(d: &Diag, list_methods: &BTreeSet<String>) -> bool {
     const LATER: &[&str] = &[
-        "json", "list", "map", "math", "hash", "diff", "template", "vec", "path", "url", "codec",
+        "math", "hash", "diff", "template", "vec", "path", "url", "codec",
     ];
     match d.code.as_str() {
         "C0034" => LATER.iter().any(|m| d.message.contains(&format!("`{m}."))),

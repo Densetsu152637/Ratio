@@ -1,0 +1,20 @@
+// expect: ok
+
+// Frame paths name each frame from the entry: harness name, call site and occurrence, each
+// preceded by the branch path the call was made in.
+harness leaf() -> Str { meta.frame().path }
+
+harness fan() -> (Str, Str, Str) {
+  let (a, b) = par { leaf(); leaf() }
+  (a, b, leaf())
+}
+
+fn main() -> () {
+  let (a, b, c) = fan()
+  assert(text.contains(a, "turn/fan@s"), "the entry's root, then the caller")
+  assert(text.contains(a, "#0/c"), "the first call of `fan`, then a branch path")
+  assert(text.contains(a, ".b0/leaf@s"), "branch 0")
+  assert(text.contains(b, ".b1/leaf@s"), "branch 1")
+  assert(a != b, "distinct branches, distinct paths")
+  assert(text.contains(c, "#0/leaf@s"), "outside the `par` there is no branch path")
+}

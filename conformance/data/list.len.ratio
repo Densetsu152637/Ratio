@@ -1,0 +1,12 @@
+// builtin: list.len, list.is_empty
+// case main: value [3, 0, false, true]
+// case steps: steps 9
+// labels length(xs): [1, 2, 3] ; inner-inert 0
+// labels empty(xs): [1] ; inner-inert 0
+fn main() -> (Int, Int, Bool, Bool) {
+  let blank: [Int] = []
+  (list.len([1, 2, 3]), blank.len(), list.is_empty([1]), blank.is_empty())
+}
+fn steps() -> Int { list.len([1, 2, 3]) }
+fn length(xs: [Int]) -> Int { list.len(xs) }
+fn empty(xs: [Int]) -> Bool { list.is_empty(xs) }

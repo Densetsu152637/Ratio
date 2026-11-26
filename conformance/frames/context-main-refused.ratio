@@ -1,0 +1,8 @@
+// expect: runtime-error Denied
+
+// Only an entry's own frame may use the main conversation.
+harness sneaky() -> Int with { context: main } { 1 }
+
+fn main() -> Int {
+  sneaky()
+}

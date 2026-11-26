@@ -146,7 +146,8 @@ the same result, whatever the timing:
 ```text
 key         = (frame path, branch path, site id, occurrence)
 frame path  = one element per frame from the entry: harness name @ call-site id # occurrence of
-              that call, each preceded by the branch path the call was made in
+              that call, each preceded by the branch path the call was made in; a
+              `with { … } { … }` block is an element named `with` at the block's site
 branch path = one element per concurrent construct enclosing the effect within its frame, from
               the frame's root: c<construct site id> # occurrence . b<branch index>
 site id     = the IR node's stable id (package IR hash + node index)

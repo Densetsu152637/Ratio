@@ -1,0 +1,10 @@
+// builtin: list.take, list.drop
+// case main: value [[1, 2], [3, 4], [1, 2, 3, 4], [], [1, 2, 3, 4], []]
+// labels take(xs, n): [1, 2, 3] | 2 ; inner 0
+// labels drop(xs, n): [1, 2, 3] | 1 ; inner-inert 0
+fn main() -> ([Int], [Int], [Int], [Int], [Int], [Int]) {
+  let xs = [1, 2, 3, 4]
+  (list.take(xs, 2), list.drop(xs, 2), xs.take(10), xs.take(-1), xs.drop(-3), xs.drop(9))
+}
+fn take(xs: [Int], n: Int) -> [Int] { list.take(xs, n) }
+fn drop(xs: [Int], n: Int) -> [Int] { list.drop(xs, n) }

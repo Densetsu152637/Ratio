@@ -1,0 +1,18 @@
+// builtin: list.fold, list.reduce
+// case main: value [16, 6, null, 5]
+// case order: value "abc"
+// case fold_raises: error User
+// case reduce_raises: error User
+// labels fold(xs, init): [1, 2, 3] | 0 ; inner 0
+// labels reduce(xs): [1, 2, 3] ; inner 0
+// labels reduce_one(xs): [4]
+fn main() -> (Int, Int?, Int?, Int?) {
+  let empty: [Int] = []
+  ([1, 2, 3].fold(10, |a, x| a + x), [1, 2, 3].reduce(|a, b| a + b), empty.reduce(|a, b| a + b), [5].reduce(|a, b| a + b))
+}
+fn order() -> Str { ["a", "b", "c"].fold("", |a, x| a + x) }
+fn fold_raises() -> Int { [1].fold(0, |a, x| raise fail("boom", "fold")) }
+fn reduce_raises() -> Int? { [1, 2].reduce(|a, b| raise fail("boom", "reduce")) }
+fn fold(xs: [Int], init: Int) -> Int { list.fold(xs, init, |a, x| a + x) }
+fn reduce(xs: [Int]) -> Int? { list.reduce(xs, |a, b| a + b) }
+fn reduce_one(xs: [Int]) -> Int? { list.reduce(xs, |a, b| a + b) }

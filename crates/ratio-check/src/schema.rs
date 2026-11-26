@@ -914,7 +914,7 @@ impl Checker<'_> {
 /// both read, if it is not: the conservative common subset of ECMAScript and RE2 syntax
 /// (alternation, groups including `(?:`, classes with ranges, the quantifiers `*`, `+`, `?`
 /// and `{m}`, `{m,}`, `{m,n}`, anchors and `\`-escapes of punctuation and the classes `d`,
-/// `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`, `t`). Anything else (look-around,
+/// `w`, `s`, `D`, `W`, `S`, `n`, `r`, `t`; not `\b` and `\B`, whose word characters differ). Anything else (look-around,
 /// back-references, named groups, an unbalanced bracket, a quantifier with nothing to repeat)
 /// is refused rather than guessed.
 #[must_use]
@@ -936,10 +936,10 @@ pub fn regex_problem(p: &str) -> Option<String> {
                 let Some(&e) = chars.get(i + 1) else {
                     return Some("it ends with `\\`".to_owned());
                 };
-                if !(e.is_ascii_punctuation() || "dwsDWSbBnrt".contains(e)) {
+                if !(e.is_ascii_punctuation() || "dwsDWSnrt".contains(e)) {
                     return Some(format!("`\\{e}` is not an escape both dialects read"));
                 }
-                atom = !matches!(e, 'b' | 'B');
+                atom = true;
                 i += 2;
             }
             '(' => {

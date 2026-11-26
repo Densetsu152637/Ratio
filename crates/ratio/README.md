@@ -22,10 +22,17 @@ type's JSON Schema and type digest. Stage 6 adds the Core IR of
 `ratio::interp` (`ratio::prepare`, `ratio::evaluate`, `ratio::Value` with its secrecy `Labels`,
 `ratio::Limits`). Stage 7 adds the `text` and `re` built-ins and the offload pool
 (`ratio::interp::Pool`, `Evaluation::offload_to`). It also names the specification draft
-(`SPEC_DRAFT`), the stage reached (`STAGE`, 7) and its own version (`VERSION`, which
+(`SPEC_DRAFT`), the stage reached (`STAGE`, 10) and its own version (`VERSION`, which
 `ratio --version` prints). The `Host` trait and the rest of the standard library
 join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
+
+Stage 10, frames, adds `ratio::frame` and `ratio::evaluate_in`: a host passes its session's
+scope (`frame::Session`) and every harness call, entry and `with` block is attenuated from it;
+every effect carries its `frame::FrameCtx` (path, scope, ledger node); `frame::check_within` is
+the pure check the host repeats against its own record of a parent frame, and
+`frame::Ledgers` admits model and tool calls by reservation (see
+[`ratio-eval`](../ratio-eval/README.md#frames)).
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`
 must match `spec/README.md`; every conformance directory must name, in

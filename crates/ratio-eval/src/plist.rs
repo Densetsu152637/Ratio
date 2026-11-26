@@ -43,6 +43,7 @@ pub struct List {
 fn leaf(heap: &Heap, items: Vec<Value>) -> Result<Arc<Node>, Fault> {
     let mut meta = Meta::of(&items);
     meta.weight -= 1;
+    crate::work::add(1 + items.len() as u64);
     let charge = heap.alloc(cost::LIST_NODE + cost::SLOT * items.len() as u64)?;
     Ok(Arc::new(Node {
         len: items.len() as u64,
@@ -54,6 +55,7 @@ fn leaf(heap: &Heap, items: Vec<Value>) -> Result<Arc<Node>, Fault> {
 }
 
 fn branch(heap: &Heap, l: Arc<Node>, r: Arc<Node>) -> Result<Arc<Node>, Fault> {
+    crate::work::add(1);
     let charge = heap.alloc(cost::LIST_NODE)?;
     Ok(Arc::new(Node {
         len: l.len + r.len,
@@ -325,6 +327,7 @@ impl List {
             return None;
         }
         loop {
+            crate::work::add(1);
             match &n.kind {
                 Kind::Leaf(items) => return items.get(usize::try_from(i).ok()?),
                 Kind::Branch(l, r) => {
@@ -437,8 +440,12 @@ impl List {
             stack.push(r);
         }
         while let Some(n) = stack.pop() {
+            crate::work::add(1);
             match &n.kind {
-                Kind::Leaf(items) => items.iter().for_each(&mut *f),
+                Kind::Leaf(items) => {
+                    crate::work::add(items.len() as u64);
+                    items.iter().for_each(&mut *f);
+                }
                 Kind::Branch(l, r) => {
                     stack.push(r);
                     stack.push(l);
@@ -453,6 +460,12 @@ impl List {
         let mut out = Vec::with_capacity(usize::try_from(self.len()).unwrap_or(0));
         self.for_each(&mut |v| out.push(v.clone()));
         out
+    }
+
+    /// The elements as an iterator of owned values.
+    pub(crate) fn cursor_values(&self) -> impl Iterator<Item = Value> {
+        let mut c = self.cursor();
+        std::iter::from_fn(move || c.next())
     }
 
     /// An owned cursor over the elements (for loops, which hold it across steps).
@@ -479,6 +492,7 @@ impl Cursor {
                     && let Some(v) = items.get(*i)
                 {
                     *i += 1;
+                    crate::work::add(1);
                     return Some(v.clone());
                 }
                 self.leaf = None;

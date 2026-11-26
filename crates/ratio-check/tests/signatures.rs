@@ -12,9 +12,6 @@ use std::path::Path;
 
 /// The modules whose signatures later stages add, with the stage.
 const PENDING: &[(&str, &str)] = &[
-    ("json", "stage 8"),
-    ("list", "stage 8"),
-    ("map", "stage 8"),
     ("math", "stage 9"),
     ("hash", "stage 9"),
     ("diff", "stage 9"),

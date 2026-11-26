@@ -101,7 +101,8 @@ impl Checked {
     /// Whether the check found no error (warnings allowed).
     #[must_use]
     pub fn is_clean(&self) -> bool {
-        self.diagnostics.iter().all(|d| d.code.is_warning())
+        // An error in the built-in tables themselves (a duplicate name) fails closed.
+        self.internal.is_empty() && self.diagnostics.iter().all(|d| d.code.is_warning())
     }
 
     /// The tables of module `id`.
@@ -313,10 +314,7 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
     let mut internal = Vec::new();
     let mut out = Vec::new();
     for m in check::std_modules(&mut internal).iter().skip(1) {
-        let source = builtins::MODULES
-            .iter()
-            .find(|(n, _)| *n == m.name)
-            .map_or("", |(_, s)| *s);
+        let source = m.source.as_str();
         for item in &m.module.items {
             let ratio_syntax::ast::ItemKind::Fn(decl) = &item.kind else {
                 continue;

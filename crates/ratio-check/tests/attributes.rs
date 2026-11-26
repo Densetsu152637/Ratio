@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// The modules whose table entries later stages complete (their Needs are all `pure`).
 const PENDING: &[&str] = &[
-    "json", "list", "map", "math", "hash", "diff", "template", "vec", "path", "url", "codec",
+    "math", "hash", "diff", "template", "vec", "path", "url", "codec",
 ];
 
 /// Reviewed against `Traits::local`: nothing a program gives these reaches a model, the network,
