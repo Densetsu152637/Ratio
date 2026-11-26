@@ -10,7 +10,7 @@ fn rules(page: Untrusted<Str>) -> TrustedPrompt {
   }
 }
 
-fn delegated(t: Task) -> TrustedPrompt {
+fn delegated(t: TaskInput) -> TrustedPrompt {
   let p = prompt {
     task t.brief
   }

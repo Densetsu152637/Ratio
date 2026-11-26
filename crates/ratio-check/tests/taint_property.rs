@@ -296,7 +296,7 @@ fn generate(rng_seed: u64) -> Program {
          fn pick<T>(a: T, b: T, c: Bool) -> T {{ if c {{ a }} else {{ b }} }}\n\
          fn keep<T>(x: T) -> T {{ x }}\n\
          fn apply<T, U>(f: fn(T) -> U, x: T) -> U {{ f(x) }}\n\
-         fn case(web: Untrusted<Str>, task: Task, user: UserText, v: Untrusted<Verdict>, n: Int, flag: Bool) -> {ret} {{\n\
+         fn case(web: Untrusted<Str>, task: TaskInput, user: UserText, v: Untrusted<Verdict>, n: Int, flag: Bool) -> {ret} {{\n\
          {body}  prompt {{\n{sections}  }}\n}}\n"
     );
     Program {
@@ -393,4 +393,75 @@ fn no_untrusted_source_reaches_an_instruction_or_task_without_a_trust_site() {
     );
     assert!(trusted_prompts_accepted > 20, "{trusted_prompts_accepted}");
     assert!(refused_unsafe_joins > 50, "{refused_unsafe_joins}");
+}
+
+/// The secrecy half of the property (B2a): a statically secret value never reaches a generic
+/// helper that may reach a secrecy sink, by whatever route the helper is called: directly,
+/// through a function value (annotated, wrapped by a generic `id`, a record field, returned by
+/// a function), through `apply` with a turbofish, a pipe or a closure. The same routes with
+/// plain text, or with a helper that keeps its argument local, are accepted.
+#[test]
+fn no_secret_reaches_a_sink_reaching_helper_through_any_route() {
+    const ROUTES: usize = 8;
+    let mut rng = Rng(0x5EC2_E7E7_u64);
+    let mut refused = [0usize; ROUTES];
+    let mut accepted = [0usize; ROUTES];
+    for case in 0..400 {
+        let route = rng.below(ROUTES);
+        let secret = rng.chance(1, 2);
+        let sinking = rng.chance(2, 3);
+        let (arg, ty) = if secret {
+            ("tok()", "Secret<UserText>")
+        } else {
+            ("\"plain\"", "Str")
+        };
+        let h = if sinking { "send" } else { "quiet" };
+        let call = match route {
+            0 => format!("  {h}({arg})\n"),
+            1 => format!("  let f: fn({ty}) -> () = {h}\n  f({arg})\n"),
+            2 => format!("  apply::<{ty}, ()>({h}, {arg})\n"),
+            3 => format!("  let f = id::<fn({ty}) -> ()>({h})\n  f({arg})\n"),
+            4 => format!("  let r: {{ g: fn({ty}) -> () }} = {{ g: {h} }}\n  r.g({arg})\n"),
+            5 => format!("  {arg} |> {h}()\n"),
+            6 => format!("  let c = |v: {ty}| {h}(v)\n  c({arg})\n"),
+            _ => format!("  let f = get_{h}_{}()\n  f({arg})\n", u8::from(secret)),
+        };
+        let source = format!(
+            "fn tok() -> Secret<UserText> {{\n  let a = session.ask([{{ question: \"p\", options: [], recommended: \"\", secret: true }}])\n  a[0]\n}}\n\
+             fn send<T>(x: T) -> () {{\n  let _ = tools.web_fetch(\"{{x}}\")\n}}\n\
+             fn quiet<T>(x: T) -> () {{\n  let _ = x\n}}\n\
+             fn id<T>(x: T) -> T {{\n  x\n}}\n\
+             fn apply<A, B>(f: fn(A) -> B, a: A) -> B {{\n  f(a)\n}}\n\
+             fn get_{h}_{s}() -> fn({ty}) -> () {{\n  {h}\n}}\n\
+             fn case() -> () {{\n{call}}}\n",
+            s = u8::from(secret)
+        );
+        let (codes, messages) = check(&source);
+        let unsafe_flow = secret && sinking;
+        if codes.is_empty() {
+            assert!(
+                !unsafe_flow,
+                "case {case}: a secret reached a sink-reaching helper by route {route}:\n{source}"
+            );
+            accepted[route] += 1;
+        } else {
+            assert!(
+                unsafe_flow,
+                "case {case}: a safe flow by route {route} was refused ({messages:?}):\n{source}"
+            );
+            assert!(
+                codes.iter().all(|c| *c == Code::Secret),
+                "case {case}: refused for something other than secrecy ({messages:?}):\n{source}"
+            );
+            refused[route] += 1;
+        }
+    }
+    for route in 0..ROUTES {
+        assert!(
+            refused[route] > 5 && accepted[route] > 5,
+            "route {route}: {} refused, {} accepted",
+            refused[route],
+            accepted[route]
+        );
+    }
 }

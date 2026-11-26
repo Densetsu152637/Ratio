@@ -178,7 +178,7 @@ impl Checker<'_> {
                 // caller would let through silently (`let d: fn(Json) -> Str = json.decode`
                 // would launder `Json` into `Str`).
                 let fits = expected.is_none_or(|want| self.types.subtype(&mut self.memo, ty, want));
-                if !fits && let Some(want) = expected {
+                if let (false, Some(want)) = (fits, expected) {
                     let shown = self.types.resolve(ty);
                     self.mismatch(b, span, shown, want);
                     self.close_vars(b, &pairs, &name, span, true);
@@ -653,18 +653,19 @@ impl Checker<'_> {
                     self.private(origin, name, r);
                     TypeId::ERROR
                 }
-                None if let ModRef::Std(s) = m => {
-                    let full = format!("{}.{}", self.std[s].name, name.name);
-                    self.no_signature(origin, span, &full)
-                }
                 None => {
-                    self.report(
-                        origin,
-                        Code::NoMember,
-                        name.span,
-                        format!("the module defines no `{}`", name.name),
-                    );
-                    TypeId::ERROR
+                    if let ModRef::Std(s) = m {
+                        let full = format!("{}.{}", self.std[s].name, name.name);
+                        self.no_signature(origin, span, &full)
+                    } else {
+                        self.report(
+                            origin,
+                            Code::NoMember,
+                            name.span,
+                            format!("the module defines no `{}`", name.name),
+                        );
+                        TypeId::ERROR
+                    }
                 }
             },
         }
@@ -1281,9 +1282,10 @@ impl Checker<'_> {
         if traits.loads {
             let loaded = first_literal(args, &slots);
             self.records.loads.push((b.module, span, loaded));
-            if let Some(h) = targs.first()
-                && !matches!(self.types.get(*h), Ty::Harness(..) | Ty::Error)
-            {
+            let not_harness = targs
+                .first()
+                .filter(|h| !matches!(self.types.get(**h), Ty::Harness(..) | Ty::Error));
+            if let Some(h) = not_harness {
                 let shown = self.types.display(*h);
                 self.report(
                     origin,

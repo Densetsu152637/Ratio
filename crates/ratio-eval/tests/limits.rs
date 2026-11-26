@@ -10,33 +10,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use ratio_eval::{CancelToken, Limits, Outcome, Value, builtins::Class};
-use ratio_ir::{ArgFrom, Callee, Expr, ExprKind, ItemKind, Loc, Stmt};
-use support::{program, raised, run, run_with};
+use support::{raised, run, run_with};
 
-/// `main(a, b)` whose body is one call of built-in `name` with `a` and `b`: for the classes
-/// whose built-ins the checker's table does not declare yet (`output`, `product`).
-fn call_builtin(name: &str) -> Arc<ratio_eval::Prepared> {
-    let mut prog = program("fn main(a: Str, b: Str) -> Int { 0 }");
-    let e = |kind| Expr {
-        kind,
-        loc: Loc::default(),
-        id: 0,
-    };
-    let call = e(ExprKind::Call {
-        callee: Callee::Builtin(name.to_owned()),
-        args: vec![e(ExprKind::Local(0)), e(ExprKind::Local(1))],
-        order: vec![ArgFrom::Written(0), ArgFrom::Written(1)],
-        type_args: Vec::new(),
-    });
-    for item in prog.modules[0].items.iter_mut().flatten() {
-        if let ItemKind::Fn(f) = &mut item.kind {
-            f.body = e(ExprKind::Block(vec![Stmt::Expr(call.clone())]));
-        }
-    }
-    ratio_eval::prepare(&prog).unwrap()
-}
+/// `text.repeat` and `text.similarity` called with their arguments: the `output` and
+/// `product` classes, whose exact charges `conformance/eval/steps-output.ratio` and
+/// `steps-product.ratio` also pin.
+const CHARGED: &str = r"
+fn rep(a: Str, n: Int) -> Str { text.repeat(a, n) }
+fn sim(a: Str, b: Str) -> Float { text.similarity(a, b) }
+";
 
-/// Steps of the call without the built-in: two parameter patterns, then block, statement,
+/// Steps of either call without the built-in: two parameter patterns, then block, statement,
 /// call and two locals.
 const BODY: u64 = 7;
 
@@ -60,18 +44,18 @@ fn every_class_has_a_built_in() {
 
 #[test]
 fn output_class_is_charged_from_the_output_its_arguments_fix() {
-    let p = call_builtin("text.repeat");
+    let p = support::prepared(CHARGED);
     // m = 2 × 100 = 200: 1 + ⌈200 / 64⌉ = 5.
-    let f = run(&p, "main", vec![Value::text("ab"), Value::int(100)]);
+    let f = run(&p, "rep", vec![Value::text("ab"), Value::int(100)]);
     assert!(matches!(f.outcome, Outcome::Returned(_)));
     assert_eq!(f.steps, BODY + 5);
 }
 
 #[test]
 fn product_class_is_debited_before_running() {
-    let p = call_builtin("text.similarity");
+    let p = support::prepared(CHARGED);
     // n₁ = n₂ = 3, c = 6: w = 15, 2 steps.
-    let f = run(&p, "main", vec![Value::text("abc"), Value::text("abd")]);
+    let f = run(&p, "sim", vec![Value::text("abc"), Value::text("abd")]);
     let Outcome::Returned(v) = f.outcome else {
         panic!("raised")
     };
@@ -82,13 +66,83 @@ fn product_class_is_debited_before_running() {
     // charged.
     let big = "x".repeat(20_000);
     let start = std::time::Instant::now();
-    let f = run(&p, "main", vec![Value::text(&big), Value::text(&big)]);
+    let f = run(&p, "sim", vec![Value::text(&big), Value::text(&big)]);
     assert!(start.elapsed() < std::time::Duration::from_secs(2));
     let Outcome::Raised(e) = f.outcome else {
         panic!("returned")
     };
     assert_eq!(e.budget(&p).as_deref(), Some("steps"));
     assert_eq!(f.steps, BODY);
+}
+
+#[test]
+fn repeat_refuses_negative_huge_and_overlong_counts_before_allocating() {
+    let p = support::prepared(CHARGED);
+    for (s, n) in [
+        ("ab", -1),
+        ("ab", i64::MAX),
+        ("abc", i64::MAX / 2),
+        ("a", 16 * 1024 * 1024 + 1),
+    ] {
+        let f = run(&p, "rep", vec![Value::text(s), Value::int(n)]);
+        let Outcome::Raised(e) = f.outcome else {
+            panic!("repeat({s:?}, {n}) returned")
+        };
+        assert_eq!(e.kind(&p), "Invalid", "repeat({s:?}, {n})");
+        // Refused at its one-step minimum charge: nothing was built.
+        assert_eq!(f.steps, BODY + 1, "repeat({s:?}, {n})");
+        assert!(
+            f.heap_peak < 1024,
+            "repeat({s:?}, {n}) allocated {}",
+            f.heap_peak
+        );
+    }
+    // Exactly 16 MiB is allowed, and charged for its output: 1 + 2^24 / 64.
+    let f = run(
+        &p,
+        "rep",
+        vec![Value::text("a"), Value::int(16 * 1024 * 1024)],
+    );
+    let Outcome::Returned(v) = f.outcome else {
+        panic!("16 MiB was refused")
+    };
+    assert_eq!(v.as_text().map(str::len), Some(16 * 1024 * 1024));
+    assert_eq!(f.steps, BODY + 1 + (1 << 24) / 64);
+}
+
+#[test]
+fn repeat_and_similarity_carry_their_arguments_labels() {
+    let p = support::prepared(CHARGED);
+    let secret = ratio_eval::Labels::source(0);
+    for args in [
+        vec![Value::text("ab").with_labels(secret), Value::int(2)],
+        vec![Value::text("ab"), Value::int(2).with_labels(secret)],
+    ] {
+        let Outcome::Returned(v) = run(&p, "rep", args).outcome else {
+            panic!("raised")
+        };
+        assert_eq!(v.scan(), secret);
+    }
+    for args in [
+        vec![Value::text("ab").with_labels(secret), Value::text("ac")],
+        vec![Value::text("ab"), Value::text("ac").with_labels(secret)],
+    ] {
+        let Outcome::Returned(v) = run(&p, "sim", args).outcome else {
+            panic!("raised")
+        };
+        assert_eq!(v.scan(), secret);
+    }
+    // Neither is a sink: labelled arguments are accepted, and nothing removes the label.
+    let Outcome::Returned(v) = run(
+        &p,
+        "rep",
+        vec![Value::text("").with_labels(secret), Value::int(0)],
+    )
+    .outcome
+    else {
+        panic!("raised")
+    };
+    assert_eq!(v.scan(), secret);
 }
 
 #[test]

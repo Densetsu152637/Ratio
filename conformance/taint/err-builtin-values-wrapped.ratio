@@ -1,0 +1,39 @@
+// expect: check-error C0036 at 17:28
+// expect: check-error C0036 at 22:37
+// expect: check-error C0036 at 27:29
+// expect: check-error C0036 at 32:53
+// expect: check-error C0036 at 37:46
+
+// A built-in that may only be called stays refused as a value however the value is carried:
+// in a record field, in a list, or through a generic identity function.
+
+type H = harness(Untrusted<Str>) -> Untrusted<Str>
+
+fn id<T>(x: T) -> T {
+  x
+}
+
+fn through_id() -> H {
+  let g: fn(Str) -> H = id(meta.harness)
+  g("user:evil.h")
+}
+
+fn in_a_record() -> H {
+  let r: { g: fn(Str) -> H } = { g: meta.harness }
+  r.g("user:evil.h")
+}
+
+fn in_a_list() -> H {
+  let xs: [fn(Str) -> H] = [meta.harness]
+  xs[0]("user:evil.h")
+}
+
+fn ask_in_a_record() -> () {
+  let r: { a: fn([Question]) -> [UserText] } = { a: session.ask }
+  let _ = tools.web_fetch(r.a([{ question: "Token?", options: [], recommended: "", secret: true }])[0])
+}
+
+fn trust_through_id(x: Untrusted<Str>) -> Str {
+  let t: fn(Untrusted<Str>, Str) -> Str = id(trust)
+  t(x, "laundered")
+}

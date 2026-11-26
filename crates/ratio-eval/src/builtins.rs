@@ -10,7 +10,7 @@
 //! steps as any code does.
 //!
 //! Stage 6 carries the framework and one or more built-ins of each class: the pure functions
-//! the checker's table declares (`control`, `list`, `text`, `map`, `json`, `math`), plus
+//! the checker's table declares (`control`, `list`, `text`, `map`, `json`, `math`), among them
 //! `text.repeat` (`output`) and `text.similarity` (`product`). Stages 7 to 9 add the rest of
 //! chapter 06 to this table.
 
@@ -183,15 +183,25 @@ fn s_map_key(a: &Args) -> Sizes {
 fn s_join(a: &Args) -> Sizes {
     Sizes::n(weight(a, 0).saturating_add(sz(a, 1)))
 }
+/// `text.repeat`: the output is `|s| · n` characters, fixed by the arguments. A count that is
+/// negative, or a result that would overflow or pass 16 MiB, is charged nothing here: the
+/// built-in refuses it (`Invalid`) before allocating anything.
 fn s_repeat(a: &Args) -> Sizes {
-    let count = a
-        .get(1)
-        .and_then(Option::as_ref)
-        .and_then(Value::as_int)
-        .map_or(0, |n| u64::try_from(n).unwrap_or(0));
-    Sizes {
-        m: sz(a, 0).saturating_mul(count),
-        ..Sizes::default()
+    let s = a.first().and_then(Option::as_ref);
+    let count = a.get(1).and_then(Option::as_ref).and_then(Value::as_int);
+    let (Some(s), Some(count)) = (s, count) else {
+        return Sizes::default();
+    };
+    let Ok(count) = u64::try_from(count) else {
+        return Sizes::default();
+    };
+    let bytes = s.as_text().map_or(0, str::len) as u64;
+    match bytes.checked_mul(count) {
+        Some(total) if total <= crate::value::MAX_STR_BYTES as u64 => Sizes {
+            m: size(s).saturating_mul(count),
+            ..Sizes::default()
+        },
+        _ => Sizes::default(),
     }
 }
 fn s_product(a: &Args) -> Sizes {
@@ -897,7 +907,11 @@ fn text_repeat(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             cx.loc,
         ));
     };
-    if t.len().saturating_mul(count) > crate::value::MAX_STR_BYTES {
+    // Checked: an overflowing size is refused like any over-long one, before allocating.
+    if t.len()
+        .checked_mul(count)
+        .is_none_or(|total| total > crate::value::MAX_STR_BYTES)
+    {
         return Err(raise(
             cx.p,
             Kind::Invalid,
@@ -909,26 +923,71 @@ fn text_repeat(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     new_text(cx, t.repeat(count), labels)
 }
 
-/// 1 minus the Levenshtein distance over the longer length, in O(n₁·n₂) time and O(n₂) space.
+/// The cells between cancellation checks in `text.similarity` (one checkpoint's worth of
+/// work at 64 cells a step).
+const SIMILARITY_CHECK_CELLS: u64 = 64 * crate::machine::CHECKPOINT;
+
+/// 1 minus the Levenshtein distance over the longer length, in O(n₁·n₂) time and O(min(n₁, n₂))
+/// space: two rows over the shorter text (the distance is symmetric), charged to the heap,
+/// never an n₁ × n₂ matrix. The whole `product` charge was debited before it runs; it checks
+/// for cancellation every checkpoint's worth of cells, so a cancelled run stops within one
+/// checkpoint interval as pure code does.
 fn text_similarity(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = a.labels | b.labels;
-    let x: Vec<char> = text(cx, a)?.chars().collect();
-    let y: Vec<char> = text(cx, b)?.chars().collect();
-    let longest = x.len().max(y.len());
+    let (ta, tb) = (text(cx, a)?, text(cx, b)?);
+    let (long, short) = if ta.chars().count() >= tb.chars().count() {
+        (ta, tb)
+    } else {
+        (tb, ta)
+    };
+    let y: Vec<char> = short.chars().collect();
+    let longest = long.chars().count();
     if longest == 0 {
         return Ok(Value::float(1.0).with_labels(labels));
     }
+    // The working memory: the shorter text's characters and two rows of counts.
+    let mut charge = Charge::none();
+    let bytes = (y.len() as u64)
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(4 + 2 * 8))
+        .ok_or_else(|| {
+            raise(
+                cx.p,
+                Kind::Invalid,
+                "a text too long to compare",
+                labels,
+                cx.loc,
+            )
+        })?;
+    charge
+        .grow(cx.heap, bytes)
+        .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
     let mut prev: Vec<usize> = (0..=y.len()).collect();
     let mut cur = vec![0; y.len() + 1];
-    for (i, cx_) in x.iter().enumerate() {
+    let mut since_check = 0u64;
+    for (i, cx_) in long.chars().enumerate() {
         cur[0] = i + 1;
         for (j, cy) in y.iter().enumerate() {
-            let sub = prev[j] + usize::from(cx_ != cy);
+            let sub = prev[j] + usize::from(cx_ != *cy);
             cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
         }
         std::mem::swap(&mut prev, &mut cur);
+        since_check += y.len() as u64 + 1;
+        if since_check >= SIMILARITY_CHECK_CELLS {
+            since_check = 0;
+            if cx.cancel.is_cancelled() {
+                return Err(raise(
+                    cx.p,
+                    Kind::Cancelled,
+                    "the evaluation was cancelled",
+                    Labels::NONE,
+                    cx.loc,
+                ));
+            }
+        }
     }
+    drop(charge);
     #[allow(clippy::cast_precision_loss, reason = "a ratio of lengths")]
     let sim = 1.0 - prev[y.len()] as f64 / longest as f64;
     Ok(Value::float(sim).with_labels(labels))

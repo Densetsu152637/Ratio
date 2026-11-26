@@ -28,8 +28,8 @@ pub use ratio_syntax::{
 /// Its diagnostic codes are [`names::Code`] (`N`), apart from the syntax crate's [`Code`].
 pub use ratio_names as names;
 pub use ratio_names::{
-    Loaded, Loader, MemoryRegistry, PackageId, QualifiedName, Registry, RegistryError, RelPath,
-    Source,
+    Loaded, Loader, MemoryRegistry, PackageId, PackageName, PluginName, QualifiedName, Registry,
+    RegistryError, RelPath, Source,
 };
 
 /// Stages 4 and 5: the type checker, with schemas and taint. Its diagnostic codes are
@@ -54,7 +54,7 @@ pub use ratio_eval::{
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.8";
+pub const SPEC_DRAFT: &str = "0.13";
 
 /// The implementation stage reached (chapter 10's table): the IR and the core interpreter.
 pub const STAGE: u32 = 6;

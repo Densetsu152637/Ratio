@@ -66,3 +66,7 @@ fn tuples(t: (UserText, Int)) -> (Str, Int?) {
 fn maps(m: Map<Str, UserText>) -> Map<Str, Str> {
   m
 }
+
+fn tasks(t: TaskInput, h: Task<Int>) -> Brief {
+  t.brief
+}

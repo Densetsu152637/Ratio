@@ -297,10 +297,7 @@ fn the_eval_corpus_runs_as_expected() {
             failures.push(format!("no file expects runtime-error {kind}"));
         }
     }
-    assert!(
-        steps >= 4,
-        "one `steps` file per cost class the checker can call"
-    );
+    assert!(steps >= 6, "one `steps` file per cost class");
     assert!(
         failures.is_empty(),
         "{} problem(s):\n{}",

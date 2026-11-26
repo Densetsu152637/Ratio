@@ -444,10 +444,13 @@ impl Types {
 
     /// Gives `to` (a record rebuilt from `from`) the metadata `from` has.
     fn inherit_meta(&mut self, from: TypeId, to: TypeId) {
-        if from != to
-            && let Some(meta) = self.field_meta.get(&from).cloned()
-            && matches!(self.get(to), Ty::Record(fields) if fields.len() == meta.len())
-        {
+        if from == to {
+            return;
+        }
+        let Some(meta) = self.field_meta.get(&from).cloned() else {
+            return;
+        };
+        if matches!(self.get(to), Ty::Record(fields) if fields.len() == meta.len()) {
             self.field_meta.entry(to).or_insert(meta);
         }
     }

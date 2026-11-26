@@ -21,7 +21,8 @@ type's JSON Schema and type digest. Stage 6 adds the Core IR of
 `ratio::IR_VERSION`) and the core interpreter of [`ratio-eval`](../ratio-eval/README.md) as
 `ratio::interp` (`ratio::prepare`, `ratio::evaluate`, `ratio::Value` with its secrecy `Labels`,
 `ratio::Limits`). It also names the specification draft (`SPEC_DRAFT`) and the stage reached
-(`STAGE`, 6). The `Host` trait and the rest of the standard library join it in later stages; chapter 10 of the
+(`STAGE`, 6). The `Host` trait and the rest of the standard library
+join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`

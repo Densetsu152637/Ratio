@@ -1,0 +1,5 @@
+// expect: value 1.0
+// expect: steps 7
+fn main() -> Float {
+  text.similarity("abc", "abc")
+}

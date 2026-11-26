@@ -200,9 +200,11 @@ fn enum_parts(types: &mut Types, t: TypeId) -> Shape {
     let mut parts = Vec::new();
     for i in 0..count {
         if let Some(p) = types.payload(t, i) {
-            if let Ty::Record(fields) = types.get(p)
-                && fields.iter().any(|f| &*f.name == "kind")
-            {
+            let kind_field = match types.get(p) {
+                Ty::Record(fields) => fields.iter().any(|f| &*f.name == "kind"),
+                _ => false,
+            };
+            if kind_field {
                 return Shape::Not("an enum with a payload field named `kind`");
             }
             parts.push(p);
@@ -338,9 +340,7 @@ impl SchemaWriter<'_> {
             if !seen.insert(x) {
                 continue;
             }
-            if let Some(e) = self.enum_key(x)
-                && !enums.contains(&e)
-            {
+            if let Some(e) = self.enum_key(x).filter(|e| !enums.contains(e)) {
                 enums.push(e);
             }
             queue.extend(self.parts(x)?);
@@ -392,9 +392,10 @@ impl SchemaWriter<'_> {
             return Err(SchemaError::TooLarge);
         }
         self.grow(16)?;
-        if let Some(e) = self.enum_key(t)
-            && let Some((_, name)) = self.defs.iter().find(|(d, _)| *d == e)
-        {
+        let def = self
+            .enum_key(t)
+            .and_then(|e| self.defs.iter().find(|(d, _)| *d == e));
+        if let Some((_, name)) = def {
             return Ok(J::Obj(vec![("$ref", J::Str(format!("#/$defs/{name}")))]));
         }
         self.body(t, depth)

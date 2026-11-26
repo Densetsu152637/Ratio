@@ -131,6 +131,8 @@ pub(crate) struct Cx<'a> {
     pub heap: &'a Heap,
     pub loc: Loc,
     pub type_args: &'a [u32],
+    /// The evaluation's cancellation flag, for a long built-in to check as it works.
+    pub cancel: &'a CancelToken,
     /// Steps for work a built-in did before failing (a rendering refused as too long): the
     /// machine debits them whether the built-in returns or raises.
     pub debit: u64,
@@ -866,12 +868,14 @@ impl Machine {
         }
         let p = Arc::clone(&self.p);
         let heap = self.heap.clone();
+        let cancel = self.cancel.clone();
         let mut cx = Cx {
             p: &p,
             heap: &heap,
             loc,
             type_args,
             debit: 0,
+            cancel: &cancel,
         };
         match builtin.imp {
             Imp::Pure(f) => match f(&mut cx, args) {
@@ -924,12 +928,14 @@ impl Machine {
         };
         let p = Arc::clone(&self.p);
         let heap = self.heap.clone();
+        let cancel = self.cancel.clone();
         let mut cx = Cx {
             p: &p,
             heap: &heap,
             loc,
             type_args: &[],
             debit: 0,
+            cancel: &cancel,
         };
         match task.resume(&mut cx, input) {
             Ok(TaskStep::Call(f, args)) => {

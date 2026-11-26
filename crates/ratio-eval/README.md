@@ -95,8 +95,10 @@ being evaluated per call, for at most `call_depth` calls). `Budget` and `Cancell
 raises).
 
 `builtins::implemented()` lists the built-ins this stage carries, one or more per cost class:
-the pure functions of the checker's table, plus `text.repeat` (`output`) and `text.similarity`
-(`product`), which programs can call once the checker's table declares them.
+the pure functions of the checker's table, among them `text.repeat` (`output`: a negative count
+or a result over 16 MiB is refused before anything is built, with checked arithmetic) and
+`text.similarity` (`product`: two rows over the shorter text, charged to the heap, checking
+cancellation every checkpoint's worth of cells).
 
 ## Tests
 

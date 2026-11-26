@@ -274,12 +274,12 @@ pub harness takes_text(rules: Str) -> Untrusted<Str> {
 }
 
 pub harness offered(page: Untrusted<Str>, n: Int) -> Untrusted<Str> {
-  let p = agents.spawn(page, "std:tdd-fix")
+  let p = agents.spawn(page, "std:tdd_fix")
   page
 }
 
 @task
-harness task_entry(t: Task) -> Untrusted<Str> {
+harness task_entry(t: TaskInput) -> Untrusted<Str> {
   model.generate(prompt { task t.brief })
 }
 
@@ -542,6 +542,12 @@ fn a_dotted_load_name_takes_the_longest_package_and_ambiguity_is_incomplete() {
         readings,
         vec!["user:a.b@^1".to_owned(), "user:a@^1".to_owned()]
     );
+    // A bare name: the source first (`std`, then `user`), then the longest prefix.
+    let readings: Vec<String> = ratio_check::package_readings("a.b.c")
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(readings, vec!["std:a.b", "std:a", "user:a.b", "user:a"]);
     let main = r#"
 pub harness run(x: Untrusted<Str>) -> Untrusted<Str> {
   let h = meta.harness::<harness(Untrusted<Str>) -> Untrusted<Str>>("user:a.b.c")
@@ -619,4 +625,34 @@ fn regular_expressions_in_patterns_are_checked() {
             ratio_check::regex_problem(pattern)
         );
     }
+}
+
+#[test]
+fn a_load_whose_name_a_closure_computes_is_incomplete() {
+    let main = r#"
+type H = harness(Untrusted<Str>) -> Untrusted<Str>
+
+pub harness run(x: Untrusted<Str>) -> Untrusted<Str> {
+  let load = |name: Str| meta.harness::<H>(name)
+  let h = load("user:critics.strict")
+  h(x)
+}
+"#;
+    let critics = "pub harness strict(x: Untrusted<Str>) -> Untrusted<Str> {\n  let s = trust(x, because: \"rules\")\n  x\n}\n";
+    let registry = registry_with(&[
+        ("app", "main.ratio", main),
+        ("critics", "main.ratio", critics),
+    ]);
+    let builtin = MemoryRegistry::new();
+    let done = ratio_check::harnesses_check(
+        &registry,
+        &builtin,
+        &QualifiedName::parse("user:app").unwrap(),
+    );
+    assert!(done.summary.clean, "{:?}", done.checked.diagnostics);
+    assert_eq!(done.summary.loads, vec![None]);
+    assert!(
+        !done.complete,
+        "the load's name is computed, so its sites are unknown"
+    );
 }
