@@ -1,0 +1,21 @@
+// expect: value {"depths": [0, 1, 2], "caller": "outer", "title": "Inner", "name": "inner", "top": true}
+
+// `meta` reports the frame: its depth, its caller, its name and title.
+type Seen = { depth: Int, caller: Str, title: Str, name: Str }
+
+harness inner() -> Seen with { title: "Inner" } {
+  let f = meta.frame()
+  let caller = if let c = meta.caller() { c.name } else { "none" }
+  { depth: meta.depth(), caller: caller, title: f.title, name: f.name }
+}
+
+harness outer() -> (Int, Seen) {
+  (meta.depth(), inner())
+}
+
+fn main() -> { depths: [Int], caller: Str, title: Str, name: Str, top: Bool } {
+  let (d1, i) = outer()
+  let top = if let c = meta.caller() { false } else { true }
+  { depths: [meta.depth(), d1, i.depth], caller: i.caller, title: i.title,
+    name: i.name, top: top }
+}

@@ -25,6 +25,8 @@ use ratio_ir::{ArgFrom, AssignOp, BinOp, Loc, UnOp};
 
 use crate::builtins::{BUILTINS, Class, Imp, Resume, Task, TaskStep, output_size, pre_work};
 use crate::error::{Class as ErrClass, Kind, RtError, raise};
+use crate::frame::stack::{FrameStack, Session};
+use crate::frame::{FrameCtx, FrameKind, Request, SeesItem, Settings};
 use crate::heap::{Charge, Heap};
 use crate::labels::Labels;
 use crate::ops::{self, steps_for};
@@ -112,6 +114,11 @@ pub struct EffectRequest {
     /// The package's IR hash and the node index: the effect's site id.
     pub site: ([u8; 32], u32),
     pub loc: Loc,
+    /// The frame the effect is made in: its path, its scope, its ledgers.
+    pub frame: FrameCtx,
+    /// The branch path within the frame (`c12#0.b2/c30#1.b0`; empty outside `par` and
+    /// `race`).
+    pub branch: String,
 }
 
 /// Why [`Machine::run`] returned.
@@ -348,6 +355,31 @@ enum K {
         iter: Iter,
     },
     Effect,
+    /// A harness call between binding its parameters and opening its frame (evaluating its
+    /// declared configuration, when it has one).
+    Open(Box<Opening>),
+    /// The boundary of an open frame: closing it on every exit.
+    FrameClose,
+    /// A `with` block's configuration is being evaluated.
+    WithCfg(NodeId),
+    /// A call's overrides are being evaluated (after its arguments).
+    Override {
+        node: NodeId,
+        f: Option<Value>,
+        args: Vec<Option<Value>>,
+    },
+}
+
+/// What opening a harness frame needs, kept from the call.
+#[derive(Debug)]
+struct Opening {
+    func: u32,
+    kind: FrameKind,
+    loc: Loc,
+    site: u32,
+    overrides: Option<Value>,
+    /// Whether any argument is labelled (refused unless the frame sees `secrets`).
+    labelled: bool,
 }
 
 #[derive(Debug)]
@@ -379,12 +411,18 @@ pub struct Machine {
     outcome: Option<Outcome>,
     /// The effect being awaited.
     pending: Option<EffectRequest>,
+    /// The open frames (stage 10).
+    frames: FrameStack,
+    /// A call's overrides, for the harness it is about to enter.
+    pending_override: Option<Value>,
+    /// The site of the call being made (for frame paths).
+    site_hint: u32,
 }
 
 /// Why an evaluation could not start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartError {
-    /// The entry is not a function (or is a harness, which needs frames: stage 10).
+    /// The entry is not a function, prompt or harness.
     NotCallable,
     /// The arguments do not fit the entry's parameters.
     Arguments,
@@ -415,6 +453,24 @@ impl Machine {
         limits: Limits,
         cancel: CancelToken,
     ) -> Result<Machine, StartError> {
+        Machine::with_session(p, entry, args, limits, cancel, &Session::default())
+    }
+
+    /// An evaluation of `entry` with `args` in a session the host describes: its scope (what
+    /// every frame is attenuated from) and the root of its frame paths. A harness entry opens
+    /// its own frame from the session's scope, with its declared configuration.
+    ///
+    /// # Errors
+    ///
+    /// As [`Machine::new`].
+    pub fn with_session(
+        p: Arc<Prepared>,
+        entry: crate::prepare::Entry,
+        args: Vec<Value>,
+        limits: Limits,
+        cancel: CancelToken,
+        session: &Session,
+    ) -> Result<Machine, StartError> {
         let limits = limits.clamped();
         let item = p
             .items
@@ -424,9 +480,6 @@ impl Machine {
             return Err(StartError::NotCallable);
         };
         let f = &p.funcs[func as usize];
-        if f.kind == FuncKind::Harness {
-            return Err(StartError::NotCallable);
-        }
         if args.len() > f.params.len() {
             return Err(StartError::Arguments);
         }
@@ -448,10 +501,13 @@ impl Machine {
             cancel,
             outcome: None,
             pending: None,
+            frames: FrameStack::new(session, limits.steps),
+            pending_override: None,
+            site_hint: 0,
         };
         let mut given: Vec<Option<Value>> = args.into_iter().map(Some).collect();
         given.resize(m.p.funcs[func as usize].params.len(), None);
-        m.enter(func, given, &[], Loc::default());
+        m.enter_as(func, given, &[], Loc::default(), FrameKind::Entry);
         Ok(m)
     }
 
@@ -472,6 +528,12 @@ impl Machine {
         &self.p
     }
 
+    /// The frame the evaluation is in now.
+    #[must_use]
+    pub fn frame(&self) -> &FrameCtx {
+        &self.frames.top().ctx
+    }
+
     /// Answers the effect the last [`Suspend::Effect`] asked for.
     ///
     /// For `declassify`, the host answers only whether the user agreed (`true`): the
@@ -486,6 +548,17 @@ impl Machine {
                 (Some(req), Ok(answer)) if &*req.builtin == "declassify" => {
                     self.declassify(&req, &answer)
                 }
+                // A frame without `secrets` cannot run an effect whose result is labelled.
+                (Some(req), Ok(answer)) if self.refuses_secret(&answer) => Err(raise(
+                    &self.p,
+                    Kind::Denied("sees"),
+                    &format!(
+                        "`{}` returned a secret into a frame whose `sees` lacks `secrets`",
+                        req.builtin
+                    ),
+                    Labels::NONE,
+                    req.loc,
+                )),
                 (_, r) => r,
             };
             self.mode = match result {
@@ -583,14 +656,16 @@ impl Machine {
     /// Debits `n` steps, or raises `Budget { which: steps }` without debiting.
     fn charge(&mut self, n: u64, loc: Loc) -> Result<(), RtError> {
         let next = self.steps.saturating_add(n);
-        if next > self.limits.steps {
-            return Err(raise(
+        if next > self.frames.step_limit {
+            let mut e = raise(
                 &self.p,
                 Kind::Budget("steps"),
                 "the step limit was reached",
                 Labels::NONE,
                 loc,
-            ));
+            );
+            e.scope = self.frames.step_scope;
+            return Err(e);
         }
         self.steps = next;
         if self.steps >= self.next_checkpoint {
@@ -764,19 +839,21 @@ impl Machine {
 
     /// Enters function `func` with its arguments (`None` for a default).
     fn enter(&mut self, func: u32, args: Vec<Option<Value>>, captured: &[(u32, Value)], loc: Loc) {
+        self.enter_as(func, args, captured, loc, FrameKind::Harness);
+    }
+
+    /// Enters `func`; a harness opens a frame of `kind` once its parameters are bound.
+    fn enter_as(
+        &mut self,
+        func: u32,
+        args: Vec<Option<Value>>,
+        captured: &[(u32, Value)],
+        loc: Loc,
+        kind: FrameKind,
+    ) {
+        let overrides = self.pending_override.take();
         let p = Arc::clone(&self.p);
         let f = &p.funcs[func as usize];
-        if f.kind == FuncKind::Harness {
-            let e = raise(
-                &p,
-                Kind::Unsupported,
-                &format!("calling the harness `{}` needs frames (stage 10)", f.name),
-                Labels::NONE,
-                loc,
-            );
-            self.fail(e);
-            return;
-        }
         if self.depth >= self.limits.call_depth {
             let e = raise(
                 &p,
@@ -803,6 +880,20 @@ impl Machine {
         }
         self.envs.push(Env { slots });
         self.ctl.push(K::CallRet);
+        if f.kind == FuncKind::Harness {
+            let labelled = args
+                .iter()
+                .flatten()
+                .any(|v| crate::sink::check(v).is_err());
+            self.ctl.push(K::Open(Box::new(Opening {
+                func,
+                kind,
+                loc,
+                site: self.site_hint,
+                overrides,
+                labelled,
+            })));
+        }
         self.bind_params(func, 0, args, loc);
     }
 
@@ -832,7 +923,31 @@ impl Machine {
                 return;
             }
         }
-        self.mode = Mode::Eval(f.body);
+        self.start_body(func);
+    }
+
+    /// Runs `func`'s body; a harness first evaluates its declared configuration (with the
+    /// parameters bound) and opens its frame.
+    fn start_body(&mut self, func: u32) {
+        let p = Arc::clone(&self.p);
+        let f = &p.funcs[func as usize];
+        if f.kind != FuncKind::Harness {
+            self.mode = Mode::Eval(f.body);
+            return;
+        }
+        if let Some(c) = f.config {
+            // `K::Open` stays on the stack and receives the configuration.
+            self.mode = Mode::Eval(c);
+            return;
+        }
+        match self.ctl.pop() {
+            Some(K::Open(o)) => self.open_harness(&o, None),
+            _ => self.invalid(
+                "a harness call lost its frame",
+                Labels::NONE,
+                Loc::default(),
+            ),
+        }
     }
 
     /// Calls a function value with its arguments in parameter order.
@@ -982,6 +1097,7 @@ impl Machine {
             | PKind::Field(x, _)
             | PKind::Is(x, _, _)
             | PKind::Unary(_, x)
+            | PKind::ToolSet(x)
             | PKind::Raise(x) => (i == 0).then_some(*x),
             PKind::Return(x) | PKind::Break(x) => x.filter(|_| i == 0),
             PKind::List(items) => items.get(i).map(|(_, x)| *x),
@@ -1144,6 +1260,7 @@ impl Machine {
                 let Some(first) = xs.first() else {
                     return self.invalid("an empty race", Labels::NONE, loc);
                 };
+                self.frames.enter_branch(n.site);
                 self.level += 1;
                 self.ctl.push(K::Race {
                     node,
@@ -1156,6 +1273,7 @@ impl Machine {
                 let Some(first) = xs.first() else {
                     return self.finish(node, Vec::new());
                 };
+                self.frames.enter_branch(n.site);
                 self.level += 1;
                 self.ctl.push(K::Par {
                     node,
@@ -1164,6 +1282,11 @@ impl Machine {
                 });
                 self.mode = Mode::Eval(*first);
             }
+            PKind::With(config, _) => {
+                self.ctl.push(K::WithCfg(node));
+                self.mode = Mode::Eval(*config);
+            }
+            PKind::Override(call) => self.mode = Mode::Eval(*call),
             _ => match self.kid(node, 0) {
                 Some(first) => {
                     self.ctl.push(K::Collect {
@@ -1820,6 +1943,7 @@ impl Machine {
                 return self.fail(RtError {
                     value: v,
                     class: ErrClass::Catchable,
+                    scope: 0,
                 });
             }
             PKind::Return(_) => {
@@ -1835,10 +1959,11 @@ impl Machine {
             PKind::Par(_) => {
                 Value::new_tuple(&heap, vals).map_err(|f| fault(&p, f, Labels::NONE, loc))
             }
+            PKind::ToolSet(_) => Ok(vals.into_iter().next().unwrap_or_default()),
             PKind::Call {
                 callee,
                 order,
-                type_args,
+                config,
                 ..
             } => {
                 let mut vals = vals;
@@ -1852,6 +1977,82 @@ impl Machine {
                     _ => None,
                 };
                 let args = arrange(order, vals);
+                if let Some(c) = config {
+                    // The overrides are evaluated after the arguments, in the caller's frame.
+                    self.ctl.push(K::Override { node, f, args });
+                    self.mode = Mode::Eval(*c);
+                    return;
+                }
+                self.dispatch(node, f, args);
+                return;
+            }
+            PKind::Effect { name, order, .. } => {
+                let args = arrange(order, vals);
+                if crate::frame::meta::answers(name) {
+                    let limit = self.limits.heap;
+                    match crate::frame::meta::answer(&p, &heap, &self.frames, limit, name) {
+                        Ok(v) => self.mode = Mode::Ret(v),
+                        Err(f) => self.fault_at(f, Labels::NONE, loc),
+                    }
+                    return;
+                }
+                if let Some(item) = crate::frame::gate(name)
+                    && !self.frames.top().ctx.scope.sees.has(item)
+                {
+                    let e = raise(
+                        &p,
+                        Kind::Denied("sees"),
+                        &format!("this frame's `sees` lacks `{}`", item.name()),
+                        Labels::NONE,
+                        loc,
+                    );
+                    return self.fail(e);
+                }
+                self.frames.flush(self.steps);
+                let hash = p
+                    .hashes
+                    .get(loc.module as usize)
+                    .copied()
+                    .unwrap_or([0; 32]);
+                self.mode = Mode::Effect(EffectRequest {
+                    builtin: Arc::clone(name),
+                    args,
+                    site: (hash, n.site),
+                    loc,
+                    frame: self.frames.top().ctx.clone(),
+                    branch: self.frames.branch_path(),
+                });
+                return;
+            }
+            _ => Err(raise(
+                &p,
+                Kind::Invalid,
+                "a node the evaluator cannot finish",
+                Labels::NONE,
+                loc,
+            )),
+        };
+        match result {
+            Ok(v) => self.mode = Mode::Ret(v),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// Makes the call `node` describes, with its callee value (for a call of a value) and its
+    /// arguments in parameter order.
+    fn dispatch(&mut self, node: NodeId, f: Option<Value>, args: Vec<Option<Value>>) {
+        let p = Arc::clone(&self.p);
+        let n = p.node(node);
+        let loc = n.loc;
+        let PKind::Call {
+            callee, type_args, ..
+        } = &n.kind
+        else {
+            return self.invalid("a call node that is not a call", Labels::NONE, loc);
+        };
+        self.site_hint = n.site;
+        {
+            {
                 match callee {
                     PCallee::Item(i) => match &p.items[*i as usize].kind {
                         PItemKind::Func(func) => self.enter(*func, args, &[], loc),
@@ -1877,34 +2078,7 @@ impl Machine {
                         self.fail(e);
                     }
                 }
-                return;
             }
-            PKind::Effect { name, order, .. } => {
-                let args = arrange(order, vals);
-                let hash = p
-                    .hashes
-                    .get(loc.module as usize)
-                    .copied()
-                    .unwrap_or([0; 32]);
-                self.mode = Mode::Effect(EffectRequest {
-                    builtin: Arc::clone(name),
-                    args,
-                    site: (hash, n.site),
-                    loc,
-                });
-                return;
-            }
-            _ => Err(raise(
-                &p,
-                Kind::Invalid,
-                "a node the evaluator cannot finish",
-                Labels::NONE,
-                loc,
-            )),
-        };
-        match result {
-            Ok(v) => self.mode = Mode::Ret(v),
-            Err(e) => self.fail(e),
         }
     }
 
@@ -2158,6 +2332,20 @@ impl Machine {
                 self.depth = self.depth.saturating_sub(1);
                 self.mode = Mode::Ret(v);
             }
+            K::Open(o) => self.open_harness(&o, Some(&v)),
+            K::WithCfg(node) => self.open_block(node, &v),
+            K::Override { node, f, args } => {
+                self.pending_override = Some(v);
+                self.dispatch(node, f, args);
+            }
+            K::FrameClose => {
+                self.frames.close(self.steps);
+                if self.refuses_secret(&v) {
+                    let e = self.sees_refusal("a harness returned a secret");
+                    return self.fail(e);
+                }
+                self.mode = Mode::Ret(v);
+            }
             K::Entry { func, next, args } => {
                 let pat = p.funcs[func as usize]
                     .params
@@ -2199,22 +2387,24 @@ impl Machine {
                 let PKind::Par(xs) = &p.node(node).kind else {
                     return;
                 };
-                match xs.get(next as usize) {
-                    Some(x) => {
-                        self.level += 1;
-                        self.ctl.push(K::Par {
-                            node,
-                            next: next + 1,
-                            vals,
-                        });
-                        self.mode = Mode::Eval(*x);
-                    }
-                    None => self.finish(node, vals.into_vals()),
+                if let Some(x) = xs.get(next as usize) {
+                    self.level += 1;
+                    self.frames.set_branch(next);
+                    self.ctl.push(K::Par {
+                        node,
+                        next: next + 1,
+                        vals,
+                    });
+                    self.mode = Mode::Eval(*x);
+                } else {
+                    self.frames.leave_branch();
+                    self.finish(node, vals.into_vals());
                 }
             }
             K::Race { .. } => {
                 // The first branch to finish successfully wins; the rest never start.
                 self.level = self.level.saturating_sub(1);
+                self.frames.leave_branch();
                 self.mode = Mode::Ret(v);
             }
             K::Const(i) => {
@@ -2363,6 +2553,7 @@ impl Machine {
                     let e = RtError {
                         value,
                         class: ErrClass::Catchable,
+                        scope: 0,
                     };
                     return self.fail(e);
                 }
@@ -2650,11 +2841,20 @@ impl Machine {
                         return;
                     }
                 }
-                K::Par { .. } => self.level = self.level.saturating_sub(1),
+                K::Par { .. } => {
+                    self.level = self.level.saturating_sub(1);
+                    self.frames.leave_branch();
+                }
+                K::FrameClose => {
+                    let index = self.frames.index();
+                    self.frames.close(self.steps);
+                    return self.unwind_on(self.crossing(s, index));
+                }
                 K::Race { node, next, first } => {
                     self.level = self.level.saturating_sub(1);
                     if let Signal::Raise(e) = s {
                         if e.class != ErrClass::Catchable {
+                            self.frames.leave_branch();
                             return self.unwind_on(Signal::Raise(e));
                         }
                         // A failed branch: try the next; when all fail, raise the failure of
@@ -2664,20 +2864,22 @@ impl Machine {
                         let PKind::Race(xs) = &p.node(node).kind else {
                             return;
                         };
-                        match xs.get(next as usize) {
-                            Some(x) => {
-                                self.level += 1;
-                                self.ctl.push(K::Race {
-                                    node,
-                                    next: next + 1,
-                                    first: Some(first),
-                                });
-                                self.mode = Mode::Eval(*x);
-                            }
-                            None => self.fail(first),
+                        if let Some(x) = xs.get(next as usize) {
+                            self.level += 1;
+                            self.frames.set_branch(next);
+                            self.ctl.push(K::Race {
+                                node,
+                                next: next + 1,
+                                first: Some(first),
+                            });
+                            self.mode = Mode::Eval(*x);
+                        } else {
+                            self.frames.leave_branch();
+                            self.fail(first);
                         }
                         return;
                     }
+                    self.frames.leave_branch();
                 }
                 K::PromptRoot => {
                     self.prompts.pop();
@@ -2689,6 +2891,146 @@ impl Machine {
 
     fn unwind_on(&mut self, s: Signal) {
         self.mode = Mode::Unwind(s);
+    }
+
+    // ---- frames (stage 10) ----
+
+    /// Whether `v` holds a secret and the current frame's `sees` lacks `secrets`.
+    fn refuses_secret(&self, v: &Value) -> bool {
+        !self.frames.top().ctx.scope.sees.has(SeesItem::Secrets) && crate::sink::check(v).is_err()
+    }
+
+    fn sees_refusal(&self, what: &str) -> RtError {
+        raise(
+            &self.p,
+            Kind::Denied("sees"),
+            &format!("{what} into a frame whose `sees` lacks `secrets`"),
+            Labels::NONE,
+            Loc::default(),
+        )
+    }
+
+    /// A signal leaving the frame that was `index` (now closed): a `Budget` of that frame's
+    /// own becomes catchable by its caller (chapter 03), and a secret the caller may not see
+    /// is refused.
+    fn crossing(&self, s: Signal, index: u32) -> Signal {
+        match s {
+            Signal::Raise(mut e) => {
+                if e.class == ErrClass::Budget && e.scope == index && index > 0 {
+                    e.class = ErrClass::Catchable;
+                    e.scope = 0;
+                }
+                if e.class == ErrClass::Catchable && self.refuses_secret(&e.value) {
+                    Signal::Raise(self.sees_refusal("an error carrying a secret crossed"))
+                } else {
+                    Signal::Raise(e)
+                }
+            }
+            Signal::Return(v) if self.refuses_secret(&v) => {
+                Signal::Raise(self.sees_refusal("a secret was returned"))
+            }
+            Signal::Break(v) if self.refuses_secret(&v) => {
+                Signal::Raise(self.sees_refusal("a secret was carried out of a block"))
+            }
+            s => s,
+        }
+    }
+
+    /// Opens a frame of `kind` with `request`, then runs `body` in it; a refusal raises in
+    /// the caller's frame.
+    fn open_frame(
+        &mut self,
+        kind: FrameKind,
+        (request, settings): (Request, Settings),
+        name: &Arc<str>,
+        site: u32,
+        loc: Loc,
+    ) -> bool {
+        match self
+            .frames
+            .open(self.steps, kind, &request, settings, name, site, loc)
+        {
+            Ok(()) => true,
+            Err(o) => {
+                let mut e = if o.refusal.depth {
+                    raise(
+                        &self.p,
+                        Kind::Budget("depth"),
+                        &o.refusal.message,
+                        Labels::NONE,
+                        loc,
+                    )
+                } else {
+                    raise(
+                        &self.p,
+                        Kind::Denied("attenuation"),
+                        &o.refusal.message,
+                        Labels::NONE,
+                        loc,
+                    )
+                };
+                if o.refusal.depth {
+                    e.scope = o.scope;
+                }
+                self.fail(e);
+                false
+            }
+        }
+    }
+
+    /// Reads a configuration value (`None`: nothing configured), or raises `Invalid`.
+    fn config(&mut self, v: Option<&Value>, loc: Loc) -> Option<(Request, Settings)> {
+        let Some(v) = v else {
+            return Some((Request::default(), Settings::default()));
+        };
+        match crate::frame::read_config(&self.p, v) {
+            Ok(c) => Some(c),
+            Err(m) => {
+                let e = raise(&self.p, Kind::Invalid, &m, v.labels, loc);
+                self.fail(e);
+                None
+            }
+        }
+    }
+
+    /// Opens a harness's frame (the declared configuration evaluated, when it has one) and
+    /// runs its body.
+    fn open_harness(&mut self, o: &Opening, declared: Option<&Value>) {
+        let p = Arc::clone(&self.p);
+        let f = &p.funcs[o.func as usize];
+        let Some((req, settings)) = self.config(declared, o.loc) else {
+            return;
+        };
+        let Some((over, over_settings)) = self.config(o.overrides.as_ref(), o.loc) else {
+            return;
+        };
+        let merged = (Request::merge(req, over), over_settings.over(&settings));
+        if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc) {
+            return;
+        }
+        if o.labelled && !self.frames.top().ctx.scope.sees.has(SeesItem::Secrets) {
+            self.frames.close(self.steps);
+            let e = self.sees_refusal("a secret argument was passed");
+            return self.fail(e);
+        }
+        self.ctl.push(K::FrameClose);
+        self.mode = Mode::Eval(f.body);
+    }
+
+    /// Opens a `with` block's frame and runs its body.
+    fn open_block(&mut self, node: NodeId, cfg: &Value) {
+        let p = Arc::clone(&self.p);
+        let n = p.node(node);
+        let PKind::With(_, body) = n.kind else {
+            return self.invalid("a `with` frame on something else", Labels::NONE, n.loc);
+        };
+        let Some(config) = self.config(Some(cfg), n.loc) else {
+            return;
+        };
+        if self.open_frame(FrameKind::Block, config, &Arc::from("with"), n.site, n.loc) {
+            self.ctl.push(K::FrameClose);
+            self.mode = Mode::Eval(body);
+        }
     }
 }
 

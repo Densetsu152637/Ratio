@@ -1,0 +1,10 @@
+// expect: value 2
+
+// A harness call is a function call that opens its own frame.
+harness helper(n: Int) -> Int {
+  n + 1
+}
+
+fn main() -> Int {
+  helper(1)
+}

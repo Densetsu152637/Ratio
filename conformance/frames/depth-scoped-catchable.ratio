@@ -1,0 +1,16 @@
+// expect: value "caught depth"
+
+// A `with` block's own limit is a scope: its `Budget` passes every `catch` inside the block
+// and is caught by the code that opened it.
+harness down(n: Int) -> Int {
+  try { down(n + 1) } catch e { -1 }
+}
+
+fn main() -> Str {
+  try {
+    with { limits: { depth: 2 } } { down(0) }
+    "not caught"
+  } catch e {
+    if e.kind is Budget { "caught depth" } else { "other" }
+  }
+}

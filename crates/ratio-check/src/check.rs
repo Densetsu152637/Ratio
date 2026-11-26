@@ -36,9 +36,24 @@ pub(crate) struct StdModule {
 /// The built-in sources, parsed once per check.
 pub(crate) fn std_modules(internal: &mut Vec<String>) -> Vec<StdModule> {
     let mut all = Vec::with_capacity(builtins::MODULES.len() + 1);
-    let sources =
-        std::iter::once(("prelude", builtins::PRELUDE)).chain(builtins::MODULES.iter().copied());
-    for (name, source) in sources {
+    // A module may be given in more than one table (the frames block adds to `control`,
+    // `meta` and the prelude): its sources are joined, in table order.
+    let mut sources: Vec<(&'static str, String)> = Vec::new();
+    let tables = std::iter::once(("prelude", builtins::PRELUDE))
+        .chain(builtins::MODULES.iter().copied())
+        .chain(std::iter::once(("prelude", builtins::FRAME_PRELUDE)))
+        .chain(builtins::FRAME_MODULES.iter().copied());
+    for (name, source) in tables {
+        match sources.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, text)) => {
+                text.push('\n');
+                text.push_str(source);
+            }
+            None => sources.push((name, source.to_owned())),
+        }
+    }
+    for (name, source) in &sources {
+        let name = *name;
         let parsed = ratio_syntax::parse(source);
         for d in &parsed.diagnostics {
             internal.push(format!("built-in `{name}`: {d:?}"));

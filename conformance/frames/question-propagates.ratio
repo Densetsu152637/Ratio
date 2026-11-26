@@ -1,0 +1,14 @@
+// expect: runtime-error Question
+
+// An uncaught question reaches the entry, which hands it to the user or the dispatcher.
+harness clarify() -> Str {
+  raise question("which file?")
+}
+
+harness worker() -> Str {
+  clarify()
+}
+
+fn main() -> Str {
+  worker()
+}

@@ -15,9 +15,9 @@ use crate::value::{Json, Value};
 pub enum Class {
     /// Any `try` may catch it.
     Catchable,
-    /// A budget of the turn ran out: no code inside the turn may catch it (chapter 03,
-    /// "Budgets cannot be swallowed where they run out"). Scoped budgets (`with { budget }`,
-    /// stage 10) will carry the scope that may catch them.
+    /// A budget ran out: no code inside the scope whose budget it was may catch it (chapter
+    /// 03, "Budgets cannot be swallowed where they run out"). A frame's own budget becomes
+    /// catchable by the code that opened the frame; the turn's never does.
     Budget,
     /// Cancellation passes through every `catch`; `defer` blocks observe it.
     Cancelled,
@@ -34,6 +34,10 @@ pub enum Class {
 pub struct RtError {
     pub(crate) value: Value,
     pub(crate) class: Class,
+    /// For a `Budget` error, the frame (its index in the evaluation's stack of frames) whose
+    /// own budget ran out: the error becomes catchable once it leaves that frame. 0 is the
+    /// turn's, which no code inside the turn may catch.
+    pub(crate) scope: u32,
 }
 
 impl RtError {
@@ -218,6 +222,7 @@ pub(crate) fn raise_with(
     RtError {
         value: error_value(p, kind, message, data, loc),
         class: kind.class(),
+        scope: 0,
     }
 }
 

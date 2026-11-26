@@ -29,6 +29,7 @@ pub mod builtins;
 mod driver;
 mod drop;
 mod error;
+pub mod frame;
 mod heap;
 mod json;
 mod labels;
@@ -71,6 +72,24 @@ pub fn evaluate(
     cancel: CancelToken,
 ) -> Result<Evaluation, StartError> {
     Machine::new(prepared, entry, args, limits, cancel).map(Evaluation::new)
+}
+
+/// Starts an evaluation of `entry` with `args` in a session the host describes (its scope and
+/// the root of its frame paths; stage 10). An entry that is a harness opens its own frame from
+/// the session's scope.
+///
+/// # Errors
+///
+/// As [`evaluate`].
+pub fn evaluate_in(
+    prepared: Arc<Prepared>,
+    entry: Entry,
+    args: Vec<Value>,
+    limits: Limits,
+    cancel: CancelToken,
+    session: &frame::Session,
+) -> Result<Evaluation, StartError> {
+    Machine::with_session(prepared, entry, args, limits, cancel, session).map(Evaluation::new)
 }
 
 /// The value as compact JSON, without its type (as the conformance runner prints results):

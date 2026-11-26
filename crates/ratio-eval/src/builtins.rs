@@ -268,6 +268,8 @@ table! {
     "math.abs", Const, s_none, Imp::Pure(math_abs);
     "math.min", Const, s_none, Imp::Pure(math_min);
     "math.max", Const, s_none, Imp::Pure(math_max);
+    // ---- frames (stage 10) ----
+    "question", Const, s_none, Imp::Pure(crate::frame::meta::question);
 }
 
 /// The table index of the built-in a program calls `name`.
