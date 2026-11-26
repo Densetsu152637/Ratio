@@ -1,0 +1,11 @@
+// arg: "haystack"
+// expect: value ["true", "false", "true"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.contains(s, "st")),
+    text.show(text.contains(s, "x")),
+    text.show(text.contains("abc", "b")),
+  ]
+}

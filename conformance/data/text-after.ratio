@@ -1,0 +1,11 @@
+// arg: "k=v=w"
+// expect: value ["v=w", "", "b"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.after(s, "=")),
+    text.show(text.after(s, "#")),
+    text.show(text.after("a.b", ".")),
+  ]
+}

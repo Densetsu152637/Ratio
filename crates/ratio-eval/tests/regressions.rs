@@ -63,6 +63,7 @@ fn run_no_host(p: &Arc<Prepared>, name: &str, args: Vec<Value>, limits: Limits) 
     loop {
         match m.run() {
             Suspend::Yield => {}
+            Suspend::Wait(w) => w.wait(),
             Suspend::Effect(req) => panic!("`{name}` reached the host with `{}`", req.builtin),
             Suspend::Done(o) => return o,
         }
@@ -365,6 +366,7 @@ fn main(n: Int) -> Int {
     let out = loop {
         match m.run() {
             Suspend::Yield => {}
+            Suspend::Wait(w) => w.wait(),
             Suspend::Effect(_) => panic!("no effects"),
             Suspend::Done(o) => break o,
         }

@@ -1,0 +1,30 @@
+// arg: "2024-05-06"
+// arg: "(?<!a)b"
+// expect: value ["05/2024-06", "2024-05-06", "2024$-05-06", "Invalid", "true"]
+// expect: labels secret secret secret none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str, p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(re.replace("(\\d+)-(\\d+)", s, "$2/$1")),
+    text.show(re.replace("x", s, "y")),
+    text.show(re.replace("(?P<y>\\d\{4\})", s, "$\{y\}$$")),
+    text.show(fails(|| re.replace(p, s, ""))),
+    text.show(told(|| re.replace(p, "x", ""))),
+  ]
+}

@@ -1,0 +1,12 @@
+// arg: "x"
+// expect: value ["x,y", "ab", ""]
+// expect: labels secret none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  let empty: [Str] = []
+  [
+    text.show(text.join([s, "y"], sep: ",")),
+    text.show(text.join(["a", "b"])),
+    text.show(text.join(empty, sep: "-")),
+  ]
+}

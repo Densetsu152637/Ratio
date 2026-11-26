@@ -1,0 +1,11 @@
+// arg: "a.b*"
+// expect: value ["a\\.b\\*", "true", ""]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(re.escape(s)),
+    text.show(re.is_match(re.escape(s), "xa.b*y")),
+    text.show(re.escape("")),
+  ]
+}

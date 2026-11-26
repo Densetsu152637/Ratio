@@ -92,6 +92,7 @@ fn drive(
     loop {
         match m.run() {
             Suspend::Yield => {}
+            Suspend::Wait(w) => w.wait(),
             Suspend::Effect(req) => {
                 check(&req);
                 m.resume_effect(answer());

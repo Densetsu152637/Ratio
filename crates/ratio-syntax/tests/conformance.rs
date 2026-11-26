@@ -26,7 +26,8 @@
 //! // tree: (module - [(item [] [] - (fn f [] [] - (block [(expr (bin + (int 1) (int 2)))])))])
 //! ```
 //!
-//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `steps` (stage 6), `fixture` or, from
+//! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `steps` (stage 6),
+//! `labels` and `arg:` lines (stage 7, `conformance/data/`), `fixture` or, from
 //! stage 3, `resolve-ok`, `resolve-error` and `resolve-warning` (run by `ratio-names`'s own
 //! runner) and, from stage 4, `check-ok` and `check-warning` (with `check-error`, run by
 //! `ratio-check`'s runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
@@ -104,7 +105,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
                 }
                 [
                     "ok" | "value" | "check-ok" | "check-error" | "check-warning" | "runtime-error"
-                    | "resolve-ok" | "resolve-error" | "resolve-warning" | "steps",
+                    | "resolve-ok" | "resolve-error" | "resolve-warning" | "steps" | "labels",
                     ..,
                 ] => case.other_stage = true,
                 _ => {
@@ -118,7 +119,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             token_lines.push(tokens.trim());
         } else if let Some(tree) = rest.strip_prefix("tree: ") {
             tree_lines.push(tree.trim());
-        } else if rest.starts_with("fixture: ") {
+        } else if rest.starts_with("fixture: ") || rest.starts_with("arg: ") {
             case.other_stage = true;
         } else if let Some(option) = rest.strip_prefix("option: ") {
             let option = option.trim();
@@ -138,7 +139,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
             }
         } else {
             return Err(format!(
-                "{}: unknown header directive `{line}` (expect:, tokens:, tree:, option: or fixture:)",
+                "{}: unknown header directive `{line}` (expect:, tokens:, tree:, option:, fixture: or arg:)",
                 path.display()
             ));
         }
@@ -319,18 +320,4 @@ fn the_conformance_files_pass() {
             "no conformance file expects {code}"
         );
     }
-}
-
-#[test]
-fn the_builtins_drift_check_is_still_a_stub() {
-    // Chapter 10 generates `builtins.txt` from chapter 06 of the specification and fails CI when the
-    // checked-in file differs. No stage before 7 has built-ins, so the file holds comments only;
-    // when the generator lands, this test becomes the drift check.
-    let text =
-        fs::read_to_string(support::conformance_root().join("builtins.txt")).expect("builtins.txt");
-    assert!(
-        text.lines()
-            .all(|line| line.trim().is_empty() || line.starts_with('#')),
-        "builtins.txt has entries but no generator checks them yet"
-    );
 }

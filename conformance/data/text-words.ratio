@@ -1,0 +1,10 @@
+// arg: " a  b\tc\n"
+// expect: value ["[\"a\",\"b\",\"c\"]", "[]"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.words(s)),
+    text.show(text.words("")),
+  ]
+}

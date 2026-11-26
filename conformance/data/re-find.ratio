@@ -1,0 +1,33 @@
+// arg: "ab 12 cd 345"
+// arg: "a{2,1}"
+// expect: value ["12", "3", "5", "none", "3", "Invalid", "true"]
+// expect: labels secret secret secret secret none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str, p: Str) -> [Untrusted<Str>] {
+  let m = re.find("\\d+", s)
+  [
+    text.show(m?.text),
+    text.show(m?.start),
+    text.show(m?.end),
+    text.show(re.find("x", s)),
+    text.show(re.find("é+", "aéé")?.end),
+    text.show(fails(|| re.find(p, s))),
+    text.show(told(|| re.find(p, "x"))),
+  ]
+}

@@ -20,8 +20,9 @@ type's JSON Schema and type digest. Stage 6 adds the Core IR of
 [`ratio-ir`](../ratio-ir/README.md) as `ratio::ir` (`ratio::lower`, the IR hash of each package,
 `ratio::IR_VERSION`) and the core interpreter of [`ratio-eval`](../ratio-eval/README.md) as
 `ratio::interp` (`ratio::prepare`, `ratio::evaluate`, `ratio::Value` with its secrecy `Labels`,
-`ratio::Limits`). It also names the specification draft (`SPEC_DRAFT`) and the stage reached
-(`STAGE`, 6). The `Host` trait and the rest of the standard library
+`ratio::Limits`). Stage 7 adds the `text` and `re` built-ins and the offload pool
+(`ratio::interp::Pool`, `Evaluation::offload_to`). It also names the specification draft
+(`SPEC_DRAFT`) and the stage reached (`STAGE`, 7). The `Host` trait and the rest of the standard library
 join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 
@@ -33,5 +34,13 @@ the pure check the host repeats against its own record of a parent frame, and
 [`ratio-eval`](../ratio-eval/README.md#frames)).
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`
-must match `spec/README.md`, and every conformance directory must name, in
-`conformance/spec-map.txt`, chapters and headings that exist.
+must match `spec/README.md`; every conformance directory must name, in
+`conformance/spec-map.txt`, chapters and headings that exist; `conformance/builtins.txt` must
+equal what it generates from chapter 06's built-in tables (name, signature, Needs, and the cost
+class of each pure `data` built-in); and each implemented `text` and `re` built-in must have its
+chapter 06 class (the `re` built-ins are charged `product`, a proposed erratum). After changing
+chapter 06, regenerate the file with:
+
+```sh
+RATIO_BLESS=1 cargo test -p ratio-lang --test spec builtins
+```

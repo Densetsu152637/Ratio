@@ -1,0 +1,29 @@
+// arg: "a-b--c"
+// expect: value ["3", "1", "2", "Invalid", "true"]
+// expect: labels secret secret none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.count(s, "-")),
+    text.show(text.count(s, "--")),
+    text.show(text.count("aaaa", "aa")),
+    text.show(fails(|| text.count(s, ""))),
+    text.show(told(|| text.count(s, ""))),
+  ]
+}
