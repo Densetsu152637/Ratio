@@ -49,6 +49,9 @@ pub use ratio_eval::{
     evaluate, prepare,
 };
 
+/// This library's version (the `ratio-lang` package's), as `ratio --version` prints it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
 /// The specification and the implementation live in the same repository, so they move together:

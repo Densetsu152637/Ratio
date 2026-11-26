@@ -11,6 +11,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratio-cli"
+version = "0.1.0"
+dependencies = [
+ "ratio-lang",
+]
+
+[[package]]
 name = "ratio-eval"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "ratio-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The `ratio` command: checks .ratio sources and packages (parse, names, types, taint)"
+
+[[bin]]
+name = "ratio"
+path = "src/main.rs"
+
+[dependencies]
+ratio-lang = { path = "../ratio", version = "0.1.0" }
+
+[lints]
+workspace = true
