@@ -1,0 +1,14 @@
+// arg: "héllo"
+// expect: value ["él", "llo", "ll", "", "héllo", "bc"]
+// expect: labels secret secret secret secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.slice(s, 1, end: 3)),
+    text.show(text.slice(s, -3)),
+    text.show(text.slice(s, 2, end: -1)),
+    text.show(text.slice(s, 4, end: 2)),
+    text.show(text.slice(s, -10, end: 100)),
+    text.show(text.slice("abc", 1)),
+  ]
+}

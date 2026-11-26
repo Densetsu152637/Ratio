@@ -1,0 +1,11 @@
+// arg: "prefix-x"
+// expect: value ["x", "none", "b"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.strip_prefix(s, "prefix-")),
+    text.show(text.strip_prefix(s, "no")),
+    text.show(text.strip_prefix("ab", "a")),
+  ]
+}

@@ -1,0 +1,13 @@
+// arg: " -42 "
+// expect: value ["-42", "none", "7", "none", "none"]
+// expect: labels secret none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.parse_int(s)),
+    text.show(text.parse_int("4.2")),
+    text.show(text.parse_int("+7")),
+    text.show(text.parse_int("99999999999999999999")),
+    text.show(text.parse_int("")),
+  ]
+}

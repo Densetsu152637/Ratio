@@ -1,0 +1,11 @@
+// arg: "aXbXc"
+// expect: value ["3", "none", "1"]
+// expect: labels secret secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.rfind(s, "X")),
+    text.show(text.rfind(s, "Y")),
+    text.show(text.rfind("éé", "é")),
+  ]
+}

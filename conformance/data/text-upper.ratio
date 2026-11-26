@@ -1,0 +1,10 @@
+// arg: "straße"
+// expect: value ["STRASSE", "ABC"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.upper(s)),
+    text.show(text.upper("abc")),
+  ]
+}

@@ -1,0 +1,11 @@
+// arg: "  a\n    b\n\n  c\n"
+// expect: value ["a\n  b\n\nc\n", "x", "a\n\nb"]
+// expect: labels secret none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.dedent(s)),
+    text.show(text.dedent("x")),
+    text.show(text.dedent("  a\n   \n  b")),
+  ]
+}

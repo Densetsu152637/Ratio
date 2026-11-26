@@ -1,0 +1,13 @@
+// arg: "1.5e3"
+// expect: value ["1500.0", "0.5", "none", "none", "2.0"]
+// expect: labels secret none none none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.parse_float(s)),
+    text.show(text.parse_float(".5")),
+    text.show(text.parse_float("inf")),
+    text.show(text.parse_float("1e")),
+    text.show(text.parse_float(" 2 ")),
+  ]
+}

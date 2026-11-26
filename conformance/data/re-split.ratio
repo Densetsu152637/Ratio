@@ -1,0 +1,30 @@
+// arg: "a, b,c"
+// arg: "a**"
+// expect: value ["[\"a\",\"b\",\"c\"]", "[\"a, b,c\"]", "[\"\"]", "Invalid", "true"]
+// expect: labels secret secret none none secret
+
+// The kind of error `f` raises ("ok" when it returns); whether its message was told (the
+// Bool carries the message's labels).
+fn fails<T>(f: fn() -> T) -> Str {
+  match result(f) {
+    Ok { .. } => "ok",
+    Err { error } => if error.kind is Invalid { "Invalid" } else { "other" },
+  }
+}
+
+fn told<T>(f: fn() -> T) -> Bool {
+  match result(f) {
+    Ok { .. } => false,
+    Err { error } => error.message != "",
+  }
+}
+
+fn main(s: Str, p: Str) -> [Untrusted<Str>] {
+  [
+    text.show(re.split(",\\s*", s)),
+    text.show(re.split("x", s)),
+    text.show(re.split(",", "")),
+    text.show(fails(|| re.split(p, s))),
+    text.show(told(|| re.split(p, "x"))),
+  ]
+}

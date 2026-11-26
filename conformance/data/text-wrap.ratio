@@ -1,0 +1,12 @@
+// arg: "the quick brown fox jumps"
+// expect: value ["the quick\nbrown fox\njumps", "the quick brown fox jumps", "a\nb\n\nc", "abcdef"]
+// expect: labels secret secret none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.wrap(s, width: 10)),
+    text.show(text.wrap(s)),
+    text.show(text.wrap("a b\n\nc", width: 1)),
+    text.show(text.wrap("abcdef", width: 3)),
+  ]
+}
