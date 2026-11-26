@@ -336,6 +336,18 @@ impl Checker<'_> {
             }
             ItemKind::State(decl) => {
                 let mut b = Body::new(module, Ret::Forbidden);
+                // A package declares one `state` (chapter 03, "Persistent state").
+                if self
+                    .package_state_item(module)
+                    .is_some_and(|first| first != r)
+                {
+                    self.report(
+                        r.origin,
+                        Code::Duplicate,
+                        item.span,
+                        "the package declares `state` already: a package has one state".to_owned(),
+                    );
+                }
                 let ty = self.state_type(r);
                 self.require_schema(&b, ty, decl.ty.span, "the `state` type");
                 self.expect(&mut b, &decl.value, ty);

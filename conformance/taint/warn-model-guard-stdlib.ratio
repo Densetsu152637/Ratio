@@ -1,10 +1,14 @@
-// expect: check-warning C0039 at 22:5
-// expect: check-warning C0039 at 29:13
-// expect: check-warning C0039 at 30:13
-// expect: check-warning C0039 at 31:13
-// expect: check-warning C0039 at 32:5
+// expect: check-warning C0039 at 26:5
 // expect: check-warning C0039 at 33:13
-// expect: check-warning C0039 at 34:15
+// expect: check-warning C0039 at 34:13
+// expect: check-warning C0039 at 35:13
+// expect: check-warning C0039 at 36:5
+// expect: check-warning C0039 at 37:13
+// expect: check-warning C0039 at 38:15
+// expect: check-warning C0039 at 56:5
+// expect: check-warning C0039 at 57:5
+// expect: check-warning C0039 at 58:13
+// expect: check-warning C0039 at 66:5
 
 // The guarded-effect lint over the effectful modules: an install, an authored harness, a
 // delegation, a new session, a memory write, a merge and a script, each guarded only by what
@@ -39,5 +43,26 @@ fn install_if_approved(p: Prompt) -> () {
   let a = advice(p)
   if a.install and session.request_approval("Install the notes skill?") {
     tools.install_extension(skill, "https://example.com/skills/notes.git")
+  }
+}
+
+// Through function values: a closure bound to a local, the same passed to `retry`, and a
+// built-in named as a value are still the effects they make.
+fn through_values(p: Prompt, source: Untrusted<Str>) -> () {
+  let a = advice(p)
+  let go = || tools.install_extension(skill, "https://example.com/skills/notes.git")
+  let author = meta.author
+  if a.install {
+    go()
+    retry(go)
+    let v = author("helper", source, "written through a value")
+  }
+}
+
+// A function value whose origin is unknown (a parameter) may do anything.
+fn through_parameter(p: Prompt, act: fn() -> ()) -> () {
+  let a = advice(p)
+  if a.install {
+    act()
   }
 }

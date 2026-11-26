@@ -315,6 +315,21 @@ impl Checker<'_> {
                     };
                     self.types.bind_var(v, text);
                 }
+                Bound::Countable => {
+                    if !self.countable(resolved) {
+                        let shown = self.types.display(resolved);
+                        self.report(
+                            b.origin(),
+                            Code::Mismatch,
+                            span,
+                            format!(
+                                "`{callee}` counts text, a `Prompt` or a `Conversation`, not \
+                                 `{shown}`"
+                            ),
+                        );
+                        self.types.bind_var(v, TypeId::ERROR);
+                    }
+                }
                 Bound::Num => {
                     if !matches!(
                         self.types.get(resolved),
@@ -1450,6 +1465,16 @@ impl Checker<'_> {
     }
 
     /// Checks an explicit type argument against its parameter's bound.
+    /// Whether `t` is chapter 06's `Countable`: text (trusted or not), a prompt, or a
+    /// conversation. A secret is none of them.
+    fn countable(&mut self, t: TypeId) -> bool {
+        matches!(
+            self.types.get(t),
+            Ty::Error | Ty::Never | Ty::Handle(crate::types::Handle::Conversation)
+        ) || self.types.subtype(&mut self.memo, t, TypeId::UNTRUSTED_STR)
+            || self.types.subtype(&mut self.memo, t, TypeId::PROMPT)
+    }
+
     fn explicit_bound(
         &mut self,
         b: &Body,
@@ -1465,6 +1490,7 @@ impl Checker<'_> {
                 self.types.get(t),
                 Ty::Int | Ty::Float | Ty::Duration | Ty::Money | Ty::Error
             ),
+            Bound::Countable => self.countable(t),
         };
         if ok {
             return t;

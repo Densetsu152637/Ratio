@@ -542,3 +542,118 @@ fn the_examples_of_chapter_09_check_but_for_later_stages_and_listed_errata() {
         );
     }
 }
+
+/// Whether `s` holds a character that would control a terminal or reorder text: a C0 control
+/// other than tab and newline, DEL, a C1 control, or a bidirectional override or isolate.
+fn hostile(s: &str) -> bool {
+    s.chars().any(|c| {
+        (c < ' ' && c != '\t' && c != '\n')
+            || ('\u{7f}'..='\u{9f}').contains(&c)
+            || ('\u{202a}'..='\u{202e}').contains(&c)
+            || ('\u{2066}'..='\u{2069}').contains(&c)
+    })
+}
+
+#[test]
+fn control_characters_in_a_package_never_reach_the_terminal() {
+    let dir = scratch("controls");
+    // In a source line shown under a diagnostic: OSC 52 (write the clipboard) and a bidi override.
+    fs::write(
+        dir.join("line.ratio"),
+        "fn f() -> Str { 1 } // \u{1b}]52;c;aGk=\u{7} \u{202e}\u{9b}2J\n",
+    )
+    .unwrap();
+    // In an import path, which the loader quotes.
+    fs::write(
+        dir.join("import.ratio"),
+        "import \"./\u{1b}[2J\u{1b}]0;owned\u{7}.ratio\" as x\nfn g() -> Int { 1 }\n",
+    )
+    .unwrap();
+    for name in ["line.ratio", "import.ratio"] {
+        let path = dir.join(name).to_string_lossy().into_owned();
+        let o = ratio(&["check", &path]);
+        assert_eq!(o.status.code(), Some(1), "{name}: {}", stdout(&o));
+        assert!(!hostile(&stdout(&o)), "{name}: {:?}", stdout(&o));
+        assert!(!hostile(&stderr(&o)), "{name}: {:?}", stderr(&o));
+        assert!(stdout(&o).contains(r"\u{1b}"), "{name}: {:?}", stdout(&o));
+        // JSON escapes its own.
+        let o = ratio(&["check", "--json", &path]);
+        assert!(!stdout(&o).chars().any(|c| c < ' ' && c != '\n'), "{name}");
+    }
+    // In a path on the command line, echoed on standard error.
+    let o = ratio(&["check", "missing\u{1b}]8;;http://x\u{7}.ratio"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!hostile(&stderr(&o)), "{:?}", stderr(&o));
+    let o = ratio(&["frobnicate\u{1b}[2J"]);
+    assert!(!hostile(&stderr(&o)), "{:?}", stderr(&o));
+}
+
+/// A file name holding an escape sequence (Unix allows it; Windows does not).
+#[cfg(unix)]
+#[test]
+fn control_characters_in_a_file_name_never_reach_the_terminal() {
+    let dir = scratch("control-name");
+    let file = dir.join("a\u{1b}[2J\u{1b}]52;c;aGk=\u{7}.ratio");
+    fs::write(&file, "fn f() -> Str { 1 }\n").unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let o = ratio(&["check", &path]);
+    assert!(!hostile(&stdout(&o)), "{:?}", stdout(&o));
+    assert!(!hostile(&stderr(&o)), "{:?}", stderr(&o));
+}
+
+/// Junctions (and, where the account may make them, symbolic links) are refused on Windows: a
+/// junction inside the package, and a package root that is one. `mklink /J` needs no privilege;
+/// if `cmd` cannot make one the case is skipped with a note (check by hand: make a junction
+/// `pkg\lib` to a folder outside and import `./lib/x.ratio`; `ratio check pkg` must report a link).
+#[cfg(windows)]
+#[test]
+fn junctions_and_reparse_points_are_refused() {
+    let dir = scratch("junctions");
+    let outside = dir.join("outside");
+    let pkg = dir.join("pkg");
+    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(outside.join("x.ratio"), "pub fn f() -> Int { 1 }\n").unwrap();
+    fs::write(
+        pkg.join("main.ratio"),
+        "import \"./lib/x.ratio\" as x\nfn g() -> Int { x.f() }\n",
+    )
+    .unwrap();
+    let junction = |link: &Path, target: &Path| {
+        Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if !junction(&pkg.join("lib"), &outside) {
+        eprintln!("skipped: `mklink /J` is not available here");
+        return;
+    }
+    let path = pkg.to_string_lossy().into_owned();
+    let o = ratio(&["check", "--json", &path]);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    assert!(
+        diags(&o)
+            .iter()
+            .any(|d| d.code.starts_with('N') && d.message.contains("link")),
+        "{}",
+        stdout(&o)
+    );
+    // A package root that is a junction is refused before anything is read.
+    assert!(junction(&dir.join("alias"), &pkg));
+    let alias = dir.join("alias").to_string_lossy().into_owned();
+    let o = ratio(&["check", &alias]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    // A file symbolic link, where this account may make one.
+    if std::os::windows::fs::symlink_file(outside.join("x.ratio"), pkg.join("y.ratio")).is_ok() {
+        fs::write(
+            pkg.join("main.ratio"),
+            "import \"./y.ratio\" as y\nfn g() -> Int { y.f() }\n",
+        )
+        .unwrap();
+        let o = ratio(&["check", "--json", &path]);
+        assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    }
+}

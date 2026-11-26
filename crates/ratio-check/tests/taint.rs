@@ -576,8 +576,8 @@ fn every_annotated_built_in_is_refused_as_a_value_or_covered() {
         }
     }
     assert_eq!(
-        refused, 9,
-        "trust, as_task, declassify, session.ask, meta.harness, state.get, state.set,          state.update, state.reset"
+        refused, 11,
+        "trust, as_task, declassify, session.ask, meta.harness, the four state built-ins,          model.rank, think.consensus"
     );
     // The `@schema(T)` rule at a value's type.
     let (_, checked) = check("fn f() -> Int {\n  let e: fn(Image) -> Json = json.encode\n  1\n}\n");

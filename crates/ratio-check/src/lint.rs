@@ -34,7 +34,7 @@
 //! until nothing changes, at most [`MAX_ROUNDS`] times; past that every local of the item counts
 //! as derived. Each round is linear in the item, so the lint is linear in the program.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ratio_names::ModuleId;
 use ratio_syntax::Span;
@@ -73,6 +73,12 @@ struct St<'r> {
     /// Secrets passed where the callee cannot see their label (errors, not silenced).
     errors: Vec<(Span, String)>,
     depth: usize,
+    /// What the calls written in each enclosing closure body may do, innermost last.
+    acc: Vec<Effects>,
+    /// What each closure written in the item may do when called, by its span.
+    closures: HashMap<(usize, usize), Effects>,
+    /// What each local bound to a known function value may do when called.
+    fn_locals: HashMap<LocalId, Effects>,
 }
 
 impl Checker<'_> {
@@ -112,6 +118,9 @@ impl Checker<'_> {
                     warnings: Vec::new(),
                     errors: Vec::new(),
                     depth: 0,
+                    acc: Vec::new(),
+                    closures: HashMap::new(),
+                    fn_locals: HashMap::new(),
                 };
                 let mut settled = false;
                 for _ in 0..MAX_ROUNDS {
@@ -230,6 +239,7 @@ impl Checker<'_> {
                     if self.ex(st, value) {
                         Self::bind(st, pattern.span);
                     }
+                    self.bind_fn_value(st, pattern.span, value);
                     false
                 }
                 StmtKind::Var { name, value, .. } => {
@@ -595,7 +605,10 @@ impl Checker<'_> {
                 for p in params {
                     Self::bind(st, p.pattern.span);
                 }
+                st.acc.push(Effects::NONE);
                 self.ex(st, body);
+                let made = st.acc.pop().unwrap_or(Effects::ALL);
+                st.closures.insert((e.span.start, e.span.end), made);
                 false
             }
             ExprKind::FnExpr { params, body, .. } => {
@@ -604,10 +617,103 @@ impl Checker<'_> {
                         self.ex(st, d);
                     }
                 }
+                st.acc.push(Effects::NONE);
                 self.lint_block(st, body);
+                let made = st.acc.pop().unwrap_or(Effects::ALL);
+                st.closures.insert((e.span.start, e.span.end), made);
                 false
             }
             ExprKind::Prompt(body) => self.prompt(st, body),
+        }
+    }
+
+    /// What calling the function value `e` may do: a closure's calls, a declaration's
+    /// summary, a local bound to one of those; anything for a harness value or a function
+    /// value whose origin is unknown (a parameter, a field); `None` for a value that is not a
+    /// function.
+    fn fn_value_effects(&self, st: &St<'_>, e: &Expr) -> Option<Effects> {
+        match &e.kind {
+            ExprKind::Paren(inner) => return self.fn_value_effects(st, inner),
+            ExprKind::Closure { .. } | ExprKind::FnExpr { .. } => {
+                return Some(
+                    st.closures
+                        .get(&(e.span.start, e.span.end))
+                        .copied()
+                        .unwrap_or(Effects::ALL),
+                );
+            }
+            _ => {}
+        }
+        let table = &self.tables[st.module.0];
+        let ty = table.types.get(&Key::from(e.span))?;
+        if !matches!(self.types.get(*ty), Ty::Fn(..) | Ty::Harness(..)) {
+            return None;
+        }
+        if matches!(self.types.get(*ty), Ty::Harness(..)) {
+            return Some(Effects::ALL);
+        }
+        let known = match table.res.get(&Key::from(e.span)) {
+            Some(Res::Local(l)) => st.fn_locals.get(l).copied(),
+            Some(Res::Item(r)) => Some(match (r.origin, self.sig(*r)) {
+                (Origin::Std(_), ItemSig::Fn(sig)) => sig.traits.effects,
+                (Origin::Module(m), _) => st
+                    .results
+                    .summaries
+                    .get(&(m, r.index))
+                    .map_or(Effects::ALL, |s| s.effects),
+                _ => Effects::ALL,
+            }),
+            _ => None,
+        };
+        Some(known.unwrap_or(Effects::ALL))
+    }
+
+    /// The arguments a call may call: those given for a parameter of function or harness type
+    /// (`retry`'s `f`, not `meta.signature`'s `h: H`), or every argument of a call of a function
+    /// value, whose parameters are not known by name.
+    fn callback_args<'e>(
+        &self,
+        info: Option<&crate::tables::CallInfo>,
+        args: &'e [ast::Arg],
+    ) -> Vec<&'e ast::Arg> {
+        let Some(r) = info.and_then(|i| i.callee) else {
+            return args.iter().collect();
+        };
+        let (Some(info), ItemSig::Fn(sig)) = (info, self.sig(r)) else {
+            return args.iter().collect();
+        };
+        sig.params
+            .iter()
+            .zip(&info.args)
+            .filter_map(|(param, source)| {
+                let ArgSource::Arg(k) = source else {
+                    return None;
+                };
+                let mut ty = param.ty;
+                if let Ty::Option(inner) = self.types.get(ty) {
+                    ty = *inner;
+                }
+                matches!(self.types.get(ty), Ty::Fn(..) | Ty::Harness(..))
+                    .then(|| args.get(*k))
+                    .flatten()
+            })
+            .collect()
+    }
+
+    /// Records what a local bound by `let` to a function value may do when called.
+    fn bind_fn_value(&self, st: &mut St<'_>, pattern: Span, value: &Expr) {
+        let Some(effects) = self.fn_value_effects(st, value) else {
+            return;
+        };
+        let from = st.binds.partition_point(|(s, _, _)| *s < pattern.start);
+        let inside: Vec<LocalId> = st.binds[from..]
+            .iter()
+            .take_while(|(start, _, _)| *start <= pattern.end)
+            .filter(|(_, end, _)| *end <= pattern.end)
+            .map(|(_, _, l)| *l)
+            .collect();
+        if let [local] = inside.as_slice() {
+            st.fn_locals.insert(*local, effects);
         }
     }
 
@@ -657,11 +763,26 @@ impl Checker<'_> {
                 _ => (Effects::NONE, true),
             }
         } else {
-            let harness = callee
-                .and_then(|c| self.tables[st.module.0].types.get(&Key::from(c.span)))
-                .is_some_and(|t| matches!(self.types.get(*t), Ty::Harness(..)));
-            (if harness { Effects::ALL } else { Effects::NONE }, true)
+            // A call of a function value: what the value is known to do (a closure or a
+            // declaration bound to a local), else anything.
+            let effects = callee
+                .and_then(|c| self.fn_value_effects(st, c))
+                .unwrap_or(Effects::NONE);
+            (effects, true)
         };
+        // Function values passed to a call run when it calls them (`retry(go)`): what they may
+        // do counts here. A closure written at the call is linted in place instead.
+        let mut effects = effects;
+        for a in self.callback_args(info, args) {
+            if !crate::body::is_closure(&a.value)
+                && let Some(more) = self.fn_value_effects(st, &a.value)
+            {
+                effects = effects.union(more);
+            }
+        }
+        if let Some(top) = st.acc.last_mut() {
+            *top = top.union(effects);
+        }
         if st.collect
             && effects.intersects(Effects::GUARDED)
             && !st.guards.is_empty()
@@ -670,7 +791,7 @@ impl Checker<'_> {
             let kinds: Vec<&str> = effects
                 .names()
                 .into_iter()
-                .filter(|n| !matches!(*n, "model" | "other"))
+                .filter(|n| !matches!(*n, "model" | "other" | "secrecy_sink"))
                 .collect();
             st.warnings.push((
                 span,

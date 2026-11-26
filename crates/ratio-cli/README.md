@@ -49,7 +49,14 @@ conformance/types/err-state-undeclared.ratio:7:11: error C0001: `state.get` need
 ```
 
 The first line is `file:line:col: severity CODE: message`; the source line and the caret under
-the span are drawn as the syntax crate's `Diagnostic::render` draws them. A summary
+the span are drawn as the syntax crate's `Diagnostic::render` draws them. Everything printed
+for a person (file names, messages, source lines, and the paths and reasons on standard error)
+comes from the package, so a character that could control the terminal or reorder text is
+written as an escape instead: C0 controls other than tab, DEL, C1 controls (U+0080 to U+009F)
+and the bidirectional embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069)
+appear as `\u{1b}`, `\u{202e}`, …, and the caret is placed under the escaped line. An OSC 52
+clipboard write, a screen clear, a hyperlink or a Trojan Source reordering in a package
+therefore never reaches the terminal. JSON escapes control characters itself. A summary
 (`1 package: 1 error, 0 warnings`) goes to standard error. With `--json`, each diagnostic is one
 JSON object on its own line, and nothing else is printed to standard output:
 
@@ -83,13 +90,15 @@ crates:
   checked on the handle; on Unix the opened handle must be the device and inode the walk saw,
   with a single link (a hard link is refused).
 
-**Residuals.** The standard library has no `openat`, so a folder swapped for a link between the
-walk and the open is not detected; and on Windows it has no stable way to count a file's links,
-so hard links are not refused there. The folders *above* the package root are the person's
-choice on the command line and are not checked (a temporary folder under a linked `/tmp` still
-works); the root itself must not be a link. These matter for a host serving model-written or
-third-party packages; Imperium's registry (chapter 10, stage 18) keeps the trait's duties with
-the platform's own calls.
+**Residuals, accepted for a local developer tool.** The standard library has no `openat`, so a
+folder swapped for a link between the walk and the open is not detected; on Windows it has no
+stable way to count a file's links, so hard links are not refused there; and the folders
+*above* the package root are the person's choice on the command line and are not checked (a
+temporary folder under a linked `/tmp` still works), though the root itself must not be a link.
+The command checks files its user chose on their own machine, and it runs nothing, so these
+were reviewed (stage C, security review round 1) and accepted for it. They would not be for a
+host serving model-written or third-party packages: Imperium's registry (chapter 10, stage 18)
+keeps the trait's duties with the platform's own calls.
 
 ## Tests
 
@@ -98,7 +107,9 @@ the platform's own calls.
 human form with its caret and the `--json` form byte for byte; every file of
 `conformance/types/` and `conformance/taint/`, whose headers must match what the command
 reports; folder entries (`main.ratio`, the one `meta` file, several); a path import that leaves
-the root; packages importing each other and a `std:` import; links and hard links (Unix); a file
-over the size limit; and the eight example packages of chapter 09, which must check clean but
+the root; packages importing each other and a `std:` import; links and hard links (Unix);
+junctions and file links (Windows, made with `mklink /J`; skipped with a note where that is not
+possible); a file over the size limit; escape sequences and bidi controls in a source line, an
+import path, a path argument and (Unix) a file name, which never reach the terminal; and the eight example packages of chapter 09, which must check clean but
 for the built-ins stages 8 and 9 add and the listed errata and lint warnings.
 `src/render.rs` has unit tests of the two output forms and the JSON escaping.

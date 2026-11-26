@@ -296,6 +296,10 @@ pub struct BuiltinRules {
     pub generic: bool,
     /// Its parameters in order, by name as a program writes it, and whether each has a default.
     pub params: Vec<(String, bool)>,
+    /// Each parameter's type as the table writes it.
+    pub param_types: Vec<String>,
+    /// The tools its `@tool(...)` attributes name.
+    pub tools: Vec<String>,
     /// Why it may not be used as a function value, if it may not.
     pub refused_as_value: Option<&'static str>,
 }
@@ -307,6 +311,10 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
     let mut internal = Vec::new();
     let mut out = Vec::new();
     for m in check::std_modules(&mut internal).iter().skip(1) {
+        let source = builtins::MODULES
+            .iter()
+            .find(|(n, _)| *n == m.name)
+            .map_or("", |(_, s)| *s);
         for item in &m.module.items {
             let ratio_syntax::ast::ItemKind::Fn(decl) = &item.kind else {
                 continue;
@@ -333,7 +341,18 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
                         )
                     })
                     .collect(),
+                param_types: decl
+                    .params
+                    .iter()
+                    .map(|p| {
+                        source
+                            .get(p.ty.span.start..p.ty.span.end)
+                            .unwrap_or("")
+                            .to_owned()
+                    })
+                    .collect(),
                 refused_as_value: traits.value_refusal(generic),
+                tools: traits.tools.clone(),
             });
         }
     }

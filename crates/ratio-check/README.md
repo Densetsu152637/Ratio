@@ -163,7 +163,12 @@ crate rather than a second one because its rules change which programs type (the
   user's answers, locals assigned under derived guards, closure parameters, caught errors); a
   trusted conjunct (`if v.pass and approved`) is a guard of its own. Each item is walked until
   its derived locals settle, at most `MAX_ROUNDS` times, then every local counts as derived.
-  `@allow(model_guard)` on the item silences it (statements take no attributes). `declassify`
+  `@allow(model_guard)` on the item silences it (statements take no attributes). A call of a
+  function value counts as what the value may do: a closure's calls, a declaration's summary or
+  a built-in's effects, carried through `let` bindings (`let go = || tools.install_extension(…)`,
+  `let f = meta.author`), and anything at all for a value of unknown origin (a parameter, a
+  harness). So does a function value passed for a callback parameter (`retry(go)`); a closure
+  written at the call is linted in place. `declassify`
   is `@user` (the person approves it), so its result is as derived as its argument: the
   person approves removing the label, not where the value came from.
 - **Schemas and digests** ([`src/schema.rs`](src/schema.rs) documents the canonical forms).
@@ -194,6 +199,12 @@ crate rather than a second one because its rules change which programs type (the
   names a registered package in it (`package_readings` lists the candidates in that order). A
   computed name, a name no reading resolves, or one that two readings in the chosen source
   resolve makes it `complete: false`. `test` blocks against a scripted host need the interpreter.
+
+**Open item: prompts drop the static label.** A statically secret value in a prompt section
+(`prompt p(x: Secret<Str>) { data x }`, then `model.generate(p(t))`) checks clean: prompts keep
+labels at run time instead (a stage 5 design point), and the refusal of a labelled prompt sent
+to a hosted model is the host's sink guard, which stages 11a and 12 build. Until then nothing
+refuses it.
 
 What stage 6 must carry at run time: the trust sites (kind, reason, site) to emit `ratio_trust`
 events with the value's digest; secrecy labels on every value, since the checker's static
@@ -270,7 +281,7 @@ effect rule). How the attributes were decided:
 - **`state`.** `state.get`, `set`, `update` and `reset` work at the package's declared `state`
   type, found in its modules; never inferred or given (a turbofish is `C0015`, no declaration
   `C0001`), and they may only be called, since a function value's expected type would choose
-  the type (`C0036`).
+  the type (`C0036`). A second `state` declaration in a package is `C0030`.
 - **Generics.** No signature turns untrusted text into trusted text: results built from a model
   are `Untrusted<T>` (`model.extract`, `think.steps`), and `model.classify`'s label is
   `Classified<Untrusted<E>>`, the trusted scalar chapter 06 promises for a unit-only enum and
@@ -278,6 +289,18 @@ effect rule). How the attributes were decided:
   A type parameter that only omitted, defaulted parameters mention is `()` at that call
   (`log.info("done")`'s `data: T?`), so nothing is guessed. Type parameters named `S` mean
   text, so `think.tree_search` and its kin use `N` for their states.
+- **Generic sinks.** A generic built-in that sends a value of its type parameter to a model,
+  a tool, a person or the network is `@secrecy_sink`, so a secret type argument is refused at
+  the call: `model.rank` (its items, through `show`, to the ranking model) and
+  `think.consensus` (its answers, through `show`, to a judge). The audit of every generic
+  built-in found no other: the combinators (`retry`, `par_map`, `think.vote`, the searches,
+  …) hand their values only to the program's own callbacks, whose bodies are checked where
+  they are written; `cached` and `once` keep labels in the journal (chapter 03); `eval.timer`
+  and `trace.span` record a name and a time; `log.*` and `trace.event` are redacted, not
+  refused (chapter 03); `model.generate_as`, `chat_as`, `extract`, `classify` and
+  `think.steps` take their type parameter only as an output schema; `rand.*`, `meta.signature`
+  and the `data` built-ins compute on the machine. `model.count_tokens` takes chapter 06's
+  `Countable` only (text, a `Prompt` or a `Conversation`), as the bound `Countable`.
 - **Optional callbacks** (`model.stream`'s and `model.loop`'s `until`) are declared
   `fn(..) -> Bool = none`, since chapter 06's `(fn(..) -> Bool)?` is an option of a
   one-element tuple; a closure where an optional function is expected is shaped by it.
@@ -369,6 +392,10 @@ refuses nesting beyond 12.
   lines, all of the checker's diagnostics in any order. Every code has a file.
 - `tests/signatures.rs`: the table against `conformance/builtins.txt`, by module, with the
   modules stages 8 and 9 add listed as pending.
+- `tests/attributes.rs`: `@pure` exactly where the Needs column says `pure` (or a callback
+  combinator's `as f`), `@tool(...)` exactly its `tool:` names (`mcp__*` for the MCP rows),
+  every parameter type as chapter 06 writes it but for a listed set of documented differences,
+  and `@local` and `@secrecy_sink` exactly the reviewed lists pinned in the test.
 - `conformance/taint/ok-module-*.ratio` use each module of stage C as a harness would;
   `err-secret-stdlib-sinks`, `sink-stdlib-trusted-params` and `warn-model-guard-stdlib` refuse
   secrets at its sinks, untrusted text at its trusted parameters, and show its guarded effects;

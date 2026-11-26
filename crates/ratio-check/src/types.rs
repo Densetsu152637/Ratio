@@ -80,6 +80,8 @@ pub enum Bound {
     Text,
     /// `Num`: `Int`, `Float`, `Duration` or `Money`.
     Num,
+    /// `Countable` (`model.count_tokens`): text, a prompt or a conversation.
+    Countable,
 }
 
 /// A field of a record type.

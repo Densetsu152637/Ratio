@@ -7,7 +7,8 @@
 //! making effects, so a signature added without the attribute fails closed (it is refused in
 //! constants, and counts as an effect of an unknown kind). Two type-parameter names are bounds,
 //! as in chapter 06: `S` stands for any text (`Str` or `Untrusted<Str>`) and `Num` for `Int`,
-//! `Float`, `Duration` or `Money`. Default values are written for the reader only; the checker
+//! `Float`, `Duration` or `Money`; a third, `Countable`, for text, a `Prompt` or a
+//! `Conversation` (`model.count_tokens`, chapter 06's `Countable`). Default values are written for the reader only; the checker
 //! uses only whether a parameter has one.
 //!
 //! Further attributes say what stage 5 needs to know ([`Traits`]): `@audited(kind)` marks the
@@ -203,9 +204,9 @@ fn once<T>(key: Str, f: fn() -> T) -> T {}
 @effect(model) fn judge(candidate: Untrusted<Str>, rubric: Str, opts: GenOpts = {}) -> Untrusted<Judgement> {}
 @effect(model) fn score(candidate: Untrusted<Str>, criteria: [Criterion], opts: GenOpts = {}) -> Untrusted<Scores> {}
 @effect(model) fn compare(a: Untrusted<Str>, b: Untrusted<Str>, criteria: Str, swap: Bool = true, opts: GenOpts = {}) -> Untrusted<Preference> {}
-@effect(model) fn rank<T>(items: [T], show: fn(T) -> Untrusted<Str>, criteria: Str, method: RankMethod = listwise, opts: GenOpts = {}) -> [Scored<T>] {}
+@effect(model) @secrecy_sink fn rank<T>(items: [T], show: fn(T) -> Untrusted<Str>, criteria: Str, method: RankMethod = listwise, opts: GenOpts = {}) -> [Scored<T>] {}
 @effect(model) fn embed(texts: [Untrusted<Str>], model: ModelRef? = none) -> [Vector] {}
-@local fn count_tokens<C>(x: C, model: ModelRef? = none) -> TokenCount {}
+@local fn count_tokens<Countable>(x: Countable, model: ModelRef? = none) -> TokenCount {}
 @local fn window(model: ModelRef? = none) -> Int? {}
 @pure fn render(p: Prompt, model: ModelRef? = none) -> Transcript {}
 @pure fn prompt_hash(p: Prompt) -> Str {}
@@ -436,7 +437,7 @@ fn span<T>(name: Str, f: fn() -> T) -> T {}
 @pure fn vote<T>(candidates: [T], key: fn(T) -> Untrusted<Str>) -> Vote<T> {}
 @pure fn self_consistency<T>(n: Int, sample: fn() -> T, key: fn(T) -> Untrusted<Str>, parallel: Bool = true, early_stop: Bool = false) -> Vote<T> {}
 @pure fn best_of<T>(n: Int, sample: fn() -> T, score: fn(T) -> Float, parallel: Bool = true, early_stop: Bool = false, good_enough: Float? = none) -> Scored<T> {}
-@effect(model) fn consensus<T>(answers: [T], method: ConsensusMethod = majority, show: fn(T) -> Untrusted<Str> = text.show, opts: GenOpts = {}) -> Consensus<T> {}
+@effect(model) @secrecy_sink fn consensus<T>(answers: [T], method: ConsensusMethod = majority, show: fn(T) -> Untrusted<Str> = text.show, opts: GenOpts = {}) -> Consensus<T> {}
 @effect(model) fn reconcile(answers: [Untrusted<Str>], question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str> {}
 @pure fn debate(question: Untrusted<Str>, sides: [fn(DebateTurn) -> Untrusted<Str>], judge: fn(DebateRecord) -> Untrusted<Judgement>, rounds: Int = 2) -> DebateResult {}
 @pure fn tree_search<N>(root: N, expand: fn(N) -> [N], score: fn(N) -> Float, is_goal: fn(N) -> Bool, strategy: SearchStrategy = best_first, beam: Int? = none, max_nodes: Int = 64, max_depth: Int = 6) -> SearchResult<N> {}
@@ -691,6 +692,7 @@ pub(crate) fn bound(name: &str) -> Bound {
     match name {
         "S" => Bound::Text,
         "Num" => Bound::Num,
+        "Countable" => Bound::Countable,
         _ => Bound::None,
     }
 }

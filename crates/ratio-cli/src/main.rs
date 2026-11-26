@@ -79,7 +79,7 @@ fn run(args: &[String]) -> u8 {
         "lint" => not_yet("lint", "stage L"),
         "run" => not_yet("run", "a later stage"),
         other => {
-            eprintln!("ratio: unknown command `{other}`\n");
+            eprintln!("ratio: unknown command `{}`\n", render::clean(other));
             eprint!("{USAGE_TEXT}");
             USAGE
         }
@@ -108,7 +108,7 @@ fn help(topic: Option<&str>) -> u8 {
             CLEAN
         }
         Some(other) => {
-            eprintln!("ratio: no help for `{other}`\n");
+            eprintln!("ratio: no help for `{}`\n", render::clean(other));
             eprint!("{USAGE_TEXT}");
             USAGE
         }
@@ -134,7 +134,7 @@ fn check_command(args: &[String]) -> u8 {
                 return CLEAN;
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
-                eprintln!("ratio check: unknown option `{flag}`\n");
+                eprintln!("ratio check: unknown option `{}`\n", render::clean(flag));
                 eprint!("{CHECK_TEXT}");
                 return USAGE;
             }
@@ -152,7 +152,11 @@ fn check_command(args: &[String]) -> u8 {
         match check::target(p) {
             Ok(t) => targets.push(t),
             Err(problem) => {
-                eprintln!("ratio check: {}: {}", problem.path, problem.reason);
+                eprintln!(
+                    "ratio check: {}: {}",
+                    render::clean(&problem.path),
+                    render::clean(&problem.reason)
+                );
                 status = USAGE;
             }
         }
@@ -178,7 +182,10 @@ fn check_command(args: &[String]) -> u8 {
     }
     let _ = out.flush();
     for problem in &internal {
-        eprintln!("ratio check: internal error in the checker's built-in table: {problem}");
+        eprintln!(
+            "ratio check: internal error in the checker's built-in table: {}",
+            render::clean(problem)
+        );
     }
     if !json && !targets.is_empty() {
         eprintln!(

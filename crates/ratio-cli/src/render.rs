@@ -1,6 +1,11 @@
 //! How diagnostics are printed: for a person, `file:line:col: severity CODE: message` and the
 //! source line with carets under the span (as `ratio_syntax::Diagnostic::render` draws them);
 //! for tools, one JSON object per line.
+//!
+//! Everything a person reads comes from the package (file names, messages quoting source,
+//! source lines), so it passes through [`clean`] first: a terminal control sequence (OSC 52
+//! writing the clipboard, a screen clear, a hyperlink) or a bidirectional override (Trojan
+//! Source) is shown as an escape, never sent to the terminal. JSON escapes its own.
 
 use std::fmt::Write as _;
 
@@ -9,15 +14,22 @@ use crate::check::Finding;
 /// The diagnostic for a person.
 pub fn human(f: &Finding) -> String {
     let mut out = String::new();
+    let file = clean(&f.file);
     match f.span {
         Some(s) => {
-            let _ = write!(out, "{}:{}:{}: ", f.file, s.line, s.col);
+            let _ = write!(out, "{file}:{}:{}: ", s.line, s.col);
         }
         None => {
-            let _ = write!(out, "{}: ", f.file);
+            let _ = write!(out, "{file}: ");
         }
     }
-    let _ = writeln!(out, "{} {}: {}", f.severity.word(), f.code, f.message);
+    let _ = writeln!(
+        out,
+        "{} {}: {}",
+        f.severity.word(),
+        clean(&f.code),
+        clean(&f.message)
+    );
     if let (Some(span), Some(source)) = (f.span, &f.source) {
         out.push_str(&caret(span, source));
     }
@@ -38,22 +50,68 @@ fn caret(span: ratio::Span, source: &str) -> String {
     let text = text.strip_suffix('\r').unwrap_or(text);
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let col = usize::try_from(span.col.max(1)).unwrap_or(1);
-    let pad: String = text
-        .chars()
-        .take(col - 1)
-        .map(|c| if c == '\t' { '\t' } else { ' ' })
-        .collect();
-    let width = if span.end_line == span.line {
+    // The pad and the carets follow the cleaned line: an escaped character is as wide as its
+    // escape.
+    let mut pad = String::new();
+    for c in text.chars().take(col - 1) {
+        if c == '\t' {
+            pad.push('\t');
+        } else {
+            pad.push_str(&" ".repeat(shown_width(c)));
+        }
+    }
+    let count = if span.end_line == span.line {
         usize::try_from(span.end_col.saturating_sub(span.col)).unwrap_or(1)
     } else {
         text.chars().count().saturating_sub(col - 1)
     };
+    let width: usize = text
+        .chars()
+        .skip(col - 1)
+        .take(count)
+        .map(shown_width)
+        .sum::<usize>()
+        + count.saturating_sub(text.chars().count().saturating_sub(col - 1));
     let line_no = span.line.max(1).to_string();
     let gutter = " ".repeat(line_no.len());
     format!(
-        "{line_no} | {text}\n{gutter} | {pad}{}\n",
+        "{line_no} | {}\n{gutter} | {pad}{}\n",
+        clean(text),
         "^".repeat(width.max(1))
     )
+}
+
+/// Whether `c` would control the terminal or reorder the text around it: a C0 control other
+/// than tab, DEL, a C1 control, or a bidirectional embedding, override or isolate.
+fn hostile(c: char) -> bool {
+    matches!(c, '\u{0}'..='\u{8}' | '\u{a}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// How many columns `c` takes once cleaned.
+fn shown_width(c: char) -> usize {
+    if hostile(c) {
+        escape(c).chars().count()
+    } else {
+        1
+    }
+}
+
+fn escape(c: char) -> String {
+    format!("\\u{{{:x}}}", u32::from(c))
+}
+
+/// `s` for a terminal: each [`hostile`] character written as `\u{..}`.
+pub fn clean(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if hostile(c) {
+            out.push_str(&escape(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// The diagnostic as one line of JSON: `file`, `line`, `column`, `end_line`, `end_column`
@@ -130,12 +188,39 @@ mod tests {
     fn a_person_sees_the_position_the_line_and_a_caret() {
         assert_eq!(
             human(&finding(Some(span()))),
-            "a/b.ratio:2:3: error C0004: expected `Str`, found \"Int\"\n\n2 |   1\n  |   ^\n"
+            "a/b.ratio:2:3: error C0004: expected `Str`, found \"Int\"\\u{a}\n2 |   1\n  |   ^\n"
         );
         assert_eq!(
             human(&finding(None)),
-            "a/b.ratio: error C0004: expected `Str`, found \"Int\"\n\n"
+            "a/b.ratio: error C0004: expected `Str`, found \"Int\"\\u{a}\n"
         );
+    }
+
+    #[test]
+    fn control_characters_are_shown_escaped_and_the_caret_follows() {
+        let mut f = finding(Some(ratio::Span {
+            start: 8,
+            end: 9,
+            line: 1,
+            col: 9,
+            end_line: 1,
+            end_col: 10,
+        }));
+        f.file = "a\u{1b}]52;c;eA==\u{7}.ratio".to_owned();
+        f.message = "bad \u{202e}name\u{9b}".to_owned();
+        f.source = Some("// \u{1b}[2J x y\n".to_owned());
+        let shown = human(&f);
+        assert!(!shown.chars().any(|c| c != '\n' && hostile(c)), "{shown:?}");
+        // The caret sits under `x`: 3 columns, the 6 of `\u{1b}`, then `[2J ` (4).
+        assert_eq!(
+            shown,
+            format!(
+                "a\\u{{1b}}]52;c;eA==\\u{{7}}.ratio:1:9: error C0004: bad \\u{{202e}}name\\u{{9b}}\n\
+                 1 | // \\u{{1b}}[2J x y\n  | {}^\n",
+                " ".repeat(13)
+            )
+        );
+        assert_eq!(clean("tab\tok"), "tab\tok");
     }
 
     #[test]

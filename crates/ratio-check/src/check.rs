@@ -1046,9 +1046,15 @@ impl<'a> Checker<'a> {
     /// The declared `state` type of the package `module` belongs to (chapter 03, "Persistent
     /// state": a package declares at most one), if it declares one in a checked module.
     pub(crate) fn package_state(&mut self, module: ModuleId) -> Option<TypeId> {
-        let package = self.loaded.modules[module.0].package.clone();
-        let found = self.loaded.modules.iter().enumerate().find_map(|(m, lm)| {
-            if lm.package != package || !self.checked[m] {
+        let found = self.package_state_item(module)?;
+        Some(self.state_type(found))
+    }
+
+    /// The first `state` declaration of the package `module` belongs to, in module order.
+    pub(crate) fn package_state_item(&self, module: ModuleId) -> Option<ItemRef> {
+        let package = &self.loaded.modules[module.0].package;
+        self.loaded.modules.iter().enumerate().find_map(|(m, lm)| {
+            if lm.package != *package || !self.checked[m] {
                 return None;
             }
             let index = lm
@@ -1060,8 +1066,7 @@ impl<'a> Checker<'a> {
                 origin: Origin::Module(ModuleId(m)),
                 index,
             })
-        })?;
-        Some(self.state_type(found))
+        })
     }
 
     /// A standard module by name: its built-in source, or `Missing` without one.
