@@ -97,6 +97,11 @@ fn everything(h: &ScriptedHost) {
     .reply("hello", Labels::NONE);
 }
 
+/// Recording options with a test session's redaction key.
+fn opts() -> RecordOptions {
+    RecordOptions::new([7; 32]).expect("a key")
+}
+
 fn host(setup: Setup, jitter: u64) -> Arc<ScriptedHost> {
     let h = Arc::new(ScriptedHost::new("turn", Scope::session()));
     setup(&h);
@@ -153,8 +158,8 @@ fn replay(
             Arc::clone(&inner) as Arc<dyn Host>,
             text,
             ReplayOptions {
-                lenient: false,
                 permute,
+                ..ReplayOptions::default()
             },
         )
         .map_err(|e| e.to_string())?,
@@ -213,7 +218,7 @@ fn conformance_replay_files() {
         let setup = fixture(&header("fixture").expect("a fixture"));
         let p = support::prepared(&source);
         for seed in 1..=4u64 {
-            let (f, text, rec, _) = record(&p, setup, seed * 7919, RecordOptions::default());
+            let (f, text, rec, _) = record(&p, setup, seed * 7919, opts());
             let got = shown(&p, &f);
             if let Some(v) = expect.strip_prefix("value ") {
                 assert_eq!(got, v.replace(", ", ","), "{name} (record, seed {seed})");
@@ -317,6 +322,29 @@ fn mutate(text: &str, find: &str, with: &str) -> String {
     text.replacen(find, with, 1)
 }
 
+/// The tape without the event line `line`, every later event renumbered one down.
+fn delete_event(text: &str, line: &str) -> String {
+    let mut out = String::new();
+    let mut after = false;
+    for l in text.lines() {
+        if l == line && !after {
+            after = true;
+            continue;
+        }
+        if after && let Some(rest) = l.strip_prefix("{\"seq\":") {
+            let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let m: u64 = n.parse().unwrap();
+            out.push_str("{\"seq\":");
+            out.push_str(&(m - 1).to_string());
+            out.push_str(&rest[n.len()..]);
+        } else {
+            out.push_str(l);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// The value after `"key":` on the first line holding `on`.
 fn field(text: &str, on: &str, key: &str) -> String {
     let line = text
@@ -335,7 +363,7 @@ fn field(text: &str, on: &str, key: &str) -> String {
 #[test]
 fn every_divergence_mutation_raises_replay() {
     let p = support::prepared(EVERYTHING);
-    let (f, text, _, _) = record(&p, everything, 5, RecordOptions::default());
+    let (f, text, _, _) = record(&p, everything, 5, opts());
     let out = shown(&p, &f);
     assert!(out.contains("refused") && out.contains("fast"), "{out}");
     // A faithful replay passes.
@@ -412,6 +440,11 @@ fn every_divergence_mutation_raises_replay() {
         "withdrawn entry",
         text.replacen(&withdrawn, &withdrawn.replace("withdrawn", "drained"), 1),
     ));
+    // A deleted outcome, and a deleted completion, with the later events renumbered so the
+    // sequence itself stays whole.
+    cases.push(("deleted ended line", delete_event(&text, &withdrawn)));
+    let complete = line_of("\"ev\":\"complete\"");
+    cases.push(("deleted complete line", delete_event(&text, &complete)));
     // A blob's body.
     cases.push(("blob", mutate(&text, "xxxxxxxxxx", "xxxxxyxxxx")));
     for (what, t) in cases {
@@ -450,7 +483,7 @@ fn replay_is_deterministic_under_random_completion_orders_with_budgets_below_dem
         );
     };
     for seed in 1..=16u64 {
-        let (f, text, _, _) = record(&p, setup, seed * 104_729, RecordOptions::default());
+        let (f, text, _, _) = record(&p, setup, seed * 104_729, opts());
         let out = shown(&p, &f);
         // Twelve calls under a cap of ten: two branches are refused, whichever they are.
         assert_eq!(out.matches("\"tool_calls\"").count(), 2, "{out}");
@@ -472,7 +505,7 @@ fn main() -> Str {
 fn output_only_effects_are_suppressed_in_replay_and_checked_by_the_reply_digest() {
     let p = support::prepared(OUTPUT);
     let setup: Setup = |_| {};
-    let (f, text, _, inner) = record(&p, setup, 0, RecordOptions::default());
+    let (f, text, _, inner) = record(&p, setup, 0, opts());
     assert_eq!(shown(&p, &f), "\"reply\"");
     assert_eq!(inner.events().len(), 1);
     assert!(
@@ -494,15 +527,7 @@ fn output_only_effects_are_suppressed_in_replay_and_checked_by_the_reply_digest(
     assert!(is_replay(&altered, &r));
 
     // In full mode, a change only to the output effect is caught where it happens.
-    let (_, full, _, _) = record(
-        &p,
-        setup,
-        0,
-        RecordOptions {
-            mode: RecordMode::Full,
-            ..RecordOptions::default()
-        },
-    );
+    let (_, full, _, _) = record(&p, setup, 0, opts().mode(RecordMode::Full));
     assert!(full.contains("\"out\""));
     let only_output = support::prepared(&OUTPUT.replace("\"1\"", "\"2\""));
     assert!(is_replay(
@@ -543,13 +568,13 @@ fn replayed_values_keep_their_labels_and_gain_the_replaying_rules() {
     let p = support::prepared(LEAK);
     // Recorded with the secret path configured: the read is labelled and the fetch refused;
     // replayed without it, the recorded label is kept and the fetch refused again.
-    let (f, text, _, _) = record(&p, secret_setup, 0, RecordOptions::default());
+    let (f, text, _, _) = record(&p, secret_setup, 0, opts());
     assert!(shown(&p, &f).contains("Denied"), "{}", shown(&p, &f));
     let (r, _, _) = replay(&p, leak_setup, &text, None).unwrap();
     assert_eq!(shown(&p, &r), shown(&p, &f));
     // Recorded without it: the fetch was sent. Replayed with it: the replayed read gains the
     // label and the fetch is refused (the run then diverges from its tape).
-    let (f, text, _, _) = record(&p, leak_setup, 0, RecordOptions::default());
+    let (f, text, _, _) = record(&p, leak_setup, 0, opts());
     assert_eq!(shown(&p, &f), "\"sent\"");
     let (r, _, _) = replay(&p, secret_setup, &text, None).unwrap();
     assert!(matches!(r.outcome, Outcome::Raised(_)), "{}", shown(&p, &r));
@@ -581,23 +606,29 @@ fn a_labelled_blob_in_a_headless_tape_is_named_by_the_redaction_digest_only() {
         )
         .secret_path("*.env");
     };
-    let opts = RecordOptions {
-        headless: true,
-        redaction_key: [9; 32],
-        ..RecordOptions::default()
-    };
-    let (f, text, _, _) = record(&p, setup, 0, opts);
+    let (f, text, _, _) = record(
+        &p,
+        setup,
+        0,
+        RecordOptions::new([9; 32]).unwrap().headless(true),
+    );
     assert_eq!(shown(&p, &f), "\"read\"");
     assert!(
         !text.contains("SECRET-") && !text.contains("TOKEN=7"),
         "{text}"
     );
     assert_eq!(text.matches("\"blob\":\"r:").count(), 2, "{text}");
-    // No plain hash of the body anywhere.
-    let body = format!("[\"L\",1,[\"s\",\"{secret}\"]]");
-    let plain =
-        ratio_eval::tape::hex(&ratio_eval::tape::redaction_digest(&[0; 32], body.as_bytes()).0);
-    assert!(!text.contains(&plain));
+    // No plain hash of either body anywhere (the bodies as the tape would hold them).
+    for body in [
+        Value::text(&secret).with_labels(Labels::source(0)),
+        Value::text("TOKEN=7").with_labels(Labels::source(0)),
+    ] {
+        let plain = ratio_eval::tape::body_digest(&body).hex();
+        assert!(
+            !text.contains(&plain),
+            "a labelled body named by its plain hash"
+        );
+    }
     // Replaying it needs lenient mode.
     assert!(is_replay(&p, &replay(&p, setup, &text, None)));
 }
@@ -643,7 +674,7 @@ fn tape_size_regression() {
             Behaviour::Reply(Value::text("t")),
         );
     };
-    let (_, text, _, _) = record(&p, setup, 0, RecordOptions::default());
+    let (_, text, _, _) = record(&p, setup, 0, opts());
     // Measured at 5,4xx bytes when written; a format change that grows tapes shows here.
     assert!(text.len() < 7_000, "the tape grew to {} bytes", text.len());
 }

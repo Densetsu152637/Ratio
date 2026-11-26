@@ -320,6 +320,10 @@ fn ask_agent(s: Str) -> Str { agents.ask("helper", s); "sent" }
 fn emit(s: Str) -> Str { session.emit("e", json.parse(s)); "sent" }
 fn hosted(s: Str) -> Untrusted<Str> { model.generate(prompt { task "summarise"; data s }) }
 fn local(s: Str) -> Untrusted<Str> { model.generate(prompt { task "summarise"; data s }, opts: { model: "local" }) }
+fn as_model(s: Str) -> Untrusted<Str> { model.generate_as::<Str>(prompt { task "summarise"; data s }) }
+enum Mood { happy, sad }
+fn classified(s: Str) -> Str { model.classify::<Mood>(s); "sent" }
+fn dispatched(s: Str, c: Conversation, t: ToolCall) -> Str { tools.dispatch(c, t); "sent" }
 "#;
 
 #[test]
@@ -334,6 +338,9 @@ fn every_secrecy_sink_refuses_a_labelled_value_at_the_guard() {
         "ask_agent",
         "emit",
         "hosted",
+        "as_model",
+        "classified",
+        "dispatched",
     ] {
         let h = host();
         h.card(ratio_eval::host::ModelCard {
@@ -341,7 +348,18 @@ fn every_secrecy_sink_refuses_a_labelled_value_at_the_guard() {
             location: ratio_eval::frame::Location::Cloud,
             card: ratio_eval::frame::Card::default(),
         });
-        let f = run_on(&p, name, vec![support::secret("\"token\"")], &h);
+        let mut args = vec![support::secret("\"token\"")];
+        if name == "dispatched" {
+            // A model's call on a conversation, its arguments secret.
+            let call = Value::record(vec![
+                ("id", Value::text("1")),
+                ("name", Value::text("web_fetch")),
+                ("arguments", support::secret("https://x")),
+            ])
+            .unwrap();
+            args.extend([Value::unit(), call]);
+        }
+        let f = run_on(&p, name, args, &h);
         assert_eq!(
             raised(&p, &f),
             ("Denied".into(), Some("secrecy".into())),

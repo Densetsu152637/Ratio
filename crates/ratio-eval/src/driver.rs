@@ -48,7 +48,7 @@ use crate::frame::{
 use crate::host::bridge::{self, Call};
 use crate::host::{
     CancelClass, CancelOutcome, Countable, EffectCtx, EffectKey, Guard, Host, HostError,
-    HostFuture, ToolClass,
+    HostFuture, MAX_DRAIN, ToolClass,
 };
 use crate::machine::{CancelToken, EffectRequest, Machine, Outcome, Suspend};
 use crate::tape::{Decision, Event, Tape};
@@ -79,7 +79,12 @@ struct InFlight {
     req: EffectRequest,
     class: ToolClass,
     token: CancelToken,
-    reservation: Option<(Ledgers, Reservation)>,
+    ledgers: Ledgers,
+    /// Its reservations (one per tool call it makes; one for a model call).
+    reservations: Vec<Reservation>,
+    /// The scheduler's own bound on the call, whatever the host does: a `drain` call's
+    /// declared bound from its start, and an `abort` call's grace once its token fired.
+    bound: Option<HostFuture<()>>,
     /// Once its token has fired: the cancellation it ends with (0: the branch's; else a
     /// timeout scope's id).
     cancelling: Option<u32>,
@@ -202,6 +207,8 @@ struct Scheduler {
     abort: Option<RtError>,
     /// The most tasks that held a slot at once.
     peak_running: usize,
+    /// How long a cancelled `abort` call has to be acknowledged.
+    abort_grace: Duration,
 }
 
 /// An evaluation, as a future.
@@ -252,6 +259,7 @@ impl Evaluation {
                 yields: 0,
                 abort: None,
                 peak_running: 0,
+                abort_grace: ABORT_GRACE,
             },
         }
     }
@@ -263,6 +271,14 @@ impl Evaluation {
         let root = self.machine().frame().clone();
         tape.turn_start(self.s.host.seed(), &root);
         self.s.tape = Some(tape);
+        self
+    }
+
+    /// A shorter grace than [`ABORT_GRACE`] for a host to acknowledge a cancelled `abort`
+    /// call (for tests).
+    #[must_use]
+    pub fn abort_grace(mut self, grace: Duration) -> Evaluation {
+        self.s.abort_grace = grace.min(ABORT_GRACE);
         self
     }
 
@@ -326,6 +342,19 @@ fn answer<T: Send + 'static>(
             },
         }
     })
+}
+
+/// How long the scheduler waits for a host to acknowledge a cancelled `abort` call before it
+/// records the call `unacknowledged` and lets the scope return.
+pub const ABORT_GRACE: Duration = Duration::from_secs(30);
+
+/// The admission key of the `i`th tool call an effect makes (`dispatch_all` makes several).
+fn sub_key(key: &EffectKey, i: u64) -> String {
+    if i == 0 {
+        key.to_string()
+    } else {
+        format!("{key}~{i}")
+    }
 }
 
 const TOOL_CALL: Amounts = Amounts {
@@ -392,6 +421,16 @@ impl Scheduler {
                 let d = self.drains.swap_remove(i);
                 self.drain_done(&d, &a);
                 progressed = true;
+            } else if self.drains[i]
+                .call
+                .bound
+                .as_mut()
+                .is_some_and(|b| b.as_mut().poll(cx).is_ready())
+            {
+                // Past its declared bound: the fence releases, whatever the host does.
+                let d = self.drains.swap_remove(i);
+                self.drain_failed(&d);
+                progressed = true;
             } else {
                 i += 1;
             }
@@ -406,7 +445,17 @@ impl Scheduler {
                         progressed = true;
                         continue;
                     }
-                    Poll::Pending => State::Effect(f),
+                    Poll::Pending => {
+                        if f.bound
+                            .as_mut()
+                            .is_some_and(|b| b.as_mut().poll(cx).is_ready())
+                        {
+                            self.expired(id, &f);
+                            progressed = true;
+                            continue;
+                        }
+                        State::Effect(f)
+                    }
                 },
                 State::Pool(w) => {
                     w.register(cx.waker());
@@ -689,7 +738,7 @@ impl Scheduler {
         let exempt = req.in_defer || &*req.builtin == "tools.command_stop";
         if class.class == CancelClass::Drain
             && !exempt
-            && matches!(call, Call::Tool(_) | Call::Op(_))
+            && matches!(call, Call::Tool(..) | Call::Op(_))
             && self.fence.total() > 0
         {
             self.tasks[id].state = State::Waiting(Box::new(Pending {
@@ -703,7 +752,9 @@ impl Scheduler {
         self.start_call(id, req, call, class, cx);
     }
 
-    /// Admits and starts a host call.
+    /// Admits and starts a host call. Every call goes through the guard's `Host`
+    /// implementation (the guard checks it here first too, so a refused secret never reaches
+    /// admission).
     fn start_call(
         &mut self,
         id: TaskId,
@@ -717,29 +768,30 @@ impl Scheduler {
         let frame = req.frame.clone();
         let loc = req.loc;
         let input_bearing = call.input_bearing();
-        // Output-only effects: checked by the guard, emitted (suppressed in replay), done.
         let call = match call {
+            // Output-only effects: checked by the guard, emitted (suppressed in replay), done.
             Call::Event(mut ev) => {
-                let r = if let Some(t) = &self.tape {
-                    let r = Guard::check_event(&mut ev);
-                    if r.is_ok() {
+                let r = Guard::check_event(&mut ev).and_then(|()| {
+                    if let Some(t) = &self.tape {
                         t.output(&ev);
                     }
-                    if t.replaying() {
-                        r
-                    } else {
-                        self.host.emit_checked(&frame, ev)
-                    }
-                } else {
-                    self.host.emit_checked(&frame, ev)
-                };
+                    self.host.emit(&frame, ev)
+                });
                 let r = r.map(|()| Value::unit()).map_err(|e| self.rt(id, e, loc));
                 self.resume(id, r);
                 return;
             }
+            // A built-in the table does not know reaches no host.
+            Call::Unknown(b) => {
+                let e = HostError::unsupported(format!(
+                    "`{b}` reaches no host: the guard has no rule for it"
+                ));
+                let e = self.rt(id, e, loc);
+                self.resume(id, Err(e));
+                return;
+            }
             c => c,
         };
-        // The guard first: a refused secret never reaches admission or the host.
         let mut call = match self.guard(&frame, call) {
             Ok(c) => c,
             Err(e) => {
@@ -748,9 +800,8 @@ impl Scheduler {
                 return;
             }
         };
-        let reservation = match self.admission(id, &key, &frame, &mut call) {
-            Ok(Some(r)) => Some(r),
-            Ok(None) => None,
+        let reservations = match self.admission(id, &key, &frame, &mut call) {
+            Ok(r) => r,
             Err(Wait(epoch)) => {
                 self.record(Event::Wait {
                     key: key.to_string(),
@@ -779,11 +830,18 @@ impl Scheduler {
             cancel: token.clone(),
             deadline: self.deadline(id),
         };
-        // The guard has checked the call: its inner host answers it (in replay, the tape).
-        let inner = Arc::clone(self.host.inner());
+        let host = Arc::clone(&self.host);
         let fut: HostFuture<Answer> = match call {
-            Call::Tool(t) => answer(inner.call_tool(frame, ecx, t), |o| (o.value, TOOL_CALL)),
-            Call::Model(m) => answer(inner.generate(frame, ecx, m), |r| {
+            Call::Tool(t, n) => answer(host.call_tool(frame, ecx, t), move |o| {
+                (
+                    o.value,
+                    Amounts {
+                        tool_calls: n,
+                        ..Amounts::default()
+                    },
+                )
+            }),
+            Call::Model(m) => answer(host.generate(frame, ecx, m), |r| {
                 let v = Value::text(&r.text.value).with_labels(r.text.labels);
                 let actual = Amounts {
                     tokens: r.usage.input_tokens.saturating_add(r.usage.output_tokens),
@@ -793,19 +851,26 @@ impl Scheduler {
                 };
                 (v, actual)
             }),
-            Call::Approve(a) => answer(inner.approve(frame, ecx, a), |b| {
+            Call::Approve(a) => answer(host.approve(frame, ecx, a), |b| {
                 (Value::bool(b), Amounts::default())
             }),
-            Call::Op(o) => answer(inner.operate(frame, ecx, o), |v| (v, Amounts::default())),
-            Call::Event(_) => return,
+            Call::Op(o) => answer(host.operate(frame, ecx, o), |v| (v, Amounts::default())),
+            Call::Event(_) | Call::Unknown(_) => return,
         };
+        // A drain call is bound by the scheduler too: failed at its declared bound.
+        let bound = (class.class == CancelClass::Drain).then(|| {
+            let max = class.max_running.unwrap_or(MAX_DRAIN).min(MAX_DRAIN);
+            self.host.timer(self.host.now() + max)
+        });
         let ledgers = req.frame.ledgers.clone();
         let mut f = Box::new(InFlight {
             fut,
             req,
             class,
             token,
-            reservation: reservation.map(|r| (ledgers, r)),
+            ledgers,
+            reservations,
+            bound,
             cancelling: None,
             input_bearing,
         });
@@ -817,47 +882,69 @@ impl Scheduler {
     }
 
     /// Admits a call by reservation (live), or takes the recorded decision (replay). A model
-    /// request gets its effective `max_tokens`.
+    /// request gets its effective `max_tokens`; a tool call that makes `n` calls
+    /// (`dispatch_all`) reserves `n`, recorded under its key and `key~1`, `key~2`, ….
     fn admission(
         &self,
         id: TaskId,
         key: &EffectKey,
         frame: &FrameCtx,
         call: &mut Call,
-    ) -> Result<Option<Reservation>, Blocked> {
+    ) -> Result<Vec<Reservation>, Blocked> {
         let loc = Loc::default();
         if let Some(t) = self.tape.as_ref().filter(|t| t.replaying()) {
-            if matches!(call, Call::Approve(_) | Call::Op(_)) {
-                return Ok(None);
-            }
-            return match t.admission(key) {
-                Some(Decision::Admit(max)) => {
-                    if let Call::Model(m) = call {
-                        m.max_tokens = max;
-                    }
-                    Ok(None)
-                }
-                Some(Decision::Refuse(which)) => {
-                    Err(Refusal(self.budget(id, which, frame.node, loc)))
-                }
-                None => Err(Refusal(self.diverged(
-                    id,
-                    &format!("the tape has no admission for `{key}`"),
-                    loc,
-                ))),
+            let n = match call {
+                Call::Tool(_, n) => *n,
+                Call::Model(_) => 1,
+                _ => return Ok(Vec::new()),
             };
+            for i in 0..n {
+                let k = sub_key(key, i);
+                match t.admission_named(&k) {
+                    Some(Decision::Admit(max)) => {
+                        if let Call::Model(m) = call {
+                            m.max_tokens = max;
+                        }
+                    }
+                    Some(Decision::Refuse(which)) => {
+                        return Err(Refusal(self.budget(id, which, frame.node, loc)));
+                    }
+                    None => {
+                        return Err(Refusal(self.diverged(
+                            id,
+                            &format!("the tape has no admission for `{k}`"),
+                            loc,
+                        )));
+                    }
+                }
+            }
+            return Ok(Vec::new());
         }
         match call {
-            Call::Tool(_) => match frame.ledgers.admit_tool(frame.node) {
-                Ok(r) => {
-                    self.record(Event::admit(key, &r, None));
-                    Ok(Some(r))
+            Call::Tool(_, n) => {
+                let mut held = Vec::new();
+                for i in 0..*n {
+                    let k = sub_key(key, i);
+                    match frame.ledgers.admit_tool(frame.node) {
+                        Ok(r) => {
+                            self.record(Event::admit_named(&k, &key.frame, &r, None));
+                            held.push(r);
+                        }
+                        Err(r) => {
+                            self.record(Event::refuse_named(&k, &key.frame, r.which, None));
+                            for (j, h) in held.iter().enumerate() {
+                                let _ = frame.ledgers.cancel(h);
+                                self.record(Event::Complete {
+                                    key: sub_key(key, j as u64),
+                                    actual: Amounts::default().into(),
+                                });
+                            }
+                            return Err(Refusal(self.budget(id, r.which, r.node, loc)));
+                        }
+                    }
                 }
-                Err(r) => {
-                    self.record(Event::refuse(key, r.which, None));
-                    Err(Refusal(self.budget(id, r.which, r.node, loc)))
-                }
-            },
+                Ok(held)
+            }
             Call::Model(m) => {
                 let card = self
                     .host
@@ -877,7 +964,7 @@ impl Scheduler {
                     Admission::Admitted(r) => {
                         m.max_tokens = r.max_tokens;
                         self.record(Event::admit(key, &r, Some(mc)));
-                        Ok(Some(r))
+                        Ok(vec![r])
                     }
                     Admission::Wait { epoch, .. } => Err(Wait(epoch)),
                     Admission::Refused(r) => {
@@ -886,15 +973,15 @@ impl Scheduler {
                     }
                 }
             }
-            Call::Approve(_) | Call::Op(_) | Call::Event(_) => Ok(None),
+            Call::Approve(_) | Call::Op(_) | Call::Event(_) | Call::Unknown(_) => Ok(Vec::new()),
         }
     }
 
     fn guard(&self, frame: &FrameCtx, call: Call) -> Result<Call, HostError> {
         Ok(match call {
-            Call::Tool(mut t) => {
+            Call::Tool(mut t, n) => {
                 self.host.check_tool(frame, &mut t)?;
-                Call::Tool(t)
+                Call::Tool(t, n)
             }
             Call::Model(mut m) => {
                 self.host.check_model(frame, &mut m)?;
@@ -908,18 +995,60 @@ impl Scheduler {
         })
     }
 
-    /// A host call answered.
-    fn effect_done(&mut self, id: TaskId, f: &InFlight, a: Answer) {
-        let is_tool = matches!(f.reservation, Some((_, ref r)) if r.held.tool_calls > 0);
-        if let Some((l, r)) = &f.reservation {
-            // A started tool call counts, whatever it answered.
-            let actual = if is_tool { TOOL_CALL } else { a.actual };
-            let _ = l.complete(r, actual);
+    /// Completes a call's reservations: a started tool call counts one `tool_calls` each,
+    /// whatever it answered; a model call its actual charge.
+    fn complete(&self, f: &InFlight, actual: Amounts) {
+        let key = f.req.key();
+        for (i, r) in f.reservations.iter().enumerate() {
+            let a = if r.held.tool_calls > 0 {
+                TOOL_CALL
+            } else {
+                actual
+            };
+            let _ = f.ledgers.complete(r, a);
             self.record(Event::Complete {
-                key: f.req.key().to_string(),
-                actual: actual.into(),
+                key: sub_key(&key, i as u64),
+                actual: a.into(),
             });
         }
+    }
+
+    /// A call passed the scheduler's bound on it: a cancelled `abort` call the host did not
+    /// acknowledge within the grace, or a `drain` call past its declared bound.
+    fn expired(&mut self, id: TaskId, f: &InFlight) {
+        f.token.cancel();
+        self.complete(f, Amounts::default());
+        let loc = f.req.loc;
+        if let Some(scope) = f.cancelling {
+            self.record(Event::Ended {
+                key: f.req.key().to_string(),
+                outcome: "unacknowledged".to_owned(),
+                digest: None,
+            });
+            self.tasks[id].state = State::Ready;
+            if let Some(m) = &mut self.tasks[id].machine {
+                m.cancel_branch(scope);
+            }
+            return;
+        }
+        let e = HostError::Timeout {
+            message: format!("`{}` was failed at its declared bound", f.req.builtin),
+        };
+        let r = Err(e);
+        if f.input_bearing
+            && let Some(t) = &self.tape
+            && let Err(msg) = t.answered(&f.req, &r)
+        {
+            self.abort = Some(self.diverged(id, &msg, loc));
+            return;
+        }
+        let r = r.map_err(|e| self.rt(id, e, loc));
+        self.resume(id, r);
+    }
+
+    /// A host call answered.
+    fn effect_done(&mut self, id: TaskId, f: &InFlight, a: Answer) {
+        self.complete(f, a.actual);
         let loc = f.req.loc;
         if let Some(scope) = f.cancelling {
             // The token fired and the host acknowledged: how the call ended is recorded.
@@ -1352,8 +1481,9 @@ impl Scheduler {
         f.token.cancel();
         match f.class.class {
             CancelClass::Abort => {
-                // The scope returns once the host acknowledges.
+                // The scope returns once the host acknowledges, or after the grace.
                 f.cancelling = Some(scope);
+                f.bound = Some(self.host.timer(self.host.now() + self.abort_grace));
                 self.tasks[id].state = State::Effect(f);
             }
             CancelClass::Drain => {
@@ -1462,19 +1592,7 @@ impl Scheduler {
     /// An outstanding drain finished: its reservation is completed with the actual charge.
     fn drain_done(&mut self, d: &Drain, a: &Answer) {
         self.fence.release(d.owner);
-        let tool = d
-            .call
-            .reservation
-            .as_ref()
-            .is_some_and(|(_, r)| r.held.tool_calls > 0);
-        if let Some((l, r)) = &d.call.reservation {
-            let actual = if tool { TOOL_CALL } else { a.actual };
-            let _ = l.complete(r, actual);
-            self.record(Event::Complete {
-                key: d.call.req.key().to_string(),
-                actual: actual.into(),
-            });
-        }
+        self.complete(&d.call, a.actual);
         let outcome = match &a.result {
             Err(HostError::Cancelled(o)) => *o,
             _ => CancelOutcome::Drained,
@@ -1494,6 +1612,19 @@ impl Scheduler {
             key: d.call.req.key().to_string(),
             outcome: outcome.name().to_owned(),
             digest,
+        });
+    }
+
+    /// An outstanding drain passed its declared bound: the fence releases, its reservation is
+    /// completed, and the failure is on the tape.
+    fn drain_failed(&mut self, d: &Drain) {
+        d.call.token.cancel();
+        self.fence.release(d.owner);
+        self.complete(&d.call, Amounts::default());
+        self.record(Event::Ended {
+            key: d.call.req.key().to_string(),
+            outcome: "failed".to_owned(),
+            digest: None,
         });
     }
 

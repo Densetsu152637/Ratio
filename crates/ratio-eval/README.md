@@ -283,7 +283,7 @@ any error (and is refused by `sees` like any other value).
 **The `Host` trait** ([`src/host/`](src/host/mod.rs), `HOST_API_VERSION` 1) is everything outside
 the interpreter: model calls (`generate`, `embed`, `count_tokens`, `resolve_model`), tool calls
 (`call_tool`, `tool_class`, `is_secret_path`, `source_labels`), conversations (`conversation`,
-`conversation_digest`, `chat`), frames (`open_frame`, `close_frame`), the engine's operations
+`conversation_digest`, `conversation_labels`, `chat`), frames (`open_frame`, `close_frame`), the engine's operations
 (`operate`, for agents, memory, session, context, eval and time until their stages type them),
 approvals (`approve`), and the recorded, authority-free `now`, `seed`, `timer` and `emit`. The
 asynchronous methods take `self: Arc<Self>` and return a `HostFuture`, a boxed `Send + 'static`
@@ -292,25 +292,33 @@ keeps many in flight next to the machines; a host may spawn them on its runtime)
 or `async_trait` is needed. Every asynchronous call gets an `EffectCtx`: the effect key
 (`frame path / branch path / e<node>#<occurrence>`), a cancellation token and the deadline.
 Values cross with their labels (`Value`s carry their own; text is `Labelled<String>`). How the
-machine's effects map to these calls is [`src/host/bridge.rs`](src/host/bridge.rs): `tools.*`
-built-ins to `call_tool` with the tool's name (`mcp__server__tool` for MCP, the named tool for
-`tools.call_tool`) and the arguments by parameter name; `model.generate` and `model.complete`
-to `generate`; `declassify` and `session.request_approval` to `approve`; `log.*`,
-`trace.event`, `session.emit`, `session.stream` and `session.notify` to `emit` (output-only); the
-rest to `operate`.
+machine's effects map to these calls is [`src/host/bridge.rs`](src/host/bridge.rs), read from
+the checker's table of built-ins: every `@effect(model)` built-in to `generate` (admitted by
+reservation); `tools.*` built-ins to `call_tool` with the tool's name (`mcp__server__tool` for
+MCP, the named tool for `tools.call_tool`, `dispatch` for the dispatch built-ins, admitted one
+`tool_calls` per call they make) and the arguments by parameter name; `declassify` and
+`session.request_approval` to `approve`; `log.*`, `trace.event`, `session.emit`,
+`session.stream` and `session.notify` to `emit` (output-only, which a host may refuse); the rest
+to `operate`; a built-in the table does not know reaches no host. **`FrameCtx::kind` and
+`harness` are Ratio's assertion, not proof**: a harness call passed off consistently as a
+`with` block is within its parent in every dimension, so a host takes the kind from its own
+knowledge (only the harnesses it loads or runs open `Harness` frames).
 
 **The guard** ([`src/host/guard.rs`](src/host/guard.rs)) wraps every host an evaluation is
-given; no host can opt out. It recomputes the per-call secrecy flag from the labels and refuses
-(`Denied { by: secrecy }`, before the host sees anything) a labelled value at every sink of
-chapter 03: `web_*`, every `browser_*`, `media_*` and `mcp__*` tool, `run_command`,
-`run_background`, `run_script`, `tools.call_tool`, `tools.mcp_call` and the dispatch built-ins
-whatever they call, `write_file` and `edit_file` unless the target path matches
-`ratio.secret_paths`, a model whose card does not say `local` (a prompt's sections included, so
-a secret reaching a hosted model through a prompt's `data` is refused at run time), every
-`agents.*` operation, memory writes, `session.emit` and `eval` metrics, scores and labels. Logs,
-traces and streams pass with the flag set, for the host to redact. Where the guard cannot know
-what the engine knows (an MCP server or a media backend may be local; a model without a card)
-it refuses. It also repeats `frame::check_within` on every frame it forwards.
+given, and the scheduler calls the host through it for every effect; no host can opt out. It
+recomputes the per-call secrecy flag from the labels and refuses (`Denied { by: secrecy }`,
+before the host sees anything) a labelled value at every sink of chapter 03. Its rules fail
+closed, from the checker's table: a tool or operation is a sink unless the table marks it
+`@local` or `@pure` (so `web_*`, `run_command`, `run_background`, every `agents.*` built-in,
+memory writes, `session.emit`, `eval` metrics and any built-in the table does not know are
+sinks); `tools.call_tool`, `tools.mcp_call` and the dispatch built-ins are sinks whatever they
+name; `write_file` and `edit_file` may write a secret only to a path in `ratio.secret_paths`;
+a model whose card does not say `local` may receive no secret (a prompt's sections included,
+so a secret reaching a hosted model through a prompt's `data` is refused at run time), and
+neither may a call on a labelled conversation (`conversation_labels`; an unreadable one counts
+as labelled). Logs, traces and streams pass with the flag set, for the host to redact. The
+labelled parts of an approval's summary and detail reach the host as `[secret: source N]`. It
+also repeats `frame::check_within` on every frame it forwards.
 
 **The scheduler** ([`src/driver.rs`](src/driver.rs)) is the `Evaluation` future. `par { … }`,
 `race { … }`, `par([…])`, `race([…])`, `par_map` and `par_map_settled` suspend their machine
@@ -335,7 +343,11 @@ turn's), and the branch unwinds at once, so harness frames inside the cancelled 
 once. The fence (`fork::Fence`) then holds that frame's close (the machine reports
 `Suspend::Fence`), every later `drain`-class call of the frame tree (`defer` blocks and
 `tools.command_stop` excepted) and the end of the turn, until the drain finishes and is debited
-its actual charge. Effects in `defer` blocks are not cancelled. `with timeout d { … } else { … }`
+its actual charge. The scheduler bounds calls itself, whatever the host does: a `drain` call
+(an engine write operation too) is failed at its declared bound (at most 3600 s; an
+outstanding one releases the fence there, recorded `failed`), and a cancelled `abort` call the
+host has not acknowledged within `ABORT_GRACE` (30 s) is recorded `unacknowledged` and its
+scope returns. Effects in `defer` blocks are not cancelled. `with timeout d { … } else { … }`
 and `timeout(d, f)` are scopes of their machine (no branch element on the path): the scheduler
 sets the deadline when it first sees the scope, arms the host's `timer`, and fires the scope by
 cancelling it, which unwinds to it (running `defer` blocks) and becomes the `else` block or
@@ -370,14 +382,19 @@ first runs the call, a session stop drains). A host supplies a `Fixture`; `Scrip
 IR versions, the library version, the mode, the turn's seed, the session frame's caps and
 width), blob lines (a body above 1 KiB, once, named by its BLAKE3 digest; in a headless tape a
 labelled body is not stored and is named only by the redaction digest, HMAC-SHA-256 with the
-session's key), entry lines for input-bearing effects (key, request digest over the built-in and
+session's key, which `RecordOptions::new` requires and refuses when all zero; in a headless tape
+every request, output and reply digest over labelled data is keyed the same way, `k:<hmac>`),
+entry lines for input-bearing effects (key, request digest over the built-in and
 its named arguments without labels, and the value or error with its labels), event lines
 numbered on one turn sequence, digest-only lines for output-only effects in `full` mode, and the
 end line with the reply digest. The events: frame opens with their caps, admissions with their
 reservation and the inputs of their arithmetic, waits, refusals, completions, each branch's step
 total, cancellation points `(effects, steps)`, how cancelled calls ended (a drained call's
 discarded answer is its entry), re-parentings, race winners, failing `par` branches, fired
-timeouts and branches that never started. `TapeHost::record` writes it; `TapeHost::replay`
+timeouts and branches that never started. Approvals are never answered from a tape: a replay asks the user live, under its own
+session's rules, and a declassification's request digest covers a keyed digest of what was
+declassified. Recording stops at the size limit (64 MiB, blobs and held events counted); the
+tape then says it was truncated and replay refuses it. `TapeHost::record` writes it; `TapeHost::replay`
 loads it within fixed bounds (64 MiB, 2^20 lines, nesting 64, numbers of at most 20 digits),
 checks every blob against its digest and the versions, then verifies it against itself:
 numbered without gaps; the ledgers rebuilt from the frame events reproduce every admission (its
@@ -448,3 +465,9 @@ input count, a card limit, a price, a step total, a drained and a withdrawn outc
 suppression and the reply digest, and `full` mode; labels kept and gained in replay; labelled
 blobs of a headless tape named by the redaction digest only; crafted tapes; the tape's size);
 `conformance/eval/width-nested-fanout.ratio`; and `src/rng.rs`'s `ChaCha20` vector.
+
+The security review of stage 11a, round 1: `tests/review_11a.rs` (every model built-in guarded and
+admitted; the guard failing closed; approvals never answered from a tape; keyed digests in
+headless tapes and the required key; truncated tapes refused; the scheduler bounding drains and
+unacknowledged aborts on a host that breaks the contract; frame kinds from the host's own
+knowledge; approvals redacted; labelled conversations refused to hosted models).

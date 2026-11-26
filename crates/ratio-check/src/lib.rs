@@ -288,6 +288,7 @@ pub fn check(loaded: &Loaded) -> Checked {
 /// for function values too.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent attributes")]
 pub struct BuiltinRules {
     /// The name as a program writes it (`trust`, `meta.harness`).
     pub name: String,
@@ -299,6 +300,15 @@ pub struct BuiltinRules {
     pub refused_as_value: Option<&'static str>,
     /// Its parameters' names, in order (a host receives the arguments by these names).
     pub params: Vec<String>,
+    /// The words of its `@effect(…)` attributes (`model`, `write`, `network`, …).
+    pub effects: Vec<String>,
+    /// The words of its `@tool(…)` attributes.
+    pub tools: Vec<String>,
+    /// `@pure`, `@local`, `@secrecy_sink` and `@user`.
+    pub pure: bool,
+    pub local: bool,
+    pub secrecy_sink: bool,
+    pub user: bool,
 }
 
 /// Every built-in function of the table, with its attributes and parameter names (for tests,
@@ -327,6 +337,12 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
                 generic,
                 refused_as_value: traits.value_refusal(generic),
                 params: decl.params.iter().map(|p| p.name.name.clone()).collect(),
+                effects: builtins::attr_words(&item.attrs, "effect"),
+                tools: builtins::attr_words(&item.attrs, "tool"),
+                pure: item.attrs.iter().any(|a| a.name.name == "pure"),
+                local: traits.local,
+                secrecy_sink: traits.secrecy_sink,
+                user: traits.user,
             });
         }
     }

@@ -5,16 +5,42 @@
 
 use std::sync::Arc;
 
+use ratio_eval::CancelToken;
 use ratio_eval::frame::{FrameKind, Ledgers, Scope, Settings};
 use ratio_eval::host::{DeniedBy, EffectCtx, EffectKey, Guard, Host, HostError, NoHost};
 use ratio_eval::host_tests::{self, Fixture, ScriptedFixture};
-use ratio_eval::{CancelToken, Value};
 
 #[test]
 fn scripted_host_passes_the_contract_suite() {
     host_tests::run_all(&ScriptedFixture::default());
 }
 
+fn secrecy<T>(r: &Result<T, HostError>) -> bool {
+    matches!(
+        r,
+        Err(HostError::Denied {
+            by: DeniedBy::Secrecy,
+            ..
+        })
+    )
+}
+
+fn cx() -> EffectCtx {
+    EffectCtx {
+        key: EffectKey {
+            frame: Arc::from("turn"),
+            branch: Arc::from(""),
+            site: ([0; 32], 1),
+            occurrence: 0,
+        },
+        cancel: CancelToken::new(),
+        deadline: None,
+    }
+}
+
+/// Every sink of the contract suite, at the guard, in front of a host that checks nothing
+/// (`NoHost` would answer `Unsupported`): each is refused by the guard, from the labels, with
+/// the flags claiming nothing is secret.
 #[test]
 fn the_guard_refuses_every_sink_before_a_host_that_checks_nothing() {
     let guard = Arc::new(Guard::new(Arc::new(NoHost)));
@@ -31,36 +57,30 @@ fn the_guard_refuses_every_sink_before_a_host_that_checks_nothing() {
         node,
         settings: Arc::new(Settings::default()),
     };
-    for mut call in [calls.network, calls.command, calls.write] {
-        // A labelled argument, and a flag claiming nothing is secret: the guard recomputes it.
+    for mut call in [
+        calls.network,
+        calls.command,
+        calls.write,
+        calls.mcp,
+        calls.any_tool,
+    ] {
         call.args = call
             .args
             .into_iter()
             .map(|(n, v)| (n, v.with_labels(ratio_eval::Labels::source(1))))
             .collect();
         call.secret = false;
-        let cx = EffectCtx {
-            key: EffectKey {
-                frame: Arc::from("turn"),
-                branch: Arc::from(""),
-                site: ([0; 32], 1),
-                occurrence: 0,
-            },
-            cancel: CancelToken::new(),
-            deadline: None,
-        };
         let tool = call.tool.clone();
-        let r = ratio_eval::block_on(Arc::clone(&guard).call_tool(frame.clone(), cx, call));
-        assert!(
-            matches!(
-                r,
-                Err(HostError::Denied {
-                    by: DeniedBy::Secrecy,
-                    ..
-                })
-            ),
-            "the guard must refuse a secret to `{tool}`"
-        );
+        let r = ratio_eval::block_on(Arc::clone(&guard).call_tool(frame.clone(), cx(), call));
+        assert!(secrecy(&r), "the guard must refuse a secret to `{tool}`");
     }
-    let _ = Value::unit();
+    for mut op in host_tests::sink_operations() {
+        op.secret = false;
+        let what = Arc::clone(&op.builtin);
+        let r = ratio_eval::block_on(Arc::clone(&guard).operate(frame.clone(), cx(), op));
+        assert!(secrecy(&r), "the guard must refuse a secret to `{what}`");
+    }
+    let mut ev = host_tests::sink_event();
+    ev.secret = false;
+    assert!(secrecy(&guard.emit(&frame, ev)));
 }

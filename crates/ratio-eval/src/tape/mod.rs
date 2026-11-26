@@ -93,6 +93,18 @@ pub fn value_digest(v: &Value) -> Digest {
     )
 }
 
+/// The plain BLAKE3 digest of a host value's body as the tape would store it (with its labels):
+/// what a headless tape must never name a labelled body by.
+#[must_use]
+pub fn body_digest(v: &Value) -> Digest {
+    blake3(
+        codec::encode(v, true)
+            .map(|j| j.text())
+            .unwrap_or_default()
+            .as_bytes(),
+    )
+}
+
 /// HMAC-SHA-256: the redaction digest, keyed per session (chapter 03), so a low-entropy
 /// secret is not revealed by its name.
 #[must_use]
@@ -216,6 +228,37 @@ impl Event {
             frame: key.frame.to_string(),
             held: r.held.into(),
             max: r.max_tokens,
+            model,
+        }
+    }
+
+    /// An admission recorded under `key` (an effect's key, or `key~i` for the `i`th tool
+    /// call one effect makes) in the frame at `frame`.
+    pub(crate) fn admit_named(
+        key: &str,
+        frame: &str,
+        r: &crate::frame::Reservation,
+        model: Option<ModelCall>,
+    ) -> Event {
+        Event::Admit {
+            key: key.to_owned(),
+            frame: frame.to_owned(),
+            held: r.held.into(),
+            max: r.max_tokens,
+            model,
+        }
+    }
+
+    pub(crate) fn refuse_named(
+        key: &str,
+        frame: &str,
+        which: BudgetKind,
+        model: Option<ModelCall>,
+    ) -> Event {
+        Event::Refuse {
+            key: key.to_owned(),
+            frame: frame.to_owned(),
+            which: which.name().to_owned(),
             model,
         }
     }
@@ -559,8 +602,8 @@ pub trait Tape: Send + Sync {
         req: &EffectRequest,
         result: &Result<Value, HostError>,
     ) -> Result<(), String>;
-    /// The recorded admission of `key` (replay).
-    fn admission(&self, key: &EffectKey) -> Option<Decision>;
+    /// The recorded admission under `key` (replay): an effect's key, or `key~i`.
+    fn admission_named(&self, key: &str) -> Option<Decision>;
     /// The recorded cancellation point of a branch (replay).
     fn cancel_point(&self, branch: &str) -> Option<(u64, u64)>;
     /// Where a branch's timeout scope fired (replay).
@@ -605,20 +648,64 @@ pub enum RecordMode {
     Full,
 }
 
-/// Recording options.
-#[derive(Clone, Copy, Debug, Default)]
+/// Recording options. The session's redaction key is required: every digest over labelled
+/// data in a headless tape is keyed with it ([`redaction_digest`]), so a digest cannot be
+/// tested against guesses of a low-entropy secret.
+#[derive(Clone, Copy, Debug)]
 pub struct RecordOptions {
     pub mode: RecordMode,
     /// A headless tape file: labelled bodies are not stored, only named by the redaction
-    /// digest.
+    /// digest, and digests over labelled data are keyed.
     pub headless: bool,
-    /// The session's redaction key (Imperium's per-session HMAC key).
-    pub redaction_key: [u8; 32],
+    redaction_key: [u8; 32],
+    max_bytes: usize,
+}
+
+impl RecordOptions {
+    /// Default-mode, non-headless recording, with the session's redaction key (Imperium's
+    /// per-session HMAC key).
+    ///
+    /// # Errors
+    ///
+    /// An all-zero key, which keys nothing.
+    pub fn new(redaction_key: [u8; 32]) -> Result<RecordOptions, TapeError> {
+        if redaction_key == [0; 32] {
+            return Err(TapeError("an all-zero redaction key".to_owned()));
+        }
+        Ok(RecordOptions {
+            mode: RecordMode::Default,
+            headless: false,
+            redaction_key,
+            max_bytes: MAX_TAPE_BYTES,
+        })
+    }
+
+    /// A smaller size limit than [`MAX_TAPE_BYTES`] (never a larger one).
+    #[must_use]
+    pub fn limit(mut self, bytes: usize) -> RecordOptions {
+        self.max_bytes = bytes.min(MAX_TAPE_BYTES);
+        self
+    }
+
+    #[must_use]
+    pub fn mode(mut self, mode: RecordMode) -> RecordOptions {
+        self.mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn headless(mut self, headless: bool) -> RecordOptions {
+        self.headless = headless;
+        self
+    }
 }
 
 /// Replay options.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ReplayOptions {
+    /// The session's redaction key, to check the keyed digests of a headless tape (without
+    /// it, a labelled request of a headless tape cannot be matched).
+    pub redaction_key: Option<[u8; 32]>,
     /// Fall through to a live call on a request digest mismatch or a missing entry.
     pub lenient: bool,
     /// Resolve effects in an order permuted by this seed (each answer waits a pseudo-random
@@ -656,6 +743,7 @@ enum Res {
 #[derive(Debug, Default)]
 struct Loaded {
     seed: [u8; 32],
+    headless: bool,
     mode: RecordMode,
     root: String,
     root_caps: Caps,
@@ -679,6 +767,9 @@ struct Loaded {
 
 #[derive(Debug, Default)]
 struct Recording {
+    /// The size limit was reached: recording stopped, and the tape refuses replay.
+    truncated: bool,
+    max_bytes: usize,
     seq: u64,
     lines: Vec<String>,
     bytes: usize,
@@ -732,6 +823,7 @@ impl TapeHost {
             mode: Mode::Record(opts),
             rec: Mutex::new(Recording {
                 full: opts.mode == RecordMode::Full,
+                max_bytes: opts.max_bytes,
                 ..Recording::default()
             }),
             rep: Mutex::new(ReplayState::default()),
@@ -781,6 +873,11 @@ impl TapeHost {
             out.push_str(h);
             out.push('\n');
         }
+        if r.truncated {
+            // Recording stopped at the size limit: such a tape is refused by replay.
+            out.push_str("{\"truncated\":true}\n");
+            return out;
+        }
         for (name, data) in &r.blobs {
             let j = match data {
                 Some(d) => J::Obj(vec![
@@ -826,14 +923,50 @@ impl TapeHost {
         lock(&self.rep).outputs_seen.clone()
     }
 
-    fn push_line(&self, line: String) {
-        let mut r = lock(&self.rec);
-        if r.bytes.saturating_add(line.len()) > MAX_TAPE_BYTES || r.lines.len() >= MAX_TAPE_LINES {
-            // Recording stops; the turn can no longer be replayed (chapter 07).
-            return;
+    /// Counts `n` more bytes (and a line) against the tape's limits; at the limit recording
+    /// stops for good and the tape is marked truncated (chapter 07).
+    fn room(r: &mut Recording, n: usize) -> bool {
+        if r.truncated
+            || r.bytes.saturating_add(n) > r.max_bytes
+            || r.lines.len() + r.blobs.len() >= MAX_TAPE_LINES
+        {
+            r.truncated = true;
+            return false;
         }
-        r.bytes += line.len() + 1;
+        r.bytes += n + 1;
+        true
+    }
+
+    fn push_line(&self, line: String) -> bool {
+        let mut r = lock(&self.rec);
+        if !TapeHost::room(&mut r, line.len()) {
+            return false;
+        }
         r.lines.push(line);
+        true
+    }
+
+    /// Whether recording stopped at the size limit.
+    #[must_use]
+    pub fn truncated(&self) -> bool {
+        lock(&self.rec).truncated
+    }
+
+    /// A digest of `text`: keyed with the session's redaction key when it covers labelled
+    /// data in a headless tape (`k:` and the HMAC), else plain BLAKE3.
+    fn digest(&self, text: &str, labelled: bool) -> String {
+        let (headless, key) = match &self.mode {
+            Mode::Record(o) => (o.headless, Some(o.redaction_key)),
+            Mode::Replay(l, o) => (l.headless, o.redaction_key),
+        };
+        if headless && labelled {
+            match key {
+                Some(k) => format!("k:{}", redaction_digest(&k, text.as_bytes()).hex()),
+                None => "k:?".to_owned(),
+            }
+        } else {
+            blake3(text.as_bytes()).hex()
+        }
     }
 
     fn diverge(&self, msg: String) {
@@ -860,7 +993,8 @@ impl TapeHost {
             }
             return None;
         };
-        let digest = blake3(codec::request_text(builtin, args).as_bytes()).hex();
+        let labelled = args.iter().any(|(_, v)| crate::sink::check(v).is_err());
+        let digest = self.digest(&codec::request_text(builtin, args), labelled);
         if digest != e.req {
             if !lenient {
                 self.diverge(format!(
@@ -1008,7 +1142,7 @@ impl Host for TapeHost {
         call: ToolInvocation,
     ) -> HostFuture<Result<ToolOutcome, HostError>> {
         if self.replaying() {
-            let extra = self.inner.source_labels(&frame, &call);
+            let extra = self.inner.source_labels(&frame, &call.builtin, &call.args);
             return match self.answer(&cx, &call.builtin, &call.args, extra) {
                 Some(r) => self.replayed(r.map(|value| ToolOutcome { value })),
                 None if self.lenient() => Arc::clone(&self.inner).call_tool(frame, cx, call),
@@ -1026,8 +1160,12 @@ impl Host for TapeHost {
         self.inner.is_secret_path(frame, path)
     }
 
-    fn source_labels(&self, frame: &FrameCtx, call: &ToolInvocation) -> Labels {
-        self.inner.source_labels(frame, call)
+    fn source_labels(&self, frame: &FrameCtx, builtin: &str, args: &[(Arc<str>, Value)]) -> Labels {
+        self.inner.source_labels(frame, builtin, args)
+    }
+
+    fn conversation_labels(&self, frame: &FrameCtx, conv: ConvId) -> Result<Labels, HostError> {
+        self.inner.conversation_labels(frame, conv)
     }
 
     fn conversation(&self, frame: &FrameCtx, which: ConvSelector) -> Result<ConvId, HostError> {
@@ -1081,7 +1219,8 @@ impl Host for TapeHost {
         op: Operation,
     ) -> HostFuture<Result<Value, HostError>> {
         if self.replaying() {
-            return match self.answer(&cx, &op.builtin, &op.args, Labels::NONE) {
+            let extra = self.inner.source_labels(&frame, &op.builtin, &op.args);
+            return match self.answer(&cx, &op.builtin, &op.args, extra) {
                 Some(r) => self.replayed(r),
                 None if self.lenient() => Arc::clone(&self.inner).operate(frame, cx, op),
                 None => not_recorded(&op.builtin),
@@ -1096,18 +1235,9 @@ impl Host for TapeHost {
         cx: EffectCtx,
         req: ApprovalRequest,
     ) -> HostFuture<Result<bool, HostError>> {
-        if self.replaying() {
-            let builtin = match req.kind {
-                crate::host::ApprovalKind::Declassify => "declassify",
-                crate::host::ApprovalKind::Request => "session.request_approval",
-            };
-            let args = approval_args(&req);
-            return match self.answer(&cx, builtin, &args, Labels::NONE) {
-                Some(r) => self.replayed(r.map(|v| v.as_bool().unwrap_or(false))),
-                None if self.lenient() => Arc::clone(&self.inner).approve(frame, cx, req),
-                None => not_recorded(builtin),
-            };
-        }
+        // Never answered from the tape, recording or replaying: a user's decision is asked
+        // live, under the running session's own rules (refused when unattended), so a tape
+        // can never approve anything, least of all a declassification.
         Arc::clone(&self.inner).approve(frame, cx, req)
     }
 
@@ -1126,11 +1256,12 @@ impl Host for TapeHost {
         self.inner.timer(at)
     }
 
-    fn emit(&self, frame: &FrameCtx, event: RatioEvent) {
+    fn emit(&self, frame: &FrameCtx, event: RatioEvent) -> Result<(), HostError> {
         // Suppressed in replay: a replay never streams, emits or logs to a live session.
-        if !self.replaying() {
-            self.inner.emit(frame, event);
+        if self.replaying() {
+            return Ok(());
         }
+        self.inner.emit(frame, event)
     }
 }
 
@@ -1145,10 +1276,10 @@ fn approval_args(req: &ApprovalRequest) -> Vec<(Arc<str>, Value)> {
 
 /// The arguments the scheduler's request names, as the host methods see them, for the
 /// request digest: a model request's prompt is `p`, an approval's summary and detail.
-fn digest_args(req: &EffectRequest) -> (String, Vec<(Arc<str>, Value)>) {
+fn digest_args(req: &EffectRequest, key: &[u8; 32]) -> (String, Vec<(Arc<str>, Value)>) {
     let call = crate::host::bridge::classify(req);
     match call {
-        crate::host::bridge::Call::Tool(t) => (t.builtin.to_string(), t.args),
+        crate::host::bridge::Call::Tool(t, _) => (t.builtin.to_string(), t.args),
         crate::host::bridge::Call::Op(o) => (o.builtin.to_string(), o.args),
         crate::host::bridge::Call::Model(m) => {
             let mut a = m.options;
@@ -1161,9 +1292,21 @@ fn digest_args(req: &EffectRequest) -> (String, Vec<(Arc<str>, Value)>) {
                 crate::host::ApprovalKind::Declassify => "declassify",
                 crate::host::ApprovalKind::Request => "session.request_approval",
             };
-            (b.to_owned(), approval_args(&a))
+            let mut args = approval_args(&a);
+            // What was declassified, by a keyed digest only: a tape never names a secret.
+            if a.kind == crate::host::ApprovalKind::Declassify
+                && let Some(x) = req.args.first().cloned().flatten()
+            {
+                let text = codec::encode(&x, false)
+                    .map(|j| j.text())
+                    .unwrap_or_default();
+                let d = redaction_digest(key, text.as_bytes()).hex();
+                args.push((Arc::from("x"), Value::text(&format!("k:{d}"))));
+            }
+            (b.to_owned(), args)
         }
         crate::host::bridge::Call::Event(e) => (e.builtin.to_string(), e.args),
+        crate::host::bridge::Call::Unknown(b) => (b.to_string(), Vec::new()),
     }
 }
 
@@ -1175,7 +1318,12 @@ impl TapeHost {
     fn options(&self) -> RecordOptions {
         match &self.mode {
             Mode::Record(o) => *o,
-            Mode::Replay(..) => RecordOptions::default(),
+            Mode::Replay(..) => RecordOptions {
+                mode: RecordMode::Default,
+                headless: false,
+                redaction_key: [0; 32],
+                max_bytes: 0,
+            },
         }
     }
 }
@@ -1221,19 +1369,23 @@ impl Tape for TapeHost {
         if self.replaying() {
             return;
         }
-        let line = {
-            let mut r = lock(&self.rec);
-            r.seq += 1;
-            let line = ev.to_j(r.seq).text();
-            r.events.push(ev);
-            line
-        };
-        self.push_line(line);
+        let mut r = lock(&self.rec);
+        if r.truncated {
+            return;
+        }
+        r.seq += 1;
+        let line = ev.to_j(r.seq).text();
+        // The event is held twice (its line and the event itself): both count.
+        if !TapeHost::room(&mut r, line.len().saturating_mul(2)) {
+            return;
+        }
+        r.lines.push(line);
+        r.events.push(ev);
     }
 
     fn output(&self, ev: &RatioEvent) {
         let key = ev.key.to_string();
-        let digest = blake3(codec::request_text(&ev.builtin, &ev.args).as_bytes()).hex();
+        let digest = self.digest(&codec::request_text(&ev.builtin, &ev.args), ev.secret);
         match self.loaded() {
             Some(l) => {
                 lock(&self.rep).outputs_seen.push(key.clone());
@@ -1252,7 +1404,7 @@ impl Tape for TapeHost {
                         ("out".to_owned(), J::Str(key)),
                         ("d".to_owned(), J::Str(digest)),
                     ]);
-                    self.push_line(j.text());
+                    let _ = self.push_line(j.text());
                 }
             }
         }
@@ -1269,10 +1421,11 @@ impl Tape for TapeHost {
                 None => Ok(()),
             };
         }
-        let (builtin, args) = digest_args(req);
-        let q = blake3(codec::request_text(&builtin, &args).as_bytes()).hex();
-        let key = req.key().to_string();
         let o = self.options();
+        let (builtin, args) = digest_args(req, &o.redaction_key);
+        let labelled = args.iter().any(|(_, v)| crate::sink::check(v).is_err());
+        let q = self.digest(&codec::request_text(&builtin, &args), labelled);
+        let key = req.key().to_string();
         let mut m = vec![("e".to_owned(), J::Str(key)), ("q".to_owned(), J::Str(q))];
         match result {
             Ok(v) => {
@@ -1288,12 +1441,24 @@ impl Tape for TapeHost {
                         "r:{}",
                         redaction_digest(&o.redaction_key, text.as_bytes()).hex()
                     );
-                    lock(&self.rec).blobs.insert(name.clone(), None);
+                    let mut r = lock(&self.rec);
+                    if !TapeHost::room(&mut r, name.len()) {
+                        return Ok(());
+                    }
+                    r.blobs.insert(name.clone(), None);
+                    drop(r);
                     m.push(("b".to_owned(), J::Str(name)));
                     m.push(("l".to_owned(), J::Int(i64::from(v.labels().bits()))));
                 } else if text.len() > BLOB_THRESHOLD {
                     let name = blake3(text.as_bytes()).hex();
-                    lock(&self.rec).blobs.insert(name.clone(), Some(text));
+                    let mut r = lock(&self.rec);
+                    if !r.blobs.contains_key(&name) {
+                        if !TapeHost::room(&mut r, name.len() + text.len()) {
+                            return Ok(());
+                        }
+                        r.blobs.insert(name.clone(), Some(text));
+                    }
+                    drop(r);
                     m.push(("b".to_owned(), J::Str(name)));
                     m.push(("l".to_owned(), J::Int(i64::from(v.labels().bits()))));
                 } else {
@@ -1302,12 +1467,12 @@ impl Tape for TapeHost {
             }
             Err(e) => m.push(("x".to_owned(), codec::encode_error(e))),
         }
-        self.push_line(J::Obj(m).text());
+        let _ = self.push_line(J::Obj(m).text());
         Ok(())
     }
 
-    fn admission(&self, key: &EffectKey) -> Option<Decision> {
-        self.loaded()?.admissions.get(&key.to_string()).copied()
+    fn admission_named(&self, key: &str) -> Option<Decision> {
+        self.loaded()?.admissions.get(key).copied()
     }
 
     fn cancel_point(&self, branch: &str) -> Option<(u64, u64)> {
@@ -1376,7 +1541,11 @@ impl Tape for TapeHost {
             Outcome::Returned(v) => format!("ok:{}", crate::to_json_text(program, v)),
             Outcome::Raised(e) => format!("err:{}", crate::to_json_text(program, e.value())),
         };
-        let digest = blake3(text.as_bytes()).hex();
+        let labelled = match outcome {
+            Outcome::Returned(v) => crate::sink::check(v).is_err(),
+            Outcome::Raised(e) => crate::sink::check(e.value()).is_err(),
+        };
+        let digest = self.digest(&text, labelled);
         let Some(l) = self.loaded() else {
             let j = J::Obj(vec![("end".to_owned(), J::Str(digest))]);
             lock(&self.rec).end = Some(j.text());
@@ -1435,6 +1604,7 @@ fn load(text: &str) -> Result<Loaded, String> {
             .str("seed")
             .and_then(decode_hex32)
             .ok_or("a header without a seed")?,
+        headless: matches!(header.get("headless"), Some(J::Bool(true))),
         mode: if header.str("mode") == Some("full") {
             RecordMode::Full
         } else {
@@ -1454,6 +1624,13 @@ fn load(text: &str) -> Result<Loaded, String> {
             return Err("too many lines".to_owned());
         }
         let j = json::parse(line).map_err(|e| format!("line {}: {e}", n + 2))?;
+        if j.get("truncated").is_some() {
+            return Err(
+                "recording stopped at the tape's size limit (truncated): the turn cannot be \
+                 replayed"
+                    .to_owned(),
+            );
+        }
         if let Some(name) = j.str("blob") {
             let data = j.str("data").map(str::to_owned);
             if let Some(d) = &data
@@ -1722,7 +1899,13 @@ fn verify(l: &Loaded) -> Result<(), String> {
                     }
                     // Drained with a failure: the failure is its entry.
                     ("drained", None, Some(e)) if matches!(e.res, Res::Error(_)) => {}
-                    ("aborted" | "abandoned" | "withdrawn", None, None) => {}
+                    // Never ran, or (`failed`, `unacknowledged`) was ended by the scheduler at
+                    // its bound or grace.
+                    (
+                        "aborted" | "abandoned" | "withdrawn" | "failed" | "unacknowledged",
+                        None,
+                        None,
+                    ) => {}
                     _ => {
                         return Err(format!(
                             "{}: the outcome of `{key}` disagrees with the tape's entries",
@@ -1738,6 +1921,24 @@ fn verify(l: &Loaded) -> Result<(), String> {
             | Event::ParFailed { .. }
             | Event::TimeoutFired { .. }
             | Event::Skipped { .. } => {}
+        }
+    }
+    // Every admitted call was completed, and has its answer or (cancelled) its outcome; every
+    // re-parented call has its outcome: deleting an `ended` or `complete` line is caught.
+    if let Some(key) = held.keys().next() {
+        return Err(format!("`{key}` was admitted but never completed"));
+    }
+    for ev in &l.events {
+        if let Event::Admit { key, .. } = ev
+            && !l.entries.contains_key(key)
+            && !l.ended.contains_key(key)
+        {
+            return Err(format!("`{key}` has neither an answer nor an outcome"));
+        }
+    }
+    for key in &l.reparented {
+        if !l.ended.contains_key(key) {
+            return Err(format!("the re-parented call `{key}` has no outcome"));
         }
     }
     // Every outcome needs its call: a withdrawn call never ran, so it has no entry.

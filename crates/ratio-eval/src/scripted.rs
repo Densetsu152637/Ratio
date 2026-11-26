@@ -158,6 +158,9 @@ struct State {
     barriers: HashMap<String, Barrier>,
     gates: Vec<(String, Arc<ApprovalGate>)>,
     session_allowed: HashSet<String>,
+    harnesses: HashSet<String>,
+    asked: Vec<ApprovalRequest>,
+    conversation_labels: HashMap<u64, Labels>,
     denied: HashSet<String>,
     model_calls: Vec<ModelRequest>,
 }
@@ -171,6 +174,7 @@ pub struct ScriptedHost {
     peak: AtomicUsize,
     stopping: AtomicBool,
     jitter: AtomicU64,
+    rogue: AtomicBool,
 }
 
 impl std::fmt::Debug for ScriptedHost {
@@ -193,6 +197,7 @@ impl ScriptedHost {
             peak: AtomicUsize::new(0),
             stopping: AtomicBool::new(false),
             jitter: AtomicU64::new(0),
+            rogue: AtomicBool::new(false),
         }
     }
 
@@ -261,6 +266,27 @@ impl ScriptedHost {
         self
     }
 
+    /// The host itself starts a harness at `path` (as Imperium's harness loads and
+    /// `run_harness` do): a frame opened there must be a harness frame, whatever kind it is
+    /// presented as.
+    pub fn harness_at(&self, path: &str) -> &Self {
+        lock(&self.st).harnesses.insert(path.to_owned());
+        self
+    }
+
+    /// Labels conversation `conv` (it holds a labelled message).
+    pub fn label_conversation(&self, conv: u64, labels: Labels) -> &Self {
+        lock(&self.st).conversation_labels.insert(conv, labels);
+        self
+    }
+
+    /// A host that breaks the contract: it ignores cancellation tokens and declared bounds
+    /// (for the scheduler's own bounds).
+    pub fn rogue(&self) -> &Self {
+        self.rogue.store(true, Ordering::SeqCst);
+        self
+    }
+
     /// `session.control stop`: from now on every in-flight call drains, whatever its class.
     pub fn stop_session(&self) {
         self.stopping.store(true, Ordering::SeqCst);
@@ -282,6 +308,12 @@ impl ScriptedHost {
     #[must_use]
     pub fn events(&self) -> Vec<RatioEvent> {
         lock(&self.st).events.clone()
+    }
+
+    /// The approvals the user was asked, as the host received them.
+    #[must_use]
+    pub fn asked(&self) -> Vec<ApprovalRequest> {
+        lock(&self.st).asked.clone()
     }
 
     /// The model requests received.
@@ -607,7 +639,7 @@ impl ScriptedHost {
         Polls(self.polls()).await;
         let r = r.map(|value| {
             // The source rules: a read of a secret path is labelled.
-            let extra = self.source_labels(&frame, &call);
+            let extra = self.source_labels(&frame, &call.builtin, &call.args);
             let own = value.labels() | extra;
             ToolOutcome {
                 value: value.with_labels(own),
@@ -665,6 +697,12 @@ impl ScriptedHost {
                     });
                 }
             }
+        }
+        if self.rogue.load(Ordering::SeqCst) {
+            // Neither the token nor the bound ends the call.
+            return Arc::clone(&self)
+                .work(tool.to_owned(), first.to_owned(), spec.behaviour)
+                .await;
         }
         let stopping = self.stopping.load(Ordering::SeqCst);
         let class = if stopping {
@@ -823,11 +861,12 @@ impl Host for ScriptedHost {
         self.matches_secret(path)
     }
 
-    fn source_labels(&self, frame: &FrameCtx, call: &ToolInvocation) -> Labels {
-        let reads = matches!(&*call.tool, "read_file" | "grep" | "list_dir");
-        let path = call
-            .arg("path")
-            .and_then(Value::as_text)
+    fn source_labels(&self, frame: &FrameCtx, builtin: &str, args: &[(Arc<str>, Value)]) -> Labels {
+        let reads = matches!(builtin, "tools.read_file" | "tools.grep" | "tools.list_dir");
+        let path = args
+            .iter()
+            .find(|(n, _)| &**n == "path")
+            .and_then(|(_, v)| v.as_text())
             .unwrap_or_default();
         if reads && self.is_secret_path(frame, path) {
             Labels::source(0)
@@ -844,6 +883,14 @@ impl Host for ScriptedHost {
         let mut d = [0u8; 32];
         d[..8].copy_from_slice(&conv.0.to_le_bytes());
         Ok(Digest(d))
+    }
+
+    fn conversation_labels(&self, _: &FrameCtx, conv: ConvId) -> Result<Labels, HostError> {
+        Ok(lock(&self.st)
+            .conversation_labels
+            .get(&conv.0)
+            .copied()
+            .unwrap_or(Labels::NONE))
     }
 
     fn chat(
@@ -873,10 +920,19 @@ impl Host for ScriptedHost {
                 message: format!("no record of the frame `{}`", parent.path),
             });
         };
-        // The kind must fit the path: a block is `with`, a harness call is not.
+        // The kind must fit the path: a block is `with`, a harness call is not; an entry's
+        // frame has its parent's path, every other frame names its parent. And the kind comes
+        // from the host's own knowledge where it has any: a frame at a path where the host
+        // itself started a harness is a harness frame, however it is presented.
         let block = &*child.harness == "with";
+        let parent_ok = match child.kind {
+            FrameKind::Entry => child.path == parent.path,
+            FrameKind::Harness | FrameKind::Block => child.parent.as_deref() == Some(&*parent.path),
+        };
+        let known_harness = st.harnesses.contains(&*child.path);
         if (child.kind == FrameKind::Block) != block
-            || child.parent.as_deref() != Some(&*parent.path) && child.kind != FrameKind::Entry
+            || !parent_ok
+            || known_harness && child.kind != FrameKind::Harness
         {
             return Err(HostError::Denied {
                 by: DeniedBy::Attenuation,
@@ -938,9 +994,13 @@ impl Host for ScriptedHost {
         self: Arc<Self>,
         _: FrameCtx,
         _: EffectCtx,
-        _: ApprovalRequest,
+        req: ApprovalRequest,
     ) -> HostFuture<Result<bool, HostError>> {
-        let a = lock(&self.st).approvals.pop_front();
+        let a = {
+            let mut st = lock(&self.st);
+            st.asked.push(req);
+            st.approvals.pop_front()
+        };
         Box::pin(async move {
             a.ok_or(HostError::Denied {
                 by: DeniedBy::Unattended,
@@ -961,7 +1021,15 @@ impl Host for ScriptedHost {
         Box::pin(crate::host::sleep::Sleep::until(at))
     }
 
-    fn emit(&self, _: &FrameCtx, event: RatioEvent) {
+    fn emit(&self, _: &FrameCtx, event: RatioEvent) -> Result<(), HostError> {
+        // The engine's own check: a secret at a sink (`session.emit`) is refused.
+        if event.secret && crate::host::operation_rule(&event.builtin) == SinkRule::Refuse {
+            return Err(HostError::secrecy(format!(
+                "the engine refuses a secret to `{}`",
+                event.builtin
+            )));
+        }
         lock(&self.st).events.push(event);
+        Ok(())
     }
 }

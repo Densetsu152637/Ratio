@@ -1,6 +1,9 @@
-//! From the machine's effects to host calls: which method a built-in reaches, its arguments by
-//! name, its tool name and cancellation class, and whether it is input-bearing (chapter 01:
-//! output-only effects get no tape entry and are suppressed in replay).
+//! From the machine's effects to host calls, driven by the checker's table of built-ins: which
+//! method a built-in reaches (every `@effect(model)` built-in is a model call, admitted by
+//! reservation; every `tools.*` built-in a tool call, admitted one `tool_calls` per call it
+//! makes), its arguments by name, its tool name and cancellation class, its sink rule, and
+//! whether it is input-bearing (chapter 01: output-only effects get no tape entry and are
+//! suppressed in replay). A built-in the table does not know reaches no host at all.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -14,23 +17,44 @@ use crate::frame::FrameCtx;
 use crate::machine::EffectRequest;
 use crate::value::Value;
 
-/// The parameter names of every built-in, from the checker's table.
-fn params() -> &'static HashMap<String, Vec<Arc<str>>> {
-    static PARAMS: OnceLock<HashMap<String, Vec<Arc<str>>>> = OnceLock::new();
-    PARAMS.get_or_init(|| {
+/// What the checker's table says about a built-in.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Traits {
+    pub params: Vec<Arc<str>>,
+    pub effects: Vec<String>,
+    pub pure: bool,
+    pub local: bool,
+    pub secrecy_sink: bool,
+}
+
+/// The checker's table, by built-in name.
+fn table() -> &'static HashMap<String, Traits> {
+    static TABLE: OnceLock<HashMap<String, Traits>> = OnceLock::new();
+    TABLE.get_or_init(|| {
         ratio_check::builtin_rules()
             .into_iter()
             .map(|r| {
-                let names = r.params.iter().map(|p| Arc::from(p.as_str())).collect();
-                (r.name, names)
+                let t = Traits {
+                    params: r.params.iter().map(|p| Arc::from(p.as_str())).collect(),
+                    effects: r.effects,
+                    pure: r.pure,
+                    local: r.local,
+                    secrecy_sink: r.secrecy_sink,
+                };
+                (r.name, t)
             })
             .collect()
     })
 }
 
+/// The table's traits of `builtin`, if it has an entry.
+pub(crate) fn traits(builtin: &str) -> Option<&'static Traits> {
+    table().get(builtin)
+}
+
 /// The arguments given (defaults left out), by parameter name.
 pub(crate) fn named_args(req: &EffectRequest) -> Vec<(Arc<str>, Value)> {
-    let names = params().get(&*req.builtin);
+    let names = traits(&req.builtin).map(|t| &t.params);
     req.args
         .iter()
         .enumerate()
@@ -58,12 +82,15 @@ fn text_of(args: &[(Arc<str>, Value)], name: &str) -> String {
 /// The host call an effect makes.
 #[derive(Debug)]
 pub(crate) enum Call {
-    Tool(ToolInvocation),
+    /// A tool call, admitted as this many tool calls.
+    Tool(ToolInvocation, u64),
     Model(ModelRequest),
     Approve(ApprovalRequest),
     /// Output-only: no result, no tape entry, suppressed in replay.
     Event(RatioEvent),
     Op(Operation),
+    /// A built-in the table does not know: it reaches no host.
+    Unknown(Arc<str>),
 }
 
 impl Call {
@@ -89,9 +116,12 @@ fn tool_name(builtin: &str, args: &[(Arc<str>, Value)]) -> Option<String> {
         "mcp_prompts" => mcp("prompts_list"),
         "mcp_get_prompt" => mcp("prompts_get"),
         "run_background" => "run_command".to_owned(),
-        // Engine reads and conversation dispatch: operations, not tool calls.
-        "mcp_servers" | "offered" | "spec" | "has" | "skills" | "plugins" | "refuse"
-        | "dispatch" | "dispatch_all" => return None,
+        // A model's calls dispatched on a conversation: tool calls, of whatever they name.
+        "dispatch" | "dispatch_all" => "dispatch".to_owned(),
+        // Engine reads: operations, not tool calls.
+        "mcp_servers" | "offered" | "spec" | "has" | "skills" | "plugins" | "refuse" => {
+            return None;
+        }
         other => other.to_owned(),
     })
 }
@@ -123,6 +153,9 @@ fn model_of(frame: &FrameCtx, args: &[(Arc<str>, Value)]) -> ModelRef {
     ))
 }
 
+/// The bound a `drain` operation is failed at.
+pub(crate) const OPERATION_DRAIN: Duration = Duration::from_secs(600);
+
 /// The engine operations that are `drain`-class when cancelled (they write); every other
 /// operation is aborted.
 fn operation_class(builtin: &str) -> ToolClass {
@@ -139,7 +172,7 @@ fn operation_class(builtin: &str) -> ToolClass {
         | "session.rewind_files"
         | "session.branch"
         | "session.start"
-        | "context.compact" => ToolClass::drain(Duration::from_secs(600)),
+        | "context.compact" => ToolClass::drain(OPERATION_DRAIN),
         _ => ToolClass::abort(false),
     }
 }
@@ -149,57 +182,67 @@ fn operation_class(builtin: &str) -> ToolClass {
 /// operation's own otherwise.
 pub(crate) fn class_of(host: &dyn super::Host, frame: &FrameCtx, call: &Call) -> ToolClass {
     match call {
-        Call::Tool(t) => host.tool_class(frame, &t.tool),
+        Call::Tool(t, _) => host.tool_class(frame, &t.tool),
         Call::Op(o) => operation_class(&o.builtin),
-        Call::Model(_) | Call::Approve(_) | Call::Event(_) => ToolClass::abort(false),
+        Call::Model(_) | Call::Approve(_) | Call::Event(_) | Call::Unknown(_) => {
+            ToolClass::abort(false)
+        }
+    }
+}
+
+/// The output-only built-ins.
+fn output_only(b: &str) -> bool {
+    b.starts_with("log.")
+        || matches!(
+            b,
+            "trace.event" | "session.emit" | "session.stream" | "session.notify"
+        )
+}
+
+fn approval(b: &str, args: &[(Arc<str>, Value)]) -> ApprovalRequest {
+    let labelled = |name: &str| {
+        let v = arg(args, name);
+        Labelled::new(
+            v.and_then(Value::as_text).unwrap_or_default().to_owned(),
+            v.map_or(crate::labels::Labels::NONE, Value::labels),
+        )
+    };
+    if b == "declassify" {
+        ApprovalRequest {
+            kind: ApprovalKind::Declassify,
+            summary: labelled("because"),
+            detail: None,
+        }
+    } else {
+        ApprovalRequest {
+            kind: ApprovalKind::Request,
+            summary: labelled("summary"),
+            detail: arg(args, "detail").cloned(),
+        }
     }
 }
 
 /// The host call `req` makes.
 pub(crate) fn classify(req: &EffectRequest) -> Call {
     let builtin = Arc::clone(&req.builtin);
-    let args = named_args(req);
     let b = &*builtin;
+    let Some(t) = traits(b) else {
+        if output_only(b) {
+            let args = named_args(req);
+            return Call::Event(RatioEvent {
+                builtin,
+                key: req.key(),
+                args,
+                secret: false,
+            });
+        }
+        return Call::Unknown(builtin);
+    };
+    let args = named_args(req);
     if b == "declassify" || b == "session.request_approval" {
-        let (kind, summary, detail) = if b == "declassify" {
-            let because = arg(&args, "because");
-            (
-                ApprovalKind::Declassify,
-                Labelled::new(
-                    because
-                        .and_then(Value::as_text)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    because.map_or(crate::labels::Labels::NONE, Value::labels),
-                ),
-                None,
-            )
-        } else {
-            let summary = arg(&args, "summary");
-            (
-                ApprovalKind::Request,
-                Labelled::new(
-                    summary
-                        .and_then(Value::as_text)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    summary.map_or(crate::labels::Labels::NONE, Value::labels),
-                ),
-                arg(&args, "detail").cloned(),
-            )
-        };
-        return Call::Approve(ApprovalRequest {
-            kind,
-            summary,
-            detail,
-        });
+        return Call::Approve(approval(b, &args));
     }
-    if b.starts_with("log.")
-        || b == "trace.event"
-        || b == "session.emit"
-        || b == "session.stream"
-        || b == "session.notify"
-    {
+    if output_only(b) {
         return Call::Event(RatioEvent {
             builtin,
             key: req.key(),
@@ -207,9 +250,12 @@ pub(crate) fn classify(req: &EffectRequest) -> Call {
             secret: false,
         });
     }
-    if matches!(b, "model.generate" | "model.complete") {
-        let prompt = arg(&args, "p")
-            .or_else(|| arg(&args, "text"))
+    if t.effects.iter().any(|e| e == "model") {
+        let prompt_name = ["p", "text", "input"]
+            .into_iter()
+            .find(|n| arg(&args, n).is_some());
+        let prompt = prompt_name
+            .and_then(|n| arg(&args, n))
             .cloned()
             .unwrap_or_default();
         let max_tokens = arg(&args, "opts")
@@ -219,7 +265,7 @@ pub(crate) fn classify(req: &EffectRequest) -> Call {
         let model = model_of(&req.frame, &args);
         let options = args
             .into_iter()
-            .filter(|(n, _)| &**n != "p" && &**n != "text")
+            .filter(|(n, _)| Some(&**n) != prompt_name)
             .collect();
         return Call::Model(ModelRequest {
             builtin,
@@ -231,13 +277,25 @@ pub(crate) fn classify(req: &EffectRequest) -> Call {
         });
     }
     if let Some(tool) = tool_name(b, &args) {
-        return Call::Tool(ToolInvocation {
-            tool: Arc::from(tool),
-            builtin,
-            args,
-            secret: false,
-            in_defer: req.in_defer,
-        });
+        // `dispatch_all` runs as many tool calls as it is given.
+        let count = if b == "tools.dispatch_all" {
+            arg(&args, "calls")
+                .and_then(Value::elements)
+                .map_or(1, |c| c.len() as u64)
+                .max(1)
+        } else {
+            1
+        };
+        return Call::Tool(
+            ToolInvocation {
+                tool: Arc::from(tool),
+                builtin,
+                args,
+                secret: false,
+                in_defer: req.in_defer,
+            },
+            count,
+        );
     }
     Call::Op(Operation {
         family: OpFamily::of(b),

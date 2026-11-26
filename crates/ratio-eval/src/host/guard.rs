@@ -1,16 +1,20 @@
 //! The sink guard (chapter 03, "Sinks"; chapter 10, "Security requirements by side").
 //!
 //! The interpreter wraps every host in a [`Guard`]; no host can opt out of it, because the
-//! evaluation builds it around whatever host it is given. The guard refuses a labelled value at
-//! every secrecy sink before the host sees it (`Denied { by: secrecy }`), recomputes the
-//! per-call secrecy flag from the labels (never trusting a flag it was handed), and checks
+//! evaluation builds it around whatever host it is given, and calls the host through it for
+//! every effect. The guard refuses a labelled value at every secrecy sink before the host sees
+//! it (`Denied { by: secrecy }`), recomputes the per-call secrecy flag from the labels (never
+//! trusting a flag it was handed), redacts labelled parts of an approval's text, and checks
 //! every frame it forwards against its parent with [`check_within`] as defence in depth. The
 //! engine enforces the same sinks again at dispatch from the flag, which catches a bug here
 //! (but not a dropped label: propagation is the interpreter's alone).
 //!
-//! Where the guard cannot know what the engine knows, it refuses: an MCP tool's server may be
-//! local, a `media_*` backend may be local, a model whose card cannot be read may be local; a
-//! labelled value reaches none of them through the guard.
+//! The rules fail closed. They are read from the checker's table of built-ins: a tool or
+//! operation is a sink unless the table marks it `@local` (its effects keep its arguments on the
+//! machine) or `@pure`; `write_file` and `edit_file` may write a secret only to a path in
+//! `ratio.secret_paths`; a built-in the table does not know is refused outright. Where the
+//! guard cannot know what the engine knows, it refuses: an MCP server may be local, a model
+//! without a card may be local; a labelled value reaches none of them through the guard.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,7 +40,13 @@ pub enum SinkRule {
     UnlessSecretPath,
 }
 
-/// The sink rule of a tool call made by `builtin` naming `tool` (chapter 03, "Sinks").
+/// Whether the checker's table marks `builtin` as keeping its arguments on the machine.
+fn local(builtin: &str) -> bool {
+    super::bridge::traits(builtin).is_some_and(|t| (t.local || t.pure) && !t.secrecy_sink)
+}
+
+/// The sink rule of a tool call made by `builtin` naming `tool` (chapter 03, "Sinks"): a sink
+/// unless the table marks the built-in `@local`, whatever the tool it names.
 #[must_use]
 pub fn sink_rule(builtin: &str, tool: &str) -> SinkRule {
     // They can reach any tool by name, outbound ones included.
@@ -46,27 +56,29 @@ pub fn sink_rule(builtin: &str, tool: &str) -> SinkRule {
     ) {
         return SinkRule::Refuse;
     }
-    match tool {
-        "web_search" | "web_fetch" | "run_command" | "run_background" | "run_script" => {
-            SinkRule::Refuse
-        }
-        "write_file" | "edit_file" => SinkRule::UnlessSecretPath,
-        t if t.starts_with("browser_") || t.starts_with("media_") || t.starts_with("mcp__") => {
-            SinkRule::Refuse
-        }
-        _ => SinkRule::Open,
+    if matches!(tool, "write_file" | "edit_file") {
+        return SinkRule::UnlessSecretPath;
+    }
+    if local(builtin) {
+        SinkRule::Open
+    } else {
+        SinkRule::Refuse
     }
 }
 
-/// The sink rule of an engine operation or output event.
+/// The sink rule of an engine operation or output event: a sink unless the table marks it
+/// `@local` (logs, traces, streams and notices pass, for the host to redact).
 #[must_use]
 pub fn operation_rule(builtin: &str) -> SinkRule {
-    match builtin {
-        "memory.remember" | "memory.edit" | "memory.propose" | "session.emit" | "eval.metric"
-        | "eval.score" | "eval.label" => SinkRule::Refuse,
-        // Briefs, steering, questions and anything else handed to another agent.
-        b if b.starts_with("agents.") => SinkRule::Refuse,
-        _ => SinkRule::Open,
+    if builtin.starts_with("log.")
+        || matches!(builtin, "trace.event" | "session.stream" | "session.notify")
+    {
+        return SinkRule::Open;
+    }
+    if local(builtin) {
+        SinkRule::Open
+    } else {
+        SinkRule::Refuse
     }
 }
 
@@ -91,6 +103,15 @@ fn refused<T: Send + 'static>(e: HostError) -> HostFuture<Result<T, HostError>> 
     Box::pin(async move { Err(e) })
 }
 
+/// The placeholder a labelled part of an approval's text is shown as.
+fn placeholder(labels: Labels) -> String {
+    let sources: Vec<String> = (0..32)
+        .filter(|i| labels.contains(Labels::source(*i)))
+        .map(|i| i.to_string())
+        .collect();
+    format!("[secret: source {}]", sources.join(", "))
+}
+
 /// The guard every evaluation wraps its host in.
 pub struct Guard {
     inner: Arc<dyn Host>,
@@ -106,12 +127,6 @@ impl Guard {
     #[must_use]
     pub fn new(inner: Arc<dyn Host>) -> Guard {
         Guard { inner }
-    }
-
-    /// The host it guards.
-    #[must_use]
-    pub fn inner(&self) -> &Arc<dyn Host> {
-        &self.inner
     }
 
     /// Checks a tool call and sets its secrecy flag.
@@ -197,15 +212,19 @@ impl Guard {
         Ok(())
     }
 
-    /// Emits an event after [`Guard::check_event`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Guard::check_event`].
-    pub fn emit_checked(&self, frame: &FrameCtx, mut event: RatioEvent) -> Result<(), HostError> {
-        Guard::check_event(&mut event)?;
-        self.inner.emit(frame, event);
-        Ok(())
+    /// An approval's summary and detail with every labelled part replaced by a placeholder
+    /// naming its label sources: the user is asked, but no secret is shown to the host.
+    #[must_use]
+    pub fn redact_approval(mut req: ApprovalRequest) -> ApprovalRequest {
+        if req.summary.is_labelled() {
+            req.summary = Labelled::plain(placeholder(req.summary.labels));
+        }
+        if let Some(d) = &req.detail
+            && let Err(l) = crate::sink::check(d)
+        {
+            req.detail = Some(Value::text(&placeholder(l)));
+        }
+        req
     }
 }
 
@@ -269,8 +288,8 @@ impl Host for Guard {
         self.inner.is_secret_path(frame, path)
     }
 
-    fn source_labels(&self, frame: &FrameCtx, call: &ToolInvocation) -> Labels {
-        self.inner.source_labels(frame, call)
+    fn source_labels(&self, frame: &FrameCtx, builtin: &str, args: &[(Arc<str>, Value)]) -> Labels {
+        self.inner.source_labels(frame, builtin, args)
     }
 
     fn conversation(&self, frame: &FrameCtx, which: ConvSelector) -> Result<ConvId, HostError> {
@@ -281,6 +300,10 @@ impl Host for Guard {
         self.inner.conversation_digest(frame, conv)
     }
 
+    fn conversation_labels(&self, frame: &FrameCtx, conv: ConvId) -> Result<Labels, HostError> {
+        self.inner.conversation_labels(frame, conv)
+    }
+
     fn chat(
         self: Arc<Self>,
         frame: FrameCtx,
@@ -288,7 +311,13 @@ impl Host for Guard {
         conv: ConvId,
         mut req: ChatRequest,
     ) -> HostFuture<Result<ModelResponse, HostError>> {
-        req.secret = !args_labels(&req.options).is_empty();
+        // A call on a labelled conversation is a sink as if its whole content were secret; a
+        // conversation whose labels cannot be read counts as labelled.
+        let conv_labelled = self
+            .inner
+            .conversation_labels(&frame, conv)
+            .map_or(true, |l| !l.is_empty());
+        req.secret = conv_labelled || !args_labels(&req.options).is_empty();
         if req.secret && !self.is_local(&frame, req.model.as_ref()) {
             return refused(refusal("a hosted model"));
         }
@@ -331,7 +360,7 @@ impl Host for Guard {
         cx: EffectCtx,
         req: ApprovalRequest,
     ) -> HostFuture<Result<bool, HostError>> {
-        Arc::clone(&self.inner).approve(frame, cx, req)
+        Arc::clone(&self.inner).approve(frame, cx, Guard::redact_approval(req))
     }
 
     fn now(&self) -> Instant {
@@ -346,11 +375,8 @@ impl Host for Guard {
         self.inner.timer(at)
     }
 
-    fn emit(&self, frame: &FrameCtx, mut event: RatioEvent) {
-        // The trait's `emit` cannot refuse: a refused event is dropped here; the scheduler
-        // calls [`Guard::emit_checked`] and raises the refusal in the program.
-        if Guard::check_event(&mut event).is_ok() {
-            self.inner.emit(frame, event);
-        }
+    fn emit(&self, frame: &FrameCtx, mut event: RatioEvent) -> Result<(), HostError> {
+        Guard::check_event(&mut event)?;
+        self.inner.emit(frame, event)
     }
 }

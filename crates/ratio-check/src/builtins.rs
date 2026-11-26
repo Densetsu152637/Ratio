@@ -336,6 +336,15 @@ impl Traits {
     }
 }
 
+/// The words of every `@name(…)` attribute among `attrs`.
+pub(crate) fn attr_words(attrs: &[ratio_syntax::ast::Attribute], name: &str) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|a| a.name.name == name)
+        .flat_map(|a| a.args.iter().flatten().filter_map(|arg| word(&arg.value)))
+        .collect()
+}
+
 /// An attribute argument as a word: a name, or a string literal without interpolations.
 fn word(e: &ratio_syntax::ast::Expr) -> Option<String> {
     use ratio_syntax::ast::{ExprKind, Lit, StrPart};

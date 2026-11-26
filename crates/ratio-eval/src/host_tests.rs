@@ -43,7 +43,7 @@ use crate::frame::{
 };
 use crate::host::{
     CancelClass, CancelOutcome, DeniedBy, EffectCtx, EffectKey, Host, HostError, HostFuture,
-    MAX_DRAIN, ModelRef, ModelRequest, ToolInvocation,
+    MAX_DRAIN, ModelRef, ModelRequest, OpFamily, Operation, RatioEvent, ToolInvocation,
 };
 use crate::machine::CancelToken;
 use crate::value::Value;
@@ -56,6 +56,9 @@ pub struct Calls {
     pub network: ToolInvocation,
     pub command: ToolInvocation,
     pub write: ToolInvocation,
+    /// `tools.mcp_call` and `tools.call_tool`, which can reach any tool by name.
+    pub mcp: ToolInvocation,
+    pub any_tool: ToolInvocation,
     /// An `abort` tool that takes long (at least a few seconds).
     pub slow_abort: ToolInvocation,
     /// An `abort` tool that reaches a remote server and takes long.
@@ -84,6 +87,55 @@ pub trait Fixture {
     fn stop_session(&self, host: &Arc<dyn Host>);
     /// A hosted model the scripted endpoint answers.
     fn hosted_model(&self) -> ModelRef;
+    /// The host itself starts a harness at `path` (its own harness load or `run_harness`):
+    /// a frame opened there is a harness frame, whatever kind Ratio presents it as.
+    fn harness_started(&self, host: &Arc<dyn Host>, path: &str);
+}
+
+/// The engine operations that are secrecy sinks (briefs, steering and questions to other
+/// agents, memory writes, eval metrics, scores and labels), each with one secret argument.
+#[must_use]
+pub fn sink_operations() -> Vec<Operation> {
+    let secret = Value::text("the key").with_labels(crate::labels::Labels::source(0));
+    [
+        ("agents.spawn", "brief"),
+        ("agents.steer", "text"),
+        ("agents.queue", "text"),
+        ("agents.ask", "question"),
+        ("memory.remember", "text"),
+        ("memory.edit", "text"),
+        ("memory.propose", "text"),
+        ("eval.metric", "value"),
+        ("eval.score", "value"),
+        ("eval.label", "value"),
+    ]
+    .into_iter()
+    .map(|(b, arg)| Operation {
+        family: OpFamily::of(b),
+        builtin: Arc::from(b),
+        args: vec![(Arc::from(arg), secret.clone())],
+        secret: true,
+    })
+    .collect()
+}
+
+/// `session.emit` with a secret: an output-only sink.
+#[must_use]
+pub fn sink_event() -> RatioEvent {
+    RatioEvent {
+        builtin: Arc::from("session.emit"),
+        key: EffectKey {
+            frame: Arc::from("turn"),
+            branch: Arc::from(""),
+            site: ([0; 32], 99),
+            occurrence: 0,
+        },
+        args: vec![(
+            Arc::from("data"),
+            Value::text("the key").with_labels(crate::labels::Labels::source(0)),
+        )],
+        secret: true,
+    }
 }
 
 /// Runs a future on the current thread, polling it until it resolves or `limit` passes.
@@ -119,6 +171,7 @@ pub fn narrow_scope() -> Scope {
             ToolPat::parse("slow_*").expect("a pattern"),
             ToolPat::parse("never_drain").expect("a pattern"),
             ToolPat::parse("needs_approval").expect("a pattern"),
+            ToolPat::parse("mcp__*").expect("a pattern"),
         ]),
         mode: Mode::Default,
         rules: Rules {
@@ -254,19 +307,20 @@ pub fn frames(f: &dyn Fixture) {
             "a child wider in `{dim}` than the host's record must be refused under a forged parent"
         );
     }
-    // A harness call passed off as a block (to skip the depth check).
-    let mut same_depth = scope.clone();
-    same_depth.depth = scope.depth;
+    // A harness call passed off consistently as a block: kind `Block`, harness `with`, the
+    // parent's depth. Its scope is within the parent, and only the host's own knowledge (it
+    // started a harness there) can tell; the kind is Ratio's assertion, never proof.
+    f.harness_started(&host, "turn/with@s2#0");
     let as_block = ctx(
-        "turn/h@s2#0",
+        "turn/with@s2#0",
         Some("turn"),
         FrameKind::Block,
-        "h",
-        same_depth,
+        "with",
+        scope.clone(),
     );
     assert!(
         refused_by_attenuation(&host.open_frame(&parent, &as_block)),
-        "a harness frame forged as a block must be refused"
+        "a harness frame forged consistently as a block must be refused"
     );
     // A parent the host never opened.
     let unknown = ctx(
@@ -343,6 +397,8 @@ pub fn sinks(f: &dyn Fixture) {
         ("network", calls.network),
         ("command", calls.command),
         ("write", calls.write),
+        ("mcp_call", calls.mcp),
+        ("call_tool", calls.any_tool),
     ] {
         let (cx, _) = effect(1, None);
         let r = run_for(
@@ -364,13 +420,27 @@ pub fn sinks(f: &dyn Fixture) {
         secret: true,
     };
     let r = run_for(
-        Arc::clone(&host).generate(frame, cx, req),
+        Arc::clone(&host).generate(frame.clone(), cx, req),
         Duration::from_secs(10),
     );
     assert!(
         denied_secrecy(r.as_ref()),
         "a hosted model must refuse a secret: {:?}",
         r.map(|r| r.map(|m| m.text))
+    );
+    for op in sink_operations() {
+        let (cx, _) = effect(3, None);
+        let what = Arc::clone(&op.builtin);
+        let r = run_for(
+            Arc::clone(&host).operate(frame.clone(), cx, op),
+            Duration::from_secs(10),
+        );
+        assert!(denied_secrecy(r.as_ref()), "`{what}` must refuse a secret");
+    }
+    let r = host.emit(&frame, sink_event());
+    assert!(
+        denied_secrecy(Some(&r)),
+        "`session.emit` must refuse a secret"
     );
 }
 
@@ -691,6 +761,23 @@ impl Fixture for ScriptedFixture {
                     ("content", secret("k")),
                 ],
             ),
+            mcp: call(
+                "mcp__srv__t",
+                "tools.mcp_call",
+                vec![
+                    ("server", Value::text("srv")),
+                    ("tool", Value::text("t")),
+                    ("arguments", secret("{}")),
+                ],
+            ),
+            any_tool: call(
+                "read_file",
+                "tools.call_tool",
+                vec![
+                    ("name", Value::text("read_file")),
+                    ("arguments", secret("{}")),
+                ],
+            ),
             slow_abort: call(
                 "slow_read",
                 "tools.call_tool",
@@ -743,5 +830,9 @@ impl Fixture for ScriptedFixture {
 
     fn hosted_model(&self) -> ModelRef {
         ModelRef(Arc::from("hosted"))
+    }
+
+    fn harness_started(&self, host: &Arc<dyn Host>, path: &str) {
+        self.scripted(host).harness_at(path);
     }
 }

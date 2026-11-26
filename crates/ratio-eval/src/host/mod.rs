@@ -563,7 +563,7 @@ pub trait Host: Send + Sync + 'static {
     /// The labels the host's source rules give a call's result (`ratio.secret_paths`, secret
     /// commands, private memory): a replay adds them to the recorded labels, so a tape
     /// recorded under weaker secrecy settings cannot launder a value the current ones label.
-    fn source_labels(&self, frame: &FrameCtx, call: &ToolInvocation) -> Labels;
+    fn source_labels(&self, frame: &FrameCtx, builtin: &str, args: &[(Arc<str>, Value)]) -> Labels;
 
     // ---- conversations ----
 
@@ -582,6 +582,15 @@ pub trait Host: Send + Sync + 'static {
     /// When the conversation does not exist.
     fn conversation_digest(&self, frame: &FrameCtx, conv: ConvId) -> Result<Digest, HostError>;
 
+    /// The labels of a conversation (chapter 03: a conversation holding a labelled message is
+    /// labelled, and a call on it is a sink as if its whole content were secret). The guard
+    /// refuses a call on a labelled conversation to a hosted model.
+    ///
+    /// # Errors
+    ///
+    /// When the conversation does not exist (the guard then treats it as labelled).
+    fn conversation_labels(&self, frame: &FrameCtx, conv: ConvId) -> Result<Labels, HostError>;
+
     /// A model call on a conversation.
     fn chat(
         self: Arc<Self>,
@@ -595,8 +604,16 @@ pub trait Host: Send + Sync + 'static {
 
     /// A frame opens below `parent`: the host verifies, against its own record of the parent
     /// (looked up by `parent.path`, never from `parent.scope`), that `child.scope` is within
-    /// it in every dimension (`frame::check_within`), that the kind fits the path, and records
-    /// the child.
+    /// it in every dimension (`frame::check_within`), and records the child.
+    ///
+    /// **`child.kind` and `child.harness` are asserted by Ratio, not proved.** A harness call
+    /// passed off consistently as a `with` block (kind `Block`, harness `with`, the parent's
+    /// depth) is within its parent in every dimension and would not count towards the depth
+    /// limit. A host must therefore take the kind from its own knowledge, never from the
+    /// context: only the harnesses the host itself loaded or ran (Imperium's harness loads and
+    /// `run_harness`) open `Harness` frames, so a frame at a path the host knows is a harness
+    /// call is refused under any other kind. The contract suite checks it with the consistent
+    /// forgery.
     ///
     /// # Errors
     ///
@@ -636,8 +653,13 @@ pub trait Host: Send + Sync + 'static {
     /// A future that resolves at `at` (the scheduler's timeouts; there is no runtime here).
     fn timer(&self, at: Instant) -> HostFuture<()>;
 
-    /// An output-only event.
-    fn emit(&self, frame: &FrameCtx, event: RatioEvent);
+    /// An output-only event. A host refuses a labelled `session.emit` from the secrecy flag
+    /// (a sink) and redacts labelled logs, traces and streams.
+    ///
+    /// # Errors
+    ///
+    /// `Denied { by: secrecy }` for a secret at a sink.
+    fn emit(&self, frame: &FrameCtx, event: RatioEvent) -> Result<(), HostError>;
 }
 
 /// A host that answers every effect with `Unsupported`: what [`crate::evaluate`] runs a pure
@@ -697,8 +719,12 @@ impl Host for NoHost {
         false
     }
 
-    fn source_labels(&self, _: &FrameCtx, _: &ToolInvocation) -> Labels {
+    fn source_labels(&self, _: &FrameCtx, _: &str, _: &[(Arc<str>, Value)]) -> Labels {
         Labels::NONE
+    }
+
+    fn conversation_labels(&self, _: &FrameCtx, _: ConvId) -> Result<Labels, HostError> {
+        Err(HostError::unsupported("conversations need a host"))
     }
 
     fn conversation(&self, _: &FrameCtx, _: ConvSelector) -> Result<ConvId, HostError> {
@@ -758,7 +784,9 @@ impl Host for NoHost {
         Box::pin(crate::host::sleep::Sleep::until(at))
     }
 
-    fn emit(&self, _: &FrameCtx, _: RatioEvent) {}
+    fn emit(&self, _: &FrameCtx, _: RatioEvent) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 pub(crate) mod sleep;
