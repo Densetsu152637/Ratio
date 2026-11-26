@@ -17,7 +17,7 @@
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `meta.frame` | `() -> FrameInfo` | `{ name (the harness's; `harness` is a keyword), title, depth, path, model, effort, mode, location, attended, context: fresh \| fork \| none \| main, tools: Int }` | — | `engine` |
+| `meta.frame` | `() -> FrameInfo` | `{ name, title, depth, path, model, effort, mode, location, attended, context: fresh \| fork \| none \| main, tools: Int }` (`name` is the harness's name; `harness` is a keyword) | — | `engine` |
 | `meta.caller` | `() -> CallerInfo?` | The calling harness and call site, `{ name, site }`; `none` in an entry | — | `engine` |
 | `meta.depth` | `() -> Int` | The frame depth (0 in an entry) | — | `engine` |
 | `meta.limits` | `() -> FrameLimits` | The frame's caps (budget, depth, width, heap) after attenuation | — | `engine` |
