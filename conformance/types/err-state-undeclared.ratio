@@ -1,0 +1,9 @@
+// expect: check-error C0001 at 7:11
+
+// `state.*` works at the package's declared `state` type; a package without a `state`
+// declaration has nothing to read or write.
+
+fn read() -> Int {
+  let s = state.get()
+  1
+}

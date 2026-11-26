@@ -294,6 +294,8 @@ pub struct BuiltinRules {
     pub attrs: Vec<String>,
     /// Whether it has type parameters.
     pub generic: bool,
+    /// Its parameters in order, by name as a program writes it, and whether each has a default.
+    pub params: Vec<(String, bool)>,
     /// Why it may not be used as a function value, if it may not.
     pub refused_as_value: Option<&'static str>,
 }
@@ -321,6 +323,16 @@ pub fn builtin_rules() -> Vec<BuiltinRules> {
                 name,
                 attrs: item.attrs.iter().map(|a| a.name.name.clone()).collect(),
                 generic,
+                params: decl
+                    .params
+                    .iter()
+                    .map(|p| {
+                        (
+                            builtins::builtin_name(&p.name.name).to_owned(),
+                            p.default.is_some(),
+                        )
+                    })
+                    .collect(),
                 refused_as_value: traits.value_refusal(generic),
             });
         }

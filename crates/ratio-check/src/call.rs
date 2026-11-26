@@ -1053,6 +1053,68 @@ impl Checker<'_> {
         ret
     }
 
+    /// The type a `state.*` call works at: the declared `state` type of the calling module's
+    /// package. Without a declaration, or with a turbofish (the type is never the caller's to
+    /// choose: `state.get::<Str>()` would read untrusted state as trusted text), the call is
+    /// refused and typed as an error.
+    fn state_type_at(&mut self, b: &Body, span: Span, name: &str, turbofish: bool) -> TypeId {
+        let origin = b.origin();
+        if turbofish {
+            self.report(
+                origin,
+                Code::TypeArguments,
+                span,
+                format!(
+                    "`state.{name}` takes no type arguments: its type is the package's declared \
+                     `state` type"
+                ),
+            );
+            return TypeId::ERROR;
+        }
+        if let Some(t) = self.package_state(b.module) {
+            return t;
+        }
+        self.report(
+            origin,
+            Code::UnknownName,
+            span,
+            format!("`state.{name}` needs a `state` declaration in the package, and it has none"),
+        );
+        TypeId::ERROR
+    }
+
+    /// Closes to `()` each still-open type parameter of a built-in that only parameters left to
+    /// their defaults mention, and not its result (`log.info("done")`'s `data: T?`): no value of
+    /// it comes from the call and none goes back, so nothing is guessed (`()` rather than
+    /// `Never`, so a `@schema(T)` parameter stays satisfied).
+    fn close_unused_params(
+        &mut self,
+        sig: &FnSig,
+        pairs: &[(ParamId, TypeId)],
+        slots: &[Option<ArgSource>],
+    ) {
+        for (p, t) in pairs {
+            let resolved = self.types.resolve(*t);
+            let Ty::Var(v) = *self.types.get(resolved) else {
+                continue;
+            };
+            let probe = [(*p, TypeId::ERROR)];
+            let mentions =
+                |types: &mut crate::types::Types, ty: TypeId| types.substitute(ty, &probe) != ty;
+            if mentions(&mut self.types, sig.ret) {
+                continue;
+            }
+            let given = sig
+                .params
+                .iter()
+                .zip(slots)
+                .any(|(param, slot)| slot.is_some() && mentions(&mut self.types, param.ty));
+            if !given {
+                self.types.bind_var(v, TypeId::UNIT);
+            }
+        }
+    }
+
     #[allow(
         clippy::too_many_arguments,
         clippy::too_many_lines,
@@ -1074,9 +1136,15 @@ impl Checker<'_> {
             || "this function".to_owned(),
             |i| builtins::builtin_name(&i.name).to_owned(),
         );
-        // Type arguments: the turbofish's, or inference variables.
+        // Type arguments: the package's state type for `state.*`, the turbofish's, or inference
+        // variables.
         let mut pairs: Vec<(ParamId, TypeId)> = Vec::with_capacity(sig.type_params.len());
-        if type_args.is_empty() {
+        if sig.traits.state {
+            let state = self.state_type_at(b, span, &name, !type_args.is_empty());
+            for p in &sig.type_params {
+                pairs.push((*p, state));
+            }
+        } else if type_args.is_empty() {
             for p in &sig.type_params {
                 pairs.push((*p, self.types.new_var(*p)));
             }
@@ -1228,6 +1296,9 @@ impl Checker<'_> {
                     crate::pattern::quote(&missing)
                 ),
             );
+        }
+        if r.is_some_and(|r| matches!(r.origin, Origin::Std(_))) {
+            self.close_unused_params(sig, &pairs, &slots);
         }
         self.close_vars(b, &pairs, &name, span, saw_error);
         // A later argument may have widened a type argument past what an earlier one allowed

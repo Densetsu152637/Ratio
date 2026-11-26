@@ -1,0 +1,43 @@
+// expect: check-error C0035 at 22:32
+// expect: check-error C0035 at 23:29
+// expect: check-error C0035 at 24:31
+// expect: check-error C0035 at 25:35
+// expect: check-error C0035 at 26:31
+// expect: check-error C0035 at 27:25
+// expect: check-error C0035 at 31:43
+// expect: check-error C0035 at 32:47
+// expect: check-error C0035 at 33:23
+// expect: check-error C0035 at 34:32
+// expect: check-error C0035 at 38:35
+// expect: check-error C0035 at 39:25
+// expect: check-error C0035 at 40:32
+// expect: check-error C0035 at 41:32
+// expect: check-error C0035 at 42:24
+
+// Untrusted text cannot reach the trusted parameters of the effectful modules: instructions
+// (rubrics, outcomes, options a model must choose from, a new session's prompt, a test
+// command), harness and package names, extension sources and names, references and labels.
+
+fn instructions(work: Untrusted<Str>, said: Untrusted<Str>) -> () {
+  let c = think.critique(work, said)
+  let j = model.judge(work, said)
+  let r = think.reflect(work, said)
+  let choice = model.choose(work, [said])
+  let report = eval.run_tests(said)
+  let s = session.start(said)
+}
+
+fn names(brief: Untrusted<Str>, which: Untrusted<Str>) -> () {
+  let d = agents.delegate(brief, package: which)
+  let s = session.start("Carry on.", package: which)
+  let v = meta.author(which, brief, "a harness")
+  let found = meta.has_harness(which)
+}
+
+fn extensions(from: Untrusted<Str>) -> () {
+  tools.install_extension(plugin, from)
+  tools.activate_plugin(from)
+  let skill = tools.load_skill(from)
+  let reference = context.load(from)
+  eval.label("source", from)
+}

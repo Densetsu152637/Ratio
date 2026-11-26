@@ -1,0 +1,72 @@
+// expect: check-ok
+
+// `think` as a harness uses it: structured steps, a scratchpad, planning, critique and
+// revision, verification, sampling and voting, debate, search, confidence and clarification.
+// What a model writes stays untrusted; rubrics are trusted text; a clarification's answer is
+// the user's own text.
+
+type Answer = { value: Int }
+
+fn steps(p: Prompt) -> Untrusted<Str> {
+  let s = think.steps::<Answer>(p, ["Read", "Solve"], visible: false)
+  let pad = think.scratchpad()
+  think.note(pad, "tried the obvious case")
+  let principle = think.step_back("Why does the cache miss?")
+  "{s.answer.value} {think.notes(pad, last: 3)} {principle}"
+}
+
+fn planned(goal: Untrusted<Str>) -> Untrusted<Plan> {
+  let plan = think.plan(goal, context: prompt { note "Work in the repository." }, max_steps: 5)
+  let parts = think.decompose(goal, max_parts: 3)
+  let ideas = think.hypothesize("the build fails on Windows", n: 2)
+  let lessons = think.reflect("the transcript", "failed")
+  let criteria = think.rubric(goal)
+  think.replan(plan, plan.steps[0].title, "it did not compile")
+}
+
+fn improved(work: Untrusted<Str>) -> Untrusted<Str> {
+  let c = think.critique(work, "Correct and complete.")
+  let better = think.revise(work, c)
+  let r = think.refine(work,
+    critique: |w| think.critique(w, "Correct and complete."),
+    revise: |w, k| think.revise(w, k),
+    stop: { max_rounds: 2 })
+  let checked = think.check(work, [{ name: "non-empty", run: |w| text.len(w) > 0 }])
+  let v = think.verify(work, [better, r.value])
+  let ce = think.counterexample(work)
+  if v.status is supported and checked.passed { r.value } else { better }
+}
+
+fn sampled(p: Prompt) -> Untrusted<Str> {
+  let answers = [model.generate(p), model.generate(p)]
+  let v = think.vote(answers, |a| a)
+  let sc = think.self_consistency(3, || model.generate(p), key: |a| a, early_stop: true)
+  let best = think.best_of(3, || model.generate(p), score: |a| 1.0, early_stop: true, good_enough: 0.9)
+  let c = think.consensus(answers, method: judge, show: |a| a)
+  let merged = think.reconcile(answers, "What is the answer?")
+  let spread = think.uncertainty(answers)
+  let conf = think.confidence("What is the answer?", v.winner, method: samples, n: 3)
+  if conf.value > 0.8 and spread < 0.5 { sc.winner } else { merged }
+}
+
+harness pro(t: DebateTurn) -> Untrusted<Str> { model.generate(prompt { data t.question as "proposition" }) }
+harness con(t: DebateTurn) -> Untrusted<Str> { model.generate(prompt { data t.question as "proposition" }) }
+harness referee(r: DebateRecord) -> Untrusted<Judgement> { model.judge(text.show(r), "Who argued better?") }
+
+fn argued(q: Untrusted<Str>) -> Bool {
+  let d = think.debate(q, sides: [pro, con], judge: referee, rounds: 1)
+  d.verdict.verdict is pass
+}
+
+fn searched(start: Int) -> Int {
+  let found = think.tree_search(start, expand: |n| [n + 1, n * 2], score: |n| 1.0, is_goal: |n| n == 10,
+    strategy: best_first, max_nodes: 20)
+  let beam = think.beam_search([start], expand: |n| [n + 1], score: |n| 1.0, width: 2)
+  let m = think.mcts(start, expand: |n| [n + 1], rollout: |n| 0.5, iterations: 8)
+  let it = think.until(start, step: |n| n + 1, stop: { max_rounds: 3 }, score: |n| 1.0)
+  found.best + m.expanded + it.value + beam.len()
+}
+
+fn ask_user() -> UserText? {
+  think.clarify("target", ["staging", "production"], question: "Which environment?")
+}

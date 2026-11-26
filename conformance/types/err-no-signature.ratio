@@ -7,6 +7,6 @@ fn f(xs: [Int], ys: [Int]) -> Int {
 }
 
 fn g() -> Int {
-  let r = retry(|| 1)
+  let r = math.clamp(1, 0, 2)
   1
 }

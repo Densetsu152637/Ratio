@@ -1,0 +1,33 @@
+// expect: check-error C0035 at 15:26
+// expect: check-error C0015 at 20:3
+// expect: check-error C0004 at 24:21
+// expect: check-error C0036 at 28:13
+// expect: check-error C0035 at 32:3
+
+// The `state` built-ins are typed by the package's declaration, never by the caller: untrusted
+// state cannot be read back as trusted text, a turbofish cannot choose another type, a value
+// of another type cannot be stored, and the built-ins cannot be used as function values (whose
+// expected type would choose the type instead).
+
+state: { note: Untrusted<Str> } = { note: "" }
+
+fn as_trusted() -> Str {
+  let s: { note: Str } = state.get()
+  s.note
+}
+
+fn chosen() -> Str {
+  state.get::<{ note: Str }>().note
+}
+
+fn wrong() -> () {
+  state.set({ note: 1 })
+}
+
+fn as_value() -> () {
+  let get = state.get
+}
+
+fn through_update() -> Str {
+  state.update(|s| { note: "fixed" }).note
+}

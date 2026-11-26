@@ -24,6 +24,7 @@ pub const FUNCTIONS: &[&str] = &[
     "par",
     "par_map",
     "par_map_settled",
+    "par_fold",
     "rate_limit",
     "cached",
     "memo",

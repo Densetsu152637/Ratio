@@ -1,0 +1,73 @@
+// expect: check-ok
+
+// `control`, `log`, `trace` and `state` as a harness uses them: retries and fallbacks around
+// model calls, fan-out and a fold, caches, assertions, budgets, logs and spans, and the
+// package's declared state (read and written at its declared type, never another).
+
+state: { runs: Int, last: Untrusted<Str>? } = { runs: 0, last: none }
+
+fn ask(p: Prompt) -> Untrusted<Str> {
+  retry(|| model.generate(p), attempts: 2, on: [ModelFailed, Timeout])
+}
+
+fn safely(p: Prompt) -> Untrusted<Str> {
+  fallback([|| timeout(30s, || ask(p)), || model.generate(p, opts: { model: model.route(tier: basic) })])
+}
+
+fn many(ps: [Prompt]) -> [Untrusted<Str>] {
+  let first = race([|| ask(ps[0]), || ask(ps[1])])
+  let all = par([|| ask(ps[0]), || ask(ps[1])], limit: 2)
+  let settled = par_map_settled(ps, ask, limit: 3)
+  par_map(ps, |p| cached("answer", || ask(p), scope: session, ttl: 1h))
+}
+
+fn first_yes(ps: [Prompt]) -> Folded<Int> {
+  par_fold(ps, ask, init: 0,
+    step: |acc, i, r| match r {
+      Ok { value } => if text.contains(value, "yes") { Fold.Stop { acc: i } } else { Fold.Next { acc: acc } },
+      Err { error } => Fold.Next { acc: acc },
+    },
+    order: completion)
+}
+
+fn setup() -> Untrusted<Str> {
+  rate_limit("search", 5, 1m)
+  once("setup", || ask(prompt { instruct "Say hello." }))
+}
+
+fn checks(x: Int?, ok: Bool) -> Int {
+  assert(ok)
+  assert_eq(1, 1, message: "one")
+  let v = ensure(x, "x is needed")
+  let square = memo(|n: Int| n * n)
+  if cancelled() {
+    raise question("Stop here?", options: ["yes", "no"])
+  }
+  let left = budget_left()
+  let used = spent()
+  square(v) + used.steps
+}
+
+fn traced(p: Prompt) -> Untrusted<Str> {
+  trace.span("asking", || {
+    log.info("asking the model")
+    log.debug("with data", data: { n: 1 })
+    trace.event("asked", { model: "local" })
+    let r = ask(p)
+    log.warn(r)
+    log.error("never", data: 0)
+    r
+  })
+}
+
+fn remember_run(answer: Untrusted<Str>) -> Int {
+  let s = state.get()
+  state.set({ runs: s.runs + 1, last: answer })
+  let after = state.update(|t| { runs: t.runs, last: none })
+  state.reset()
+  after.runs
+}
+
+fn qualified() -> Error {
+  control.fail("bad", "a qualified name works too")
+}

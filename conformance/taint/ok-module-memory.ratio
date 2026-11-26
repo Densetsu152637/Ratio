@@ -1,0 +1,30 @@
+// expect: check-ok
+
+// `memory` as a harness uses it: search and read (untrusted), recall, follow links, read the
+// index and the environment's memory, search earlier sessions, and write: remember, edit,
+// forget and propose, which accept untrusted text (the user approves memory writes).
+
+fn look_up(q: Untrusted<Str>) -> [Untrusted<Str>] {
+  let hits = memory.search(q, global, user, limit: 4)
+  let recalled = memory.recall(q)
+  let used = memory.used()
+  hits.map(|h| memory.read(h.name, scope: h.scope).body) + used
+}
+
+fn linked(name: Untrusted<Str>) -> [Untrusted<Str>] {
+  let entry = memory.read(name)
+  let index = memory.index(scope: environment)
+  let env = memory.environment()
+  memory.links(entry)
+}
+
+fn past(q: Untrusted<Str>) -> [Untrusted<Str>] {
+  memory.search_sessions(q, archived: true, limit: 3).map(|h| "{h.session_id}: {h.snippet}")
+}
+
+fn keep(entry: NewMemory, name: Untrusted<Str>, fixed: Untrusted<Str>) -> () {
+  memory.remember(entry)
+  memory.edit(name, "old wording", fixed, scope: global)
+  memory.forget(name)
+  memory.propose(entry)
+}

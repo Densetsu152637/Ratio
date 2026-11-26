@@ -1,0 +1,77 @@
+// expect: check-ok
+
+// `context` as a harness uses it: build a conversation, append and read it, mark, fork and roll
+// back, pin, compact, measure, and page through a stored large input. Transcripts and stored
+// text are untrusted; a notice's text is trusted harness text, its data framed.
+
+fn side_dialogue(task: Brief, material: Untrusted<Str>) -> Transcript {
+  let conv = context.new(system: prompt { system "You check facts." })
+  context.append_user(conv, prompt {
+    task task
+    data material as "material"
+  })
+  context.append_assistant(conv, "Understood.")
+  context.notice(conv, "Keep answers short.", data: material)
+  context.snapshot(conv)
+}
+
+fn try_again(conv: Conversation) -> Int {
+  let start = context.mark(conv)
+  let copy = context.fork_at(conv, start)
+  let other = context.fork(copy)
+  let pin = context.pin(conv, start, reason: "the user's constraints")
+  let pins = context.pins(conv)
+  context.unpin(pin)
+  context.rollback(other, context.mark(other)) + pins.len()
+}
+
+fn sizes(conv: Conversation) -> Bool {
+  let used = context.tokens(conv)
+  let room = context.remaining(conv) ?? 0
+  let window = context.window(conv) ?? context.window() ?? 0
+  if not context.fits(conv, extra: prompt { instruct "One more step." }) {
+    let c = context.compact(conv, keep_turns: 2, focus: "the open questions")
+    let removed = context.clear_stale(conv)
+  }
+  let b = context.breakdown(conv)
+  used.tokens < window and room >= 0 and not context.labelled(conv)
+}
+
+fn read_back(conv: Conversation) -> [Untrusted<Str>] {
+  let p = context.safe_point(conv)
+  let waiting = context.pending(conv).map(|w| w.text)
+  let recent = context.last(conv, 4)
+  let since = context.excerpt(conv, last_turns: 2, roles: [user, assistant])
+  let all = context.messages(conv)
+  let system = context.system(conv)
+  p.steered + waiting
+}
+
+fn large(input: Untrusted<Str>) -> Untrusted<Str> {
+  let a = context.store(input, name: "log")
+  let parts = context.chunks(a, 2000)
+  context.read_artefact(a, offset: 0, limit: 1000)
+}
+
+fn defaults() -> TrustedPrompt {
+  let workflow = context.load("workflows/review.md")
+  context.system_default(role: subagent)
+}
+
+@turn
+pub harness turn(turn: Turn) -> Reply
+  with { context: main }
+{
+  let conv = context.main()
+  context.append_turn(conv, turn)
+  let here = context.current()
+  { text: "done", status: ReplyStatus.done }
+}
+
+@task
+pub harness task(t: TaskInput) -> Report
+  with { context: main }
+{
+  context.append_task(context.main(), t)
+  { text: "done", ok: true }
+}

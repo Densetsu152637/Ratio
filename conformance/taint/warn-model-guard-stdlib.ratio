@@ -1,0 +1,43 @@
+// expect: check-warning C0039 at 22:5
+// expect: check-warning C0039 at 29:13
+// expect: check-warning C0039 at 30:13
+// expect: check-warning C0039 at 31:13
+// expect: check-warning C0039 at 32:5
+// expect: check-warning C0039 at 33:13
+// expect: check-warning C0039 at 34:15
+
+// The guarded-effect lint over the effectful modules: an install, an authored harness, a
+// delegation, a new session, a memory write, a merge and a script, each guarded only by what
+// a model said, is shown to a reviewer. An approval from the person is a trusted guard.
+
+type Advice = { install: Bool, source: Str }
+
+fn advice(p: Prompt) -> Untrusted<Advice> {
+  model.generate_as::<Advice>(p)
+}
+
+fn install_if_told(p: Prompt) -> () {
+  let a = advice(p)
+  if a.install {
+    tools.install_extension(skill, "https://example.com/skills/notes.git")
+  }
+}
+
+fn act_if_told(p: Prompt, source: Untrusted<Str>, entry: NewMemory, task: Task<Report>) -> () {
+  let a = advice(p)
+  if a.install {
+    let v = meta.author("helper", source, "written on the model's advice")
+    let r = agents.delegate(source)
+    let s = session.start("Continue the migration.")
+    memory.remember(entry)
+    let m = agents.merge(task)
+    let out = tools.run_script(source)
+  }
+}
+
+fn install_if_approved(p: Prompt) -> () {
+  let a = advice(p)
+  if a.install and session.request_approval("Install the notes skill?") {
+    tools.install_extension(skill, "https://example.com/skills/notes.git")
+  }
+}

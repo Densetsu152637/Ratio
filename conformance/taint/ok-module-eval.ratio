@@ -1,0 +1,28 @@
+// expect: check-ok
+
+// `eval` as a harness uses it: run the tests, record metrics, scores and labels, time a step,
+// read the headless task and fixtures, and script the host in a test block.
+
+fn verify(command: Str) -> Bool {
+  let report = eval.run_tests(command, format: cargo, timeout: 10m)
+  eval.metric("failing", 1.0, tags: { suite: "unit" })
+  eval.score("tests", 0.5, reason: report.raw)
+  eval.label("strategy", "tdd")
+  let passed = eval.expect(report.ok, "tests pass")
+  let elapsed = eval.timer("summary", || report.passed)
+  eval.golden("output", report.raw)
+  passed and elapsed >= 0
+}
+
+fn about_run() -> Untrusted<Str> {
+  let headless = eval.is_headless()
+  let mode = eval.mode()
+  let tape = eval.tape()
+  let fixture = eval.fixture("inputs")
+  if let t = eval.task() { t.prompt } else { "no task" }
+}
+
+test "the host answers from the script" {
+  eval.script_model([{ text: "yes" }, { json: json.parse("null") }])
+  eval.script_tool("read_file", [{ ok: true, text: "fn main() returns unit" }])
+}

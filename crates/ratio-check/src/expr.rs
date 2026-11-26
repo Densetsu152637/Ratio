@@ -1197,6 +1197,9 @@ impl Checker<'_> {
         body: &Expr,
         expected: Option<TypeId>,
     ) -> TypeId {
+        // An optional function parameter (`until: (fn(ModelReply) -> Bool)? = none`) shapes a
+        // closure as the function it holds.
+        let expected = expected.map(|t| self.strip_option(t));
         let shape = expected.and_then(|t| match self.types.get(t) {
             Ty::Fn(ps, r) | Ty::Harness(ps, r) if ps.len() == params.len() => {
                 Some((ps.to_vec(), *r))

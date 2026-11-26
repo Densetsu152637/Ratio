@@ -1,0 +1,61 @@
+// expect: check-ok
+
+// `model` as a harness uses it: generation (plain, structured, sampled, streamed), chat and the
+// agent loop, the language tasks, judging and ranking, embeddings and tokens, and routing.
+// Model output is untrusted; scalars and closed-set labels are trusted; rubrics, criteria and
+// instructions are trusted text.
+
+type Verdict2 = { ok: Bool, why: Str }
+enum Kind { bug, feature, question }
+
+fn generate(p: Prompt) -> [Untrusted<Str>] {
+  let one = model.generate(p)
+  let v = model.generate_as::<Verdict2>(p)
+  let many = model.generate_n(p, 3)
+  let s = model.stream(p, |delta| session.stream(delta), until: |delta, so_far| text.len(so_far) > 100)
+  let lp = model.logprobs(p)
+  let raw = model.complete("Once upon a time")
+  [one, v.why, s.text, lp.text, raw] + many
+}
+
+fn chat(conv: Conversation) -> Untrusted<Str> {
+  let reply = model.chat(conv, tools: [read_file, grep])
+  let shaped = model.chat_as::<Verdict2>(conv, instructions: prompt { instruct "Answer as a verdict." })
+  let done = model.loop(conv, max_steps: 10, until: |r| r.tool_calls.len() == 0)
+  done.text
+}
+
+fn tasks(x: Untrusted<Str>) -> Bool {
+  let k = model.classify::<Kind>(x)
+  let c = model.choose(x, ["yes", "no"])
+  let fields = model.extract::<Verdict2>(x, what: "the verdict")
+  let short = model.summarize(x, max_words: 50, focus: "the decision")
+  let calm = model.rewrite(x, "Make it calm.")
+  let fr = model.translate(x, "fr")
+  k.label is bug and c.index == 0 and fields.ok
+}
+
+fn judge(x: Untrusted<Str>, y: Untrusted<Str>) -> Float {
+  let j = model.judge(x, "Pass only correct answers.")
+  let s = model.score(x, [{ name: "clear", description: "Easy to follow", weight: 1.0 }])
+  let pref = model.compare(x, y, "Which is clearer?", swap: true)
+  let ranked = model.rank([x, y], show: |t| t, criteria: "clarity", method: pairwise)
+  if j.verdict is pass and pref.winner is a {
+    s.total
+  } else {
+    ranked[0].score
+  }
+}
+
+fn sizes(p: Prompt, conv: Conversation) -> Bool {
+  let vs = model.embed(["a", "b"])
+  let n = model.count_tokens(p)
+  let m = model.count_tokens(conv, model: "local-small")
+  let w = model.window(model.route(tier: basic, location: local)) ?? 0
+  let t = model.render(p)
+  let h = model.prompt_hash(p)
+  let card = model.resolve(model.route(tier: strong))
+  let cards = model.list(query: "coder", limit: 5)
+  let now = model.current()
+  n.tokens < w and model.can_reason() and card.local
+}

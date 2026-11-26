@@ -72,6 +72,17 @@ pub(crate) fn item_name(kind: &ItemKind) -> Option<&Ident> {
     }
 }
 
+/// The name a declaration's field or variant has: as written, except that the built-in
+/// sources write a name that is a keyword (`type`, `harness`) with a trailing `_`, which is
+/// dropped, as for built-in functions and parameters ([`builtins::builtin_name`]).
+fn declared_name(origin: Origin, name: &str) -> &str {
+    if matches!(origin, Origin::Std(_)) {
+        builtins::builtin_name(name)
+    } else {
+        name
+    }
+}
+
 /// A lazily computed type, with a marker for "being computed" to find cycles.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Lazy {
@@ -156,6 +167,9 @@ pub(crate) struct Checker<'a> {
     pub(crate) config_logs: HashMap<ItemRef, EffectLog>,
     /// The prompt declarations' inferred result types.
     pub(crate) prompt_types: HashMap<ItemRef, Lazy>,
+    /// The `state` declarations' types, lowered once (by the declaration's body check or the
+    /// first `state.*` call that needs it).
+    pub(crate) state_types: HashMap<ItemRef, TypeId>,
     /// The nesting of on-demand constant and prompt checks.
     pub(crate) demand_depth: usize,
     /// For each origin, the enums visible at its top level by variant name (built on use).
@@ -205,6 +219,7 @@ impl<'a> Checker<'a> {
             logs: HashMap::new(),
             config_logs: HashMap::new(),
             prompt_types: HashMap::new(),
+            state_types: HashMap::new(),
             demand_depth: 0,
             variant_index: HashMap::new(),
             records: crate::analysis::Records::default(),
@@ -353,7 +368,7 @@ impl<'a> Checker<'a> {
                         continue;
                     }
                     variants.push(VariantDef {
-                        name: v.name.name.clone(),
+                        name: declared_name(origin, &v.name.name).to_owned(),
                         payload: None,
                         has_payload: v.fields.is_some(),
                     });
@@ -454,7 +469,8 @@ impl<'a> Checker<'a> {
                     };
                     let payload = self.lower_record(origin, &params, fields, v.span);
                     let def = self.types.enum_def_mut(id);
-                    if let Some(slot) = def.variants.iter_mut().find(|w| w.name == v.name.name) {
+                    let name = declared_name(origin, &v.name.name);
+                    if let Some(slot) = def.variants.iter_mut().find(|w| w.name == name) {
                         slot.payload.get_or_insert(payload);
                     }
                 }
@@ -685,9 +701,10 @@ impl<'a> Checker<'a> {
                 continue;
             }
             let meta = self.field_meta(origin, f, ty);
-            metas.push((f.name.name.as_str().into(), meta));
+            let name = declared_name(origin, &f.name.name);
+            metas.push((name.into(), meta));
             out.push(Field {
-                name: f.name.name.as_str().into(),
+                name: name.into(),
                 ty,
                 optional: f.optional,
             });
@@ -1011,6 +1028,40 @@ impl<'a> Checker<'a> {
             prelude::PreludeName::Module(module) => Some(self.std_module(module)),
             prelude::PreludeName::Function(_) => None,
         }
+    }
+
+    /// The type of the `state` declaration `r`, lowered on first use.
+    pub(crate) fn state_type(&mut self, r: ItemRef) -> TypeId {
+        if let Some(t) = self.state_types.get(&r) {
+            return *t;
+        }
+        let ItemKind::State(decl) = &self.item(r).kind else {
+            return TypeId::ERROR;
+        };
+        let ty = self.lower_type(r.origin, &[], &decl.ty);
+        self.state_types.insert(r, ty);
+        ty
+    }
+
+    /// The declared `state` type of the package `module` belongs to (chapter 03, "Persistent
+    /// state": a package declares at most one), if it declares one in a checked module.
+    pub(crate) fn package_state(&mut self, module: ModuleId) -> Option<TypeId> {
+        let package = self.loaded.modules[module.0].package.clone();
+        let found = self.loaded.modules.iter().enumerate().find_map(|(m, lm)| {
+            if lm.package != package || !self.checked[m] {
+                return None;
+            }
+            let index = lm
+                .ast
+                .items
+                .iter()
+                .position(|i| matches!(i.kind, ItemKind::State(_)))?;
+            Some(ItemRef {
+                origin: Origin::Module(ModuleId(m)),
+                index,
+            })
+        })?;
+        Some(self.state_type(found))
     }
 
     /// A standard module by name: its built-in source, or `Missing` without one.

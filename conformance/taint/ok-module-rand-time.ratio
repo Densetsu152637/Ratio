@@ -1,0 +1,27 @@
+// expect: check-ok
+
+// `rand` and `time` (checker signatures; their run time is stage 11b): seeded draws, and the
+// clock, durations and dates. Draws and clock readings are effects kept on the machine.
+
+fn draws(xs: [Untrusted<Str>]) -> Untrusted<Str> {
+  let i = rand.int(0, 10)
+  let f = rand.float()
+  let coin = rand.bool(p: 0.25)
+  let some = rand.sample(xs, 2)
+  let mixed = rand.shuffle(xs)
+  let id = rand.uuid()
+  if coin and f < 0.5 and i > 3 { rand.choice(xs) } else { "{id}" }
+}
+
+fn clock(stamp: Untrusted<Str>) -> Str {
+  let start = time.now()
+  time.sleep(10ms)
+  let took = time.since(start)
+  let later = time.add(start, 1h)
+  let gap = time.diff(later, start)
+  let today = time.today(tz: "Europe/Paris")
+  let parsed = time.parse(stamp) ?? start
+  let d = time.date(parsed)
+  let secs = time.seconds(gap) + time.seconds(time.duration(1.5))
+  "{time.format(start, tz: "UTC")} {time.show(took)} {today.year} {d.weekday} {secs}"
+}

@@ -1,0 +1,8 @@
+// expect: check-error C0035 at 7:3
+
+// `model.classify` constrains a reply to a variant of a unit-only enum, a trusted scalar; at any
+// other type argument its label is what the model wrote, and stays untrusted.
+
+fn label(x: Untrusted<Str>) -> Str {
+  model.classify::<Str>(x).label
+}

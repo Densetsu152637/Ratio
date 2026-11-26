@@ -1,0 +1,85 @@
+// expect: check-ok
+
+// `tools` as a harness uses them: files, search, commands and processes, the web and the
+// browser, preview, media, MCP, discovery and dispatch of a model's calls, skills and plugins.
+// Tool arguments may be untrusted (authority comes from permissions); results are untrusted.
+
+fn files(file: Untrusted<Str>) -> Untrusted<Str> {
+  let listing = tools.list_dir(".")
+  let found = tools.glob("**/*.rs", max_results: 10)
+  let hits = tools.grep("TODO", path: file, case_insensitive: true, context: 2)
+  let f = tools.read_file(file, limit: 50)
+  let w = tools.edit_file(file, "old", f.text)
+  "{listing.entries.len()} {found.paths.len()} {hits.raw}"
+}
+
+fn commands() -> Untrusted<Str> {
+  let p = tools.run_background("cargo watch")
+  let out = tools.command_output(p)
+  tools.command_stop(p)
+  let r = tools.run_command("cargo test", timeout: 300s, check: true)
+  let script = tools.run_script("print(1 + 1)")
+  r.stdout + out.output + script.output
+}
+
+fn web(q: Untrusted<Str>) -> Untrusted<Str> {
+  let hits = tools.web_search(q, count: 3)
+  let page = tools.browser_open(hits[0].url)
+  let read = tools.browser_read()
+  let clicked = tools.browser_click("#more")
+  let typed = tools.browser_type("#q", q, submit: true)
+  let tabs = tools.browser_tabs()
+  let switched = tools.browser_switch("tab-1")
+  tools.browser_close("tab-2")
+  let shot = tools.browser_screenshot()
+  let saved = tools.browser_download(page.url, filename: "report.pdf")
+  page.text + read.title + saved.path
+}
+
+fn previews() -> Untrusted<Str> {
+  let p = tools.preview_open(PreviewTarget.Command { command: "npm run dev", port: 5173 })
+  tools.preview_close()
+  let img = tools.media_image("a lighthouse at dusk", width: 512)
+  let voice = tools.media_speak("Hello.", voice: "calm")
+  let words = tools.media_transcribe(voice.path)
+  img.path + words
+}
+
+fn mcp() -> Untrusted<Str> {
+  let servers = tools.mcp_servers()
+  let res = tools.mcp_resources("docs")
+  let intro = tools.mcp_read_resource("docs", "docs://intro")
+  let prompts = tools.mcp_prompts("docs")
+  let t = tools.mcp_get_prompt("docs", "summarise", arguments: { length: "short" })
+  let r = tools.mcp_call("docs", "lookup", json.encode({ q: "ratio" }))
+  r.text + intro
+}
+
+fn dispatching(conv: Conversation) -> Int {
+  let reply = model.chat(conv, tools: tools.narrow([read_file, grep, glob], ["read_file", "grep"]))
+  if reply.tool_calls.len() == 1 and reply.tool_calls[0].name == "rm_rf" {
+    let refused = tools.refuse(conv, reply.tool_calls[0], "not allowed here")
+    return 0
+  }
+  let results = tools.dispatch_all(conv, reply.tool_calls)
+  results.len()
+}
+
+fn discovery() -> Bool {
+  let schemas = tools.tool_search(query: "search", names: ["web_fetch"])
+  let one = tools.spec("read_file")
+  let skills = tools.skills()
+  let plugins = tools.plugins()
+  let skill = tools.load_skill("release-notes")
+  let offered = tools.offered()
+  let r = tools.call_tool("read_file", json.encode({ path: "README.md" }))
+  tools.has("web_search") and schemas.len() > 0
+}
+
+fn configure() -> Untrusted<Str> {
+  tools.activate_plugin("acme")
+  tools.set_model_card("local-small", "A small local model for summaries.")
+  tools.install_extension(skill, "https://example.com/skills/notes.git", revision: "v1.0.0")
+  tools.uninstall_extension(plugin, "old-plugin")
+  tools.suggest_local_model("summaries", ["8k context"])
+}

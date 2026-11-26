@@ -15,15 +15,27 @@
 //! guarded-effect lint and `harnesses.check`'s summary), `@secrecy_sink` the built-ins no
 //! statically secret value may reach, `@schema(T)` type parameters that must be schema-able,
 //! `@user` built-ins whose result is the person's answer, `@secret_answers` `session.ask`,
-//! `@loads` `meta.harness`, and `@local` effectful built-ins that keep their arguments on the
-//! machine (not secrecy sinks; every `@local` entry is reviewed against the rule on
-//! `Traits::local`). A name that is a keyword in Ratio (`harness`) is written with
-//! a trailing `_` (`harness_`), which the checker drops, since a declaration cannot be called by
-//! a keyword.
+//! `@loads` `meta.harness`, `@state` the `state` built-ins (whose type parameter is the package's
+//! declared `state` type, never inferred or given), and `@local` effectful built-ins that keep
+//! their arguments on the machine (not secrecy sinks; every `@local` entry is reviewed against
+//! the rule on `Traits::local`). A name that is a keyword in Ratio (`harness`, `loop`, `type`,
+//! `prompt`) is written with a trailing `_` (`harness_`), which the checker drops, since a
+//! declaration cannot be called by a keyword; so is a field or variant of a prelude type. A
+//! parameter so written can be passed only by position, as chapter 06 says.
 //!
-//! The table holds what the conformance programs need: from stage 7, every `text` and `re`
-//! built-in. Later stages (8 to 12) extend it module by module; `conformance/builtins.txt`
-//! (generated from chapter 06) is the list they work towards.
+//! Chapter 06 writes an optional callback as `(fn(A) -> B)? = none`, but `(T)` is a
+//! one-element tuple type (chapter 02), so the table declares it `fn(A) -> B = none`: the
+//! callback may be passed or left out, not passed as `none` (a spec erratum).
+//!
+//! A type parameter that only parameters left to their defaults mention (`log.info("done")`'s
+//! `data: T?`) is `()` at that call: no value comes from it and none goes to it.
+//!
+//! The table holds, from stage 7, every `text` and `re` built-in and, from stage C, every
+//! built-in of `agents`, `context`, `control` (with `log`, `trace` and `state`), `eval`,
+//! `memory`, `meta`, `model`, `session`, `think`, `tools`, `rand` and `time`. Stages 8 and 9
+//! complete `json`, `list` and `map`, and `math` to `codec`; `conformance/builtins.txt`
+//! (generated from chapter 06) is the list, and `tests/signatures.rs` checks the table against
+//! it.
 
 use crate::analysis::Effects;
 use crate::types::{Bound, Handle, TypeId};
@@ -44,6 +56,23 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @audited(trust) @local fn trust<T>(x: Untrusted<T>, because: Str) -> T {}
 @audited(as_task) @local fn as_task(x: Untrusted<Str>, because: Str) -> Brief {}
 @audited(declassify) @user @local fn declassify<T>(x: Secret<T>, because: Str) -> T {}
+@local fn retry<T>(f: fn() -> T, attempts: Int = 3, backoff: Backoff = Backoff.exponential(1s, 2.0, 30s), on: [ErrorKind] = [ModelFailed, RateLimited, Timeout]) -> T {}
+@pure fn timeout<T>(d: Duration, f: fn() -> T) -> T {}
+@pure fn race<T>(fs: [fn() -> T]) -> T {}
+@pure fn fallback<T>(fs: [fn() -> T], on: [ErrorKind] = [ModelFailed, RateLimited, Timeout, SchemaMismatch, Unsupported]) -> T {}
+@pure fn par<T>(fs: [fn() -> T], limit: Int? = none) -> [T] {}
+@pure fn par_map<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [U] {}
+@pure fn par_map_settled<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [Result<U>] {}
+@pure fn par_fold<T, U, A>(xs: [T], f: fn(T) -> U, init: A, step: fn(A, Int, Result<U>) -> Fold<A>, limit: Int = 4, order: FoldOrder = index) -> Folded<A> {}
+fn rate_limit(key: Str, n: Int, per: Duration) -> () {}
+fn cached<T>(key: Str, f: fn() -> T, scope: CacheScope = turn, ttl: Duration? = none) -> T {}
+@pure fn memo<A, R>(f: fn(A) -> R) -> fn(A) -> R {}
+fn once<T>(key: Str, f: fn() -> T) -> T {}
+@pure fn ensure<T>(v: T?, message: Str) -> T {}
+@pure fn question(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error {}
+@local fn cancelled() -> Bool {}
+@local fn budget_left() -> Budget {}
+@local fn spent() -> Spent {}
 "#,
     ),
     (
@@ -157,9 +186,33 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
         r"
 @effect(model) fn generate(p: Prompt, opts: GenOpts = {}) -> Untrusted<Str> {}
 @effect(model) @schema(T) fn generate_as<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T> {}
-@effect(model) fn classify<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<E> {}
+@effect(model) fn classify<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<Untrusted<E>> {}
 @effect(model) fn complete(text: Str, opts: GenOpts = {}) -> Untrusted<Str> {}
 @pure fn route(tier: Tier? = none, location: Location? = none, tags: [Str] = [], min_context: Int? = none) -> ModelRef {}
+@effect(model) fn generate_n(p: Prompt, n: Int, opts: GenOpts = {}) -> [Untrusted<Str>] {}
+@effect(model) fn stream(p: Prompt, on_text: fn(Untrusted<Str>) -> (), until: fn(Untrusted<Str>, Untrusted<Str>) -> Bool = none, opts: GenOpts = {}) -> Untrusted<Streamed> {}
+@effect(model) fn logprobs(p: Prompt, opts: GenOpts = {}) -> Untrusted<TokenText> {}
+@effect(model) fn chat(conv: Conversation, tools: ToolSet? = none, opts: GenOpts = {}) -> ModelReply {}
+@effect(model) @schema(T) fn chat_as<T>(conv: Conversation, instructions: Prompt? = none, opts: GenOpts = {}) -> Untrusted<T> {}
+@effect(model) @effect(any_tool) fn loop_(conv: Conversation, max_steps: Int = 50, tools: ToolSet? = none, until: fn(ModelReply) -> Bool = none, concurrent: Bool = true, opts: GenOpts = {}) -> LoopResult {}
+@effect(model) fn choose(input: Untrusted<Str>, options: [Str], opts: GenOpts = {}) -> Chosen {}
+@effect(model) @schema(T) fn extract<T>(input: Untrusted<Str>, what: Str? = none, opts: GenOpts = {}) -> Untrusted<T> {}
+@effect(model) fn summarize(input: Untrusted<Str>, max_words: Int = 150, focus: Str? = none, opts: GenOpts = {}) -> Untrusted<Str> {}
+@effect(model) fn rewrite(input: Untrusted<Str>, instruction: Str, opts: GenOpts = {}) -> Untrusted<Str> {}
+@effect(model) fn translate(input: Untrusted<Str>, to: Str, opts: GenOpts = {}) -> Untrusted<Str> {}
+@effect(model) fn judge(candidate: Untrusted<Str>, rubric: Str, opts: GenOpts = {}) -> Untrusted<Judgement> {}
+@effect(model) fn score(candidate: Untrusted<Str>, criteria: [Criterion], opts: GenOpts = {}) -> Untrusted<Scores> {}
+@effect(model) fn compare(a: Untrusted<Str>, b: Untrusted<Str>, criteria: Str, swap: Bool = true, opts: GenOpts = {}) -> Untrusted<Preference> {}
+@effect(model) fn rank<T>(items: [T], show: fn(T) -> Untrusted<Str>, criteria: Str, method: RankMethod = listwise, opts: GenOpts = {}) -> [Scored<T>] {}
+@effect(model) fn embed(texts: [Untrusted<Str>], model: ModelRef? = none) -> [Vector] {}
+@local fn count_tokens<C>(x: C, model: ModelRef? = none) -> TokenCount {}
+@local fn window(model: ModelRef? = none) -> Int? {}
+@pure fn render(p: Prompt, model: ModelRef? = none) -> Transcript {}
+@pure fn prompt_hash(p: Prompt) -> Str {}
+@local fn resolve(m: ModelRef) -> ModelCard {}
+@tool(list_models) @local fn list(query: Str? = none, location: Location? = none, limit: Int = 20) -> [ModelCard] {}
+@local fn current() -> ModelCard {}
+@local fn can_reason(m: ModelRef? = none) -> Bool {}
 ",
     ),
     (
@@ -175,6 +228,46 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @effect(network) @tool("mcp__*") @secrecy_sink fn mcp_call(server: Str, tool: Str, arguments: Json) -> Untrusted<McpResult> {}
 @effect(any_tool) @secrecy_sink fn call_tool(name: Str, arguments: Json) -> Untrusted<ToolResult> {}
 @effect(any_tool) fn dispatch(conv: Conversation, call: ToolCall) -> ToolResult {}
+@tool(list_dir) @local fn list_dir(path: Untrusted<Str>, offset: Int = 0) -> Untrusted<Listing> {}
+@tool(glob) @local fn glob(pattern: Str, path: Untrusted<Str>? = none, max_results: Int = 100, offset: Int = 0, include_ignored: Bool = false) -> Untrusted<Globbed> {}
+@tool(grep) @local fn grep(pattern: Str, path: Untrusted<Str>? = none, glob: Str? = none, case_insensitive: Bool = false, context: Int = 0, max_results: Int = 100, offset: Int = 0, include_ignored: Bool = false) -> Untrusted<Grepped> {}
+@tool(command_output) @local fn command_output(p: Process, since: Int? = none) -> Untrusted<ProcessOutput> {}
+@tool(command_stop) @local fn command_stop(p: Process) -> () {}
+@effect(network) @tool(browser_open) @secrecy_sink fn browser_open(url: Untrusted<Str>, new_tab: Bool = false) -> Untrusted<PageView> {}
+@effect(network) @tool(browser_read) @secrecy_sink fn browser_read() -> Untrusted<PageView> {}
+@effect(network) @tool(browser_click) @secrecy_sink fn browser_click(selector: Untrusted<Str>) -> Untrusted<PageView> {}
+@effect(network) @tool(browser_type) @secrecy_sink fn browser_type(selector: Untrusted<Str>, text: Untrusted<Str>, submit: Bool = false) -> Untrusted<PageView> {}
+@effect(network) @tool(browser_tabs) @secrecy_sink fn browser_tabs() -> Untrusted<[TabInfo]> {}
+@effect(network) @tool(browser_switch) @secrecy_sink fn browser_switch(tab: Str) -> Untrusted<PageView> {}
+@effect(network) @tool(browser_close) @secrecy_sink fn browser_close(tab: Str) -> () {}
+@effect(network) @tool(browser_screenshot) @secrecy_sink fn browser_screenshot() -> Image {}
+@effect(network) @effect(write) @tool(browser_download) @secrecy_sink fn browser_download(url: Untrusted<Str>, filename: Str? = none) -> Untrusted<Downloaded> {}
+@effect(command) @tool(preview_open) @secrecy_sink fn preview_open(target: PreviewTarget) -> Preview {}
+@tool(preview_close) fn preview_close() -> () {}
+@effect(network) @effect(write) @tool(media_image) @secrecy_sink fn media_image(prompt_: Untrusted<Str>, width: Int? = none, height: Int? = none, name: Str? = none) -> MediaFile {}
+@effect(network) @effect(write) @tool(media_speak) @secrecy_sink fn media_speak(text: Untrusted<Str>, voice: Str? = none, name: Str? = none) -> MediaFile {}
+@effect(network) @tool(media_transcribe) @secrecy_sink fn media_transcribe(path: Untrusted<Str>) -> Untrusted<Str> {}
+@local fn mcp_servers() -> [McpServerInfo] {}
+@effect(network) @tool("mcp__*") @secrecy_sink fn mcp_resources(server: Str, cursor: Str? = none) -> Untrusted<McpListing> {}
+@effect(network) @tool("mcp__*") @secrecy_sink fn mcp_read_resource(server: Str, uri: Untrusted<Str>) -> Untrusted<Str> {}
+@effect(network) @tool("mcp__*") @secrecy_sink fn mcp_prompts(server: Str) -> Untrusted<McpListing> {}
+@effect(network) @tool("mcp__*") @secrecy_sink fn mcp_get_prompt(server: Str, name: Str, arguments: Map<Str, Str> = {}) -> Transcript {}
+@tool(tool_search) @local fn tool_search(query: Str? = none, names: [Str] = []) -> [ToolSchema] {}
+fn refuse(conv: Conversation, call: ToolCall, reason: Str) -> ToolResult {}
+@effect(any_tool) fn dispatch_all(conv: Conversation, calls: [ToolCall], concurrent: Bool = true) -> [ToolResult] {}
+@local fn offered() -> [ToolSchema] {}
+@local fn spec(name: Str) -> ToolSchema? {}
+@local fn has(name: Str) -> Bool {}
+@pure fn narrow(set: ToolSet, names: [Str]) -> ToolSet {}
+@local fn skills() -> [SkillInfo] {}
+@local fn plugins() -> [PluginInfo] {}
+@tool(load_skill) @local fn load_skill(name: Str) -> Untrusted<Str> {}
+@effect(write) @tool(activate_plugin) @secrecy_sink fn activate_plugin(name: Str) -> () {}
+@effect(write) @tool(set_model_card) @secrecy_sink fn set_model_card(model: Str, card: Str?) -> () {}
+@effect(write) @effect(network) @tool(install_extension) @secrecy_sink fn install_extension(kind: ExtensionKind, source: Str, path: Str? = none, revision: Str? = none) -> () {}
+@effect(write) @tool(uninstall_extension) @secrecy_sink fn uninstall_extension(kind: ExtensionKind, name: Str) -> () {}
+@tool(suggest_local_model) @secrecy_sink fn suggest_local_model(task: Str, needs: [Str], context_tokens: Int? = none) -> Untrusted<Str> {}
+@effect(command) @tool(run_script) @secrecy_sink fn run_script(code: Untrusted<Str>) -> Untrusted<ScriptResult> {}
 "#,
     ),
     (
@@ -183,18 +276,90 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @user @secret_answers @local fn ask(questions: [Question]) -> [UserText] {}
 @user @local fn request_approval(summary: Str, detail: Untrusted<Str>? = none) -> Bool {}
 @secrecy_sink fn emit(name: Str, data: Json) -> () {}
+@secrecy_sink fn notify(text: Untrusted<Str>, level: NoticeLevel = info) -> () {}
+@secrecy_sink fn stream(text: Untrusted<Str>) -> () {}
+@local fn plan() -> Untrusted<Plan>? {}
+@tool(update_plan) fn update_plan(plan: Untrusted<Plan>) -> () {}
+@local fn state() -> Untrusted<AidState> {}
+@tool(update_state) fn update_state(change: AidStateChange) -> Untrusted<AidState> {}
+@effect(write) @tool(session_checkpoint) @secrecy_sink fn checkpoint(label: Str? = none) -> Checkpoint {}
+@user @effect(write) @tool(session_rewind_files) fn rewind_files(cp: Checkpoint) -> () {}
+@tool(session_branch) @secrecy_sink fn branch(at_turn: Int? = none, title: Str? = none) -> SessionRef {}
+@effect(delegate) @tool(start_session) @secrecy_sink fn start(prompt_: Str, environment: Str? = none, package: Str? = none, model: ModelRef? = none) -> SessionRef {}
+@local fn id() -> Str {}
+@local fn info() -> SessionInfo {}
+@local fn turn() -> Turn {}
+@local fn attended() -> Bool {}
+@local fn mode() -> PermissionMode {}
+@local fn folders() -> [Str] {}
+@local fn scratch_folder() -> Str? {}
+@local fn usage() -> Spent {}
+@local fn queued() -> [UserText] {}
 ",
     ),
     (
         "context",
         r"
 fn notice(conv: Conversation, text: Str, data: Untrusted<Str>? = none) -> () {}
+@local fn current() -> Conversation {}
+@local fn main() -> Conversation {}
+fn new(system: TrustedPrompt? = none) -> Conversation {}
+@local fn fork(conv: Conversation) -> Conversation {}
+@local fn fork_at(conv: Conversation, mark: Mark) -> Conversation {}
+fn rollback(conv: Conversation, mark: Mark) -> Int {}
+fn append_user(conv: Conversation, content: Prompt) -> () {}
+fn append_turn(conv: Conversation, turn: Turn) -> () {}
+fn append_task(conv: Conversation, task: TaskInput) -> () {}
+fn append_assistant(conv: Conversation, text: Untrusted<Str>) -> () {}
+@tool(context_load) @local fn load(reference: Str) -> Untrusted<Str> {}
+@local fn messages(conv: Conversation) -> Transcript {}
+@local fn last(conv: Conversation, n: Int) -> Transcript {}
+@local fn excerpt(conv: Conversation, from: Mark? = none, last_turns: Int? = none, roles: [Role] = [user, assistant, tool]) -> Transcript {}
+@local fn mark(conv: Conversation) -> Mark {}
+@local fn snapshot(conv: Conversation) -> Transcript {}
+@local fn system(conv: Conversation) -> Prompt {}
+@local fn system_default(role: AgentRole = root) -> TrustedPrompt {}
+@effect(model) fn safe_point(conv: Conversation) -> SafePoint {}
+@local fn pending(conv: Conversation) -> [Pending] {}
+@effect(model) fn compact(conv: Conversation, keep_turns: Int = 2, focus: Str? = none) -> Compaction {}
+fn clear_stale(conv: Conversation, older_than_turns: Int = 2) -> Int {}
+fn pin(conv: Conversation, from: Mark, to: Mark? = none, reason: Str) -> Pin {}
+fn unpin(pin: Pin) -> () {}
+@local fn pins(conv: Conversation) -> [PinInfo] {}
+@local fn labelled(conv: Conversation) -> Bool {}
+@local fn tokens(conv: Conversation) -> TokenCount {}
+@local fn window(conv: Conversation? = none) -> Int? {}
+@local fn remaining(conv: Conversation) -> Int? {}
+@local fn fits(conv: Conversation, extra: Prompt? = none) -> Bool {}
+@local fn breakdown(conv: Conversation) -> Breakdown? {}
+fn store(text: Untrusted<Str>, name: Str? = none) -> Artefact {}
+@local fn read_artefact(a: Artefact, offset: Int = 0, limit: Int = 32000) -> Untrusted<Str> {}
+@local fn chunks(a: Artefact, chunk_tokens: Int) -> [Untrusted<Str>] {}
 ",
     ),
     (
         "meta",
         r"
 @loads fn harness_<H>(name: Str) -> H {}
+@local fn harnesses(query: Str? = none) -> [HarnessInfo] {}
+@local fn has_harness(name: Str) -> Bool {}
+@pure fn signature<H>(h: H) -> Signature {}
+@local fn package() -> PackageInfo {}
+@local fn trust_sites() -> [Site] {}
+@effect(write) @tool(write_harness) @secrecy_sink fn author(name: Str, source: Untrusted<Str>, description: Untrusted<Str>) -> AuthoredVersion {}
+@local fn authored() -> [AuthoredVersion] {}
+@local fn frame() -> FrameInfo {}
+@local fn caller() -> CallerInfo? {}
+@local fn depth() -> Int {}
+@local fn limits() -> FrameLimits {}
+@pure fn site() -> Site {}
+@local fn permissions() -> PermissionView {}
+@local fn can(tool: Str, arguments: Json = {}) -> Decision {}
+@local fn tools() -> [ToolInfo] {}
+@local fn models() -> [ModelCard] {}
+@local fn engine() -> EngineInfo {}
+@pure fn ratio_version() -> Str {}
+@local fn features() -> [Str] {}
 ",
     ),
     (
@@ -204,7 +369,148 @@ fn notice(conv: Conversation, text: Str, data: Untrusted<Str>? = none) -> () {}
 @effect(delegate) @tool(steer_agent) @secrecy_sink fn steer(task: Task<Report>, text: Untrusted<Str>) -> () {}
 @effect(delegate) @tool(queue_agent) @secrecy_sink fn queue(task: Task<Report>, text: Untrusted<Str>) -> () {}
 @effect(delegate) @tool(ask_agent) @secrecy_sink fn ask(agent: Str, question: Untrusted<Str>, timeout: Duration = 300s) -> Untrusted<Str> {}
+@effect(delegate) @tool(await_tasks) fn await(tasks: [Task<Report>], timeout: Duration? = none) -> [TaskReport] {}
+@effect(delegate) @tool(await_tasks) fn join(task: Task<Report>, timeout: Duration? = none) -> TaskReport {}
+@effect(delegate) @tool(spawn_agent) @secrecy_sink fn delegate(brief: Untrusted<Str>, package: Str? = none, opts: SpawnOpts = {}) -> TaskReport {}
+@effect(delegate) @tool(spawn_agent) @secrecy_sink fn map(briefs: [Untrusted<Str>], package: Str? = none, limit: Int = 4, opts: SpawnOpts = {}) -> [TaskReport] {}
+@effect(delegate) @tool(delegate_chunks) @secrecy_sink fn delegate_chunks(artefact: Artefact, chunk_tokens: Int, brief: Untrusted<Str>, reduce: Untrusted<Str>? = none) -> [Task<Report>] {}
+@effect(delegate) @tool(resume_agent) @secrecy_sink fn resume(task: Task<Report>, text: Untrusted<Str>) -> Task<Report> {}
+@effect(delegate) @tool(resume_agent) fn cancel(task: Task<Report>) -> () {}
+@local fn status(task: Task<Report>) -> AgentSummary {}
+@local fn worktree(task: Task<Report>) -> WorktreeInfo? {}
+@effect(write) @tool(agent_merge) fn merge(task: Task<Report>) -> MergeResult {}
+@local fn list() -> [AgentSummary] {}
+@local fn current() -> AgentInfo {}
+@local fn named() -> [AgentFileInfo] {}
+@tool(list_knowledge_agents) @local fn knowledge(query: Str? = none) -> [KnowledgeCard] {}
+@effect(delegate) @tool(keep_as_knowledge) @secrecy_sink fn keep_as_knowledge(task: Task<Report>, topic: Str) -> KnowledgeCard {}
+@effect(delegate) @tool(keep_as_knowledge) fn retire_knowledge(task: Task<Report>) -> () {}
 ",
+    ),
+    (
+        "log",
+        r"
+@schema(T) fn debug<T>(message: Untrusted<Str>, data: T? = none) -> () {}
+@schema(T) fn info<T>(message: Untrusted<Str>, data: T? = none) -> () {}
+@schema(T) fn warn<T>(message: Untrusted<Str>, data: T? = none) -> () {}
+@schema(T) fn error<T>(message: Untrusted<Str>, data: T? = none) -> () {}
+",
+    ),
+    (
+        "trace",
+        r"
+fn span<T>(name: Str, f: fn() -> T) -> T {}
+@schema(T) fn event<T>(name: Str, data: T) -> () {}
+",
+    ),
+    (
+        "state",
+        r"
+@state @local fn get<Q>() -> Q {}
+@state fn set<Q>(v: Q) -> () {}
+@state fn update<Q>(f: fn(Q) -> Q) -> Q {}
+@state fn reset() -> () {}
+",
+    ),
+    (
+        "think",
+        r"
+@effect(model) @schema(A) fn steps<A>(p: Prompt, steps: [Str], visible: Bool = true, opts: GenOpts = {}) -> Stepped<A> {}
+@pure fn scratchpad() -> Scratchpad {}
+@pure fn note(pad: Scratchpad, text: Untrusted<Str>) -> () {}
+@pure fn notes(pad: Scratchpad, last: Int? = none) -> Untrusted<Str> {}
+@effect(model) fn step_back(question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str> {}
+@pure fn until<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float? = none) -> Iterated<T> {}
+@effect(model) fn plan(goal: Untrusted<Str>, context: Prompt? = none, max_steps: Int = 8, opts: GenOpts = {}) -> Untrusted<Plan> {}
+@effect(model) fn replan(plan: Untrusted<Plan>, step: Untrusted<Str>, reason: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Plan> {}
+@effect(model) fn decompose(task: Untrusted<Str>, max_parts: Int = 6, opts: GenOpts = {}) -> Untrusted<[Subtask]> {}
+@effect(model) fn hypothesize(observations: Untrusted<Str>, n: Int = 3, opts: GenOpts = {}) -> Untrusted<[Hypothesis]> {}
+@effect(model) fn reflect(trace: Untrusted<Str>, outcome: Str, opts: GenOpts = {}) -> Untrusted<Reflection> {}
+@effect(model) fn rubric(task: Untrusted<Str>, n: Int = 5, opts: GenOpts = {}) -> Untrusted<[Criterion]> {}
+@effect(model) fn critique(work: Untrusted<Str>, rubric: Str, opts: GenOpts = {}) -> Untrusted<Critique> {}
+@effect(model) fn revise(work: Untrusted<Str>, critique: Untrusted<Critique>, opts: GenOpts = {}) -> Untrusted<Str> {}
+@pure fn refine<T>(draft: T, critique: fn(T) -> Untrusted<Critique>, revise: fn(T, Untrusted<Critique>) -> T, stop: Stop = { max_rounds: 3 }) -> Refined<T> {}
+@effect(model) fn verify(claim: Untrusted<Str>, evidence: [Untrusted<Str>], opts: GenOpts = {}) -> Untrusted<Verification> {}
+@pure fn check<T>(value: T, checks: [Check<T>]) -> CheckReport {}
+@effect(model) fn counterexample(claim: Untrusted<Str>, context: Prompt? = none, opts: GenOpts = {}) -> Untrusted<Counterexample?> {}
+@pure fn vote<T>(candidates: [T], key: fn(T) -> Untrusted<Str>) -> Vote<T> {}
+@pure fn self_consistency<T>(n: Int, sample: fn() -> T, key: fn(T) -> Untrusted<Str>, parallel: Bool = true, early_stop: Bool = false) -> Vote<T> {}
+@pure fn best_of<T>(n: Int, sample: fn() -> T, score: fn(T) -> Float, parallel: Bool = true, early_stop: Bool = false, good_enough: Float? = none) -> Scored<T> {}
+@effect(model) fn consensus<T>(answers: [T], method: ConsensusMethod = majority, show: fn(T) -> Untrusted<Str> = text.show, opts: GenOpts = {}) -> Consensus<T> {}
+@effect(model) fn reconcile(answers: [Untrusted<Str>], question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str> {}
+@pure fn debate(question: Untrusted<Str>, sides: [fn(DebateTurn) -> Untrusted<Str>], judge: fn(DebateRecord) -> Untrusted<Judgement>, rounds: Int = 2) -> DebateResult {}
+@pure fn tree_search<N>(root: N, expand: fn(N) -> [N], score: fn(N) -> Float, is_goal: fn(N) -> Bool, strategy: SearchStrategy = best_first, beam: Int? = none, max_nodes: Int = 64, max_depth: Int = 6) -> SearchResult<N> {}
+@pure fn beam_search<N>(init: [N], expand: fn(N) -> [N], score: fn(N) -> Float, width: Int = 3, depth: Int = 4) -> [Scored<N>] {}
+@pure fn mcts<N>(root: N, expand: fn(N) -> [N], rollout: fn(N) -> Float, iterations: Int = 32, exploration: Float = 1.4) -> SearchResult<N> {}
+@effect(model) fn confidence(question: Untrusted<Str>, answer: Untrusted<Str>, method: ConfidenceMethod = self_report, n: Int = 5, opts: GenOpts = {}) -> Confidence {}
+@pure fn uncertainty(keys: [Untrusted<Str>]) -> Float {}
+@user fn clarify(missing_parameter: Str, options: [Untrusted<Str>], question: Str? = none, confidence: Float? = none) -> UserText? {}
+",
+    ),
+    (
+        "memory",
+        r"
+@tool(memory_search) @secrecy_sink fn search(query: Untrusted<Str>, scope: MemoryScope? = none, type_: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]> {}
+@tool(memory_read) @local fn read(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry> {}
+@effect(write) @tool(memory_remember) @secrecy_sink fn remember(entry: NewMemory) -> () {}
+@effect(write) @tool(memory_edit) @secrecy_sink fn edit(name: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>, scope: MemoryScope? = none) -> () {}
+@effect(write) @tool(memory_forget) @secrecy_sink fn forget(name: Untrusted<Str>, scope: MemoryScope? = none) -> () {}
+@secrecy_sink fn propose(entry: NewMemory) -> () {}
+@local fn index(scope: MemoryScope = global) -> Untrusted<[IndexLine]> {}
+@local fn environment() -> Untrusted<Str> {}
+@tool(memory_search) @secrecy_sink fn recall(text: Untrusted<Str>, limit: Int = 5) -> Untrusted<[MemoryHit]> {}
+@pure fn links(entry: Untrusted<MemoryEntry>) -> [Untrusted<Str>] {}
+@local fn used() -> [Untrusted<Str>] {}
+@tool(search_sessions) @secrecy_sink fn search_sessions(query: Untrusted<Str>, archived: Bool = false, limit: Int = 10) -> Untrusted<[SessionHit]> {}
+",
+    ),
+    (
+        "eval",
+        r"
+@effect(command) @tool(run_command) @secrecy_sink fn run_tests(command: Str, format: TestFormat = auto, timeout: Duration = 600s) -> Untrusted<TestReport> {}
+@secrecy_sink fn metric(name: Str, value: Float, tags: Map<Str, Str> = {}) -> () {}
+@secrecy_sink fn score(name: Str, value: Float, reason: Untrusted<Str>? = none) -> () {}
+@secrecy_sink fn label(key: Str, value: Str) -> () {}
+@secrecy_sink fn expect(cond: Bool, name: Str) -> Bool {}
+fn timer<T>(name: Str, f: fn() -> T) -> T {}
+@local fn task() -> EvalTask? {}
+@local fn is_headless() -> Bool {}
+@local fn fixture(name: Str) -> Json {}
+@local fn mode() -> TapeMode {}
+@local fn tape() -> TapeInfo? {}
+@effect(write) @secrecy_sink fn golden(name: Str, value: Untrusted<Str>) -> Bool {}
+@pure fn script_model(replies: [ScriptedReply]) -> () {}
+@pure fn script_tool(name: Str, replies: [ScriptedToolReply]) -> () {}
+",
+    ),
+    (
+        "rand",
+        r"
+@local fn int(lo: Int, hi: Int) -> Int {}
+@local fn float() -> Float {}
+@local fn bool(p: Float = 0.5) -> Bool {}
+@local fn choice<T>(xs: [T]) -> T {}
+@local fn sample<T>(xs: [T], k: Int) -> [T] {}
+@local fn shuffle<T>(xs: [T]) -> [T] {}
+@local fn uuid() -> Str {}
+",
+    ),
+    (
+        "time",
+        r#"
+@local fn now() -> Instant {}
+@local fn since(t: Instant) -> Duration {}
+@local fn sleep(d: Duration) -> () {}
+@local fn today(tz: Str = "local") -> Date {}
+@pure fn add(t: Instant, d: Duration) -> Instant {}
+@pure fn diff(a: Instant, b: Instant) -> Duration {}
+@pure fn format(t: Instant, fmt: Str = "%Y-%m-%dT%H:%M:%SZ", tz: Str = "UTC") -> Str {}
+@pure fn parse<S>(s: S, fmt: Str = "%Y-%m-%dT%H:%M:%S%z") -> Instant? {}
+@pure fn date(t: Instant, tz: Str = "UTC") -> Date {}
+@pure fn duration(seconds: Float) -> Duration {}
+@pure fn seconds(d: Duration) -> Float {}
+@pure fn show(d: Duration) -> Str {}
+"#,
     ),
 ];
 
@@ -263,6 +569,9 @@ pub(crate) struct Traits {
     /// beyond a digest). Marking such a built-in `@local` would let a statically secret value
     /// reach it through a generic function unrefused.
     pub(crate) local: bool,
+    /// `@state`: `state.get`, `set`, `update` and `reset`, whose type parameter is the package's
+    /// declared `state` type, fixed at each call (chapter 03, "Persistent state").
+    pub(crate) state: bool,
 }
 
 impl Traits {
@@ -285,6 +594,7 @@ impl Traits {
                 ("secret_answers", []) => t.secret_answers = true,
                 ("loads", []) => t.loads = true,
                 ("local", []) => t.local = true,
+                ("state", []) => t.state = true,
                 ("audited", [kind]) => {
                     t.audited = match kind.as_str() {
                         "trust" => Some(TrustKind::Trust),
@@ -326,6 +636,8 @@ impl Traits {
             Some("each call is an audited trust site at one known type")
         } else if self.loads {
             Some("each load must be listed by the name it is called with")
+        } else if self.state {
+            Some("its type is the package's declared `state` type, fixed at each call")
         } else if self.secret_answers {
             Some("its answers are labelled from the questions written at the call")
         } else if self.secrecy_sink && generic {

@@ -431,6 +431,66 @@ pub harness run(x: Untrusted<Str>, which: Str) -> Untrusted<Str> {
     assert!(!done.complete);
 }
 
+/// An extension install, an authored harness and a harness load are what a reviewer must see
+/// in `harnesses.check`: the install as a write that reaches the network under its own tool
+/// name (Imperium asks the user for every install from a program, chapter 06), the authored
+/// harness under `write_harness`, and the load by the name it is called with.
+#[test]
+fn harnesses_check_shows_installs_authored_harnesses_and_loads() {
+    let main = r#"
+pub harness setup(source: Untrusted<Str>) -> () {
+  tools.install_extension(plugin, "https://example.com/acme.git")
+  let v = meta.author("helper", source, "a helper the model wrote")
+}
+
+pub harness critic() -> harness(Untrusted<Str>) -> Untrusted<Str> {
+  meta.harness::<harness(Untrusted<Str>) -> Untrusted<Str>>("user:critics.strict")
+}
+"#;
+    let critics = "pub harness strict(x: Untrusted<Str>) -> Untrusted<Str> { x }
+";
+    let registry = registry_with(&[
+        ("app", "main.ratio", main),
+        ("critics", "main.ratio", critics),
+    ]);
+    let builtin = MemoryRegistry::new();
+    let done = ratio_check::harnesses_check(
+        &registry,
+        &builtin,
+        &QualifiedName::parse("user:app").unwrap(),
+    );
+    assert!(done.summary.clean, "{:?}", done.checked.diagnostics);
+    assert_eq!(
+        done.summary.tools,
+        vec!["install_extension".to_owned(), "write_harness".to_owned()]
+    );
+    assert!(done.summary.effects.contains(Effects::WRITE));
+    assert!(done.summary.effects.contains(Effects::NETWORK));
+    assert_eq!(
+        done.summary.describe(),
+        "writes; reaches the network; tools: install_extension, write_harness"
+    );
+    assert_eq!(
+        done.summary.loads,
+        vec![Some("user:critics.strict".to_owned())]
+    );
+    assert_eq!(done.loaded_packages, vec!["user:critics".to_owned()]);
+    assert!(done.complete);
+    let setup = done
+        .summary
+        .harnesses
+        .iter()
+        .find(|h| h.name == "setup")
+        .expect("the setup harness");
+    assert!(
+        setup
+            .summary
+            .tools
+            .contains(&"install_extension".to_owned())
+    );
+    assert!(setup.summary.effects.contains(Effects::WRITE));
+}
+
 #[test]
 fn the_lint_and_the_analysis_stay_linear_on_hostile_bodies() {
     // Many `var`s that become derived one after another inside a loop: the rounds are
@@ -473,7 +533,7 @@ fn the_lint_and_the_analysis_stay_linear_on_hostile_bodies() {
 #[test]
 fn every_annotated_built_in_is_refused_as_a_value_or_covered() {
     // Rules enforced only at a direct call: the built-in must be refused as a value.
-    const CALL_ONLY: &[&str] = &["audited", "loads", "secret_answers"];
+    const CALL_ONLY: &[&str] = &["audited", "loads", "secret_answers", "state"];
     // Rules that hold for values: effects, tools and purity count where a value is named;
     // `@user` and `@local` only relax the lint and the sink summary; `@schema(T)` is checked
     // at the type a value is named with; a secrecy sink without type parameters refuses
@@ -516,8 +576,8 @@ fn every_annotated_built_in_is_refused_as_a_value_or_covered() {
         }
     }
     assert_eq!(
-        refused, 5,
-        "trust, as_task, declassify, session.ask, meta.harness"
+        refused, 9,
+        "trust, as_task, declassify, session.ask, meta.harness, state.get, state.set,          state.update, state.reset"
     );
     // The `@schema(T)` rule at a value's type.
     let (_, checked) = check("fn f() -> Int {\n  let e: fn(Image) -> Json = json.encode\n  1\n}\n");

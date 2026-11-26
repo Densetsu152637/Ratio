@@ -1,0 +1,47 @@
+// expect: check-ok
+
+// `session` as a harness uses it: ask the person (a written-out question without `secret: true`
+// answers plain `UserText`), ask for approval, notify and stream, read and set the plan and the
+// aids' state, checkpoint and rewind, branch and start sessions, and read the session's facts.
+
+fn choose() -> UserText {
+  let answers = session.ask([{ question: "Which branch?", options: ["main", "dev"], recommended: "main" }])
+  answers[0]
+}
+
+fn careful(detail: Untrusted<Str>) -> Bool {
+  if session.request_approval("Send this to the frontier model?", detail: detail) {
+    session.notify("Approved.", level: info)
+    session.stream("Working on it...")
+    true
+  } else {
+    false
+  }
+}
+
+fn planning(p: Untrusted<Plan>) -> Int {
+  session.update_plan(p)
+  let s = session.update_state({ goals: ["finish"] })
+  let current = session.state()
+  if let plan = session.plan() { plan.steps.len() } else { 0 }
+}
+
+fn risky() -> SessionRef {
+  let cp = session.checkpoint(label: "before the refactor")
+  session.rewind_files(cp)
+  let fork = session.branch(at_turn: 2, title: "an alternative")
+  session.start("Write the release notes.", package: "std:default")
+}
+
+fn facts() -> Int {
+  let id = session.id()
+  let info = session.info()
+  let turn = session.turn()
+  let mode = session.mode()
+  let folders = session.folders()
+  let scratch = session.scratch_folder()
+  let usage = session.usage()
+  let queued = session.queued()
+  session.emit("progress", json.encode({ done: 1 }))
+  if session.attended() { info.max_steps } else { usage.steps + queued.len() + folders.len() }
+}

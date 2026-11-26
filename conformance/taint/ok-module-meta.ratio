@@ -1,0 +1,39 @@
+// expect: check-ok
+
+// `meta` as a harness uses it: list and load harnesses by a literal, trusted name, read the
+// frame, its limits and permissions, ask what the engine would decide, and write an authored
+// harness from untrusted source (it is checked and approval-gated before anything runs it).
+
+fn critic() -> harness(Untrusted<Str>) -> Untrusted<Str> {
+  meta.harness::<harness(Untrusted<Str>) -> Untrusted<Str>>("std:critics.strict")
+}
+
+fn registry() -> Int {
+  let found = meta.harnesses(query: "critic")
+  let here = meta.package()
+  let sites = meta.trust_sites()
+  let mine = meta.authored()
+  if meta.has_harness("std:critics.strict") {
+    let shape = meta.signature(critic())
+  }
+  found.len() + sites.len() + mine.len()
+}
+
+fn author(source: Untrusted<Str>) -> Untrusted<Str> {
+  let v = meta.author("summariser", source, "A summariser the model wrote")
+  v.name
+}
+
+fn frame() -> Bool {
+  let f = meta.frame()
+  let c = meta.caller()
+  let limits = meta.limits()
+  let p = meta.permissions()
+  let d = meta.can("write_file", arguments: json.encode({ path: "README.md" }))
+  let site = meta.site()
+  let universe = meta.tools()
+  let models = meta.models()
+  let engine = meta.engine()
+  let features = meta.features()
+  meta.depth() == 0 and meta.ratio_version() != "" and d.decision is run
+}

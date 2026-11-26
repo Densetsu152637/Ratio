@@ -336,7 +336,7 @@ impl Checker<'_> {
             }
             ItemKind::State(decl) => {
                 let mut b = Body::new(module, Ret::Forbidden);
-                let ty = self.lower_type(r.origin, &[], &decl.ty);
+                let ty = self.state_type(r);
                 self.require_schema(&b, ty, decl.ty.span, "the `state` type");
                 self.expect(&mut b, &decl.value, ty);
                 self.logs.insert(r, b.log);

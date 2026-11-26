@@ -126,3 +126,239 @@ enum ErrorKind {
   User { tag: Str },
 }
 enum BudgetKind { tokens, cost, steps, wall, model_calls, tool_calls, depth, call_depth, heap, width }
+
+// ---- Stage C: the types of the effectful modules (chapter 06). ----
+//
+// Where a module's page gives a record only in prose (`{ id, title, ... }`), the field types
+// here are provisional: chosen by the effect rule of chapter 03 (every string an effect returns
+// is untrusted unless it is an engine-generated identifier), and marked so. A field or variant
+// whose chapter 06 name is a keyword (`type`, `match`, `prompt`, `harness`, `test`) is written
+// with a trailing `_`, which the checker drops for the built-in declarations, as for function
+// names: a program reads it as `x.type`, but cannot write it in a record literal (an erratum).
+
+// Results and stopping (chapter 06 README, shared types; chapter 05, stopping criteria)
+enum Fold<A> { Next { acc: A }, Stop { acc: A } }
+enum FoldOrder { index, completion }
+type Folded<A> = { value: A, delivered: Int, stopped: Bool }
+enum StreamStop { done, until, max_tokens }
+type Streamed = { text: Str, stopped: StreamStop }
+// `Round` is not spelled out by chapter 05 (provisional).
+type Round = { round: Int, score?: Float }
+type Stop = {
+  max_rounds?: Int, until?: fn(Round) -> Bool, no_progress?: Int, converged?: Float,
+  budget?: Budget,
+}
+enum StopReason { until, max_rounds, no_progress, converged, budget }
+
+// control. Chapter 06 writes `Backoff.exponential(1s, 2.0, 30s)`, a constructor call Ratio does
+// not have; the variants carry records (provisional field names).
+enum Backoff { fixed { delay: Duration }, exponential { start: Duration, factor: Float, max: Duration } }
+enum CacheScope { turn, frame, session }
+
+// model
+type ModelCard = {
+  id: Str, spec: Str, location: Location, tier: Tier, tags: [Str], reasoning: Bool,
+  images: Bool, window?: Int, prices?: Prices, local: Bool, fits_now?: Bool,
+  card_text?: Untrusted<Str>, allowed?: Bool,
+}
+// Prices: provisional.
+type Prices = { input: Money, output: Money, cached_input?: Money }
+type TokenText = { text: Str, tokens: [TokenLogprob] }
+type TokenLogprob = { token: Str, logprob: Float, top: [TopLogprob] }
+type TopLogprob = { token: Str, logprob: Float }
+enum LoopStop { done, max_steps, until }
+type LoopResult = { text: Untrusted<Str>, steps: Int, stopped: LoopStop, last: ModelReply }
+type Chosen = { index: Int, label: Untrusted<Str>, confidence?: Float }
+enum Verdict { pass, fail, unsure }
+type Judgement = { verdict: Verdict, score: Float, reasons: Str }
+type Criterion = { name: Str, description: Str, weight: Float }
+type Scores = { scores: [CriterionScore], total: Float }
+type CriterionScore = { name: Str, score: Float, reason: Str }
+enum Winner { a, b, tie }
+type Preference = { winner: Winner, margin: Float, reasons: Str }
+enum RankMethod { pointwise, listwise, pairwise }
+type Vector = [Float]
+enum CountMethod { exact, calibrated, estimated }
+type TokenCount = { tokens: Int, method: CountMethod }
+
+// think
+type StepNote = { step: Str, note: Str }
+type Stepped<A> = { answer: Untrusted<A>, trace: [Untrusted<StepNote>] }
+type Iterated<T> = { value: T, rounds: Int, stopped: StopReason, best_score?: Float }
+enum SubtaskKind { research, change, check }
+type Subtask = { title: Str, brief: Str, depends_on: [Str], kind: SubtaskKind }
+type Hypothesis = { statement: Str, test_: Str, likelihood: Float }
+type Reflection = { what_happened: Str, mistakes: [Str], lessons: [Str] }
+enum Severity { blocker, major, minor }
+type Issue = { severity: Severity, location?: Str, problem: Str, fix?: Str }
+type Critique = { pass: Bool, issues: [Issue], summary: Str }
+type Refined<T> = { value: T, rounds: Int, history: [Untrusted<Critique>], stopped: StopReason }
+enum VerificationStatus { supported, refuted, unknown }
+type Verification = { status: VerificationStatus, citations: [Int], reasons: Str }
+type Check<T> = { name: Str, run: fn(T) -> Bool }
+type CheckResult = { name: Str, ok: Bool, error?: Error }
+type CheckReport = { passed: Bool, results: [CheckResult] }
+// Counterexample: provisional.
+type Counterexample = { case: Str, why: Str }
+type Vote<T> = { winner: T, key: Untrusted<Str>, counts: Map<Untrusted<Str>, Int>, agreement: Float, failures: Int }
+enum ConsensusMethod { majority, unanimous, judge }
+type Consensus<T> = { value?: T, agreed: Bool, dissent: [T] }
+// DebateRecord: provisional (every argument so far, by round and side).
+type DebateRecord = { question: Untrusted<Str>, rounds: [[Untrusted<Str>]] }
+type DebateTurn = { question: Untrusted<Str>, round: Int, record: DebateRecord }
+type DebateResult = { record: DebateRecord, verdict: Untrusted<Judgement>, winner?: Int }
+enum SearchStrategy { bfs, dfs, best_first }
+// SearchStop: provisional.
+enum SearchStop { goal, max_nodes, max_depth, exhausted, iterations }
+type SearchResult<N> = { best: N, path: [N], goal_reached: Bool, expanded: Int, stopped: SearchStop }
+enum ConfidenceMethod { self_report, samples, logprob }
+type Confidence = { value: Float, method: ConfidenceMethod }
+
+// tools (fields as each row of chapter 06 gives them; a row's result is `Untrusted` where the
+// row says so, and its text fields are untrusted through it)
+type ListEntry = { name: Str, dir: Bool }
+type Listing = { entries: [ListEntry], more: Bool, next_offset?: Int }
+type Globbed = { paths: [Str], more: Bool, next_offset?: Int, hidden_by_rules: Int }
+type GrepMatch = { path: Str, line: Int, text: Str, before: [Str], after: [Str] }
+type Grepped = { matches: [GrepMatch], more: Bool, next_offset?: Int, hidden_by_rules: Int, raw: Str }
+enum ProcessStatus { running, Exited { code: Int }, stopped }
+type ProcessOutput = { status: ProcessStatus, output: Str, next_since: Int }
+type PageView = { tab: Str, url: Str, title: Str, text: Str }
+type TabInfo = { id: Str, title: Str, url: Str, active: Bool }
+type Downloaded = { path: Str, bytes: Int, final_url: Str, renamed: Bool }
+enum PreviewTarget { Url { url: Untrusted<Str> }, Command { command: Untrusted<Str>, port: Int } }
+// Preview: provisional.
+type Preview = { url: Str }
+type MediaFile = { path: Untrusted<Str> }
+type McpServerInfo = { name: Str, tools: [Untrusted<Str>], resources: Bool, prompts: Bool }
+// McpListing: provisional.
+type McpItem = { name: Str, uri?: Str, description?: Str }
+type McpListing = { items: [McpItem], next_cursor?: Str }
+type ToolSchema = { name: Untrusted<Str>, description: Untrusted<Str>, schema: Json }
+enum ExtensionOrigin { builtin, user, plugin, project }
+type SkillInfo = { name: Str, description: Untrusted<Str>, origin: ExtensionOrigin, loaded: Bool }
+type PluginInfo = {
+  name: Str, origin: ExtensionOrigin, enabled: Bool, active: Bool, withheld: Bool,
+  has_harnesses: Bool, description: Untrusted<Str>,
+}
+enum ExtensionKind { plugin, skill, agent }
+type ScriptResult = { output: Str, summary: Str, error?: Str }
+
+// agents (provisional where the rows give fields without types)
+enum AgentStatus { running, idle, done, failed, interrupted, paused }
+type TaskReport = {
+  task: Task<Report>, ok: Bool, report: Untrusted<Str>, question?: Untrusted<Str>,
+  usage?: Usage, status: AgentStatus,
+}
+type SpawnOpts = {
+  agent?: Str, model?: ModelRef, tier?: Tier, location?: Location, tags?: [Str],
+  effort?: Effort, access?: Access, knowledge?: Str, title?: Str, single_call?: Bool,
+  budget?: Budget,
+}
+type AgentSummary = {
+  id: Str, title: Untrusted<Str>, model: Str, status: AgentStatus, turns: Int, usage: Spent,
+  cost: Money, latest_report?: Untrusted<Str>,
+}
+type WorktreeInfo = {
+  branch: Untrusted<Str>, path: Str, files: [Untrusted<Str>], commits: Int,
+  merges_cleanly: Bool, conflicts: [Untrusted<Str>],
+}
+type MergeResult = { merged: Bool, conflicts: [Untrusted<Str>] }
+// `harness` is a keyword: the variant is declared `harness_` (read as `AgentRole.harness`).
+enum AgentRole { root, subagent, harness_, knowledge_fork }
+type AgentInfo = { id: Str, role: AgentRole, parent?: Str, title: Untrusted<Str> }
+type AgentFileInfo = {
+  name: Str, description: Untrusted<Str>, origin: ExtensionOrigin, tools?: [Str], model?: Str,
+  harness_?: Str,
+}
+type KnowledgeCard = { id: Str, title: Untrusted<Str>, topic: Untrusted<Str>, sources: [Untrusted<Str>] }
+
+// context
+type SafePoint = { steered: [Untrusted<Str>], notices: Int, compacted: Bool, paused_agents: [Str] }
+enum PendingKind { steering, background_notice }
+type Pending = { kind: PendingKind, text: Untrusted<Str> }
+type Compaction = { tokens_before: Int, tokens_after: Int, summarised: Int, model: Str }
+type PinInfo = { reason: Untrusted<Str>, messages: Int, tokens: Int }
+// Breakdown: provisional.
+type BreakdownCategory = { name: Str, tokens: Int }
+type Breakdown = { categories: [BreakdownCategory], tokens: Int, window?: Int, method: CountMethod }
+
+// memory
+enum MemoryScope { global, environment }
+enum MemoryType { user, feedback, project, reference, lesson }
+enum MemoryConfidence { confirmed, inferred }
+type MemoryHit = { name: Str, scope: MemoryScope, type_: MemoryType, description: Str, snippet: Str, score: Float }
+type MemoryEntry = {
+  name: Str, description: Str, type_: MemoryType, scope: MemoryScope, created: Instant,
+  source: Str, confidence: MemoryConfidence, body: Str,
+}
+type NewMemory = {
+  name: Untrusted<Str>, description: Untrusted<Str>, type_: MemoryType, scope: MemoryScope,
+  body: Untrusted<Str>, confidence: MemoryConfidence,
+}
+type IndexLine = { name: Str, description: Str, type_: MemoryType }
+type SessionHit = { session_id: Str, title: Str, at: Instant, kind: Str, snippet: Str, score: Float }
+
+// session
+enum NoticeLevel { info, warn, error }
+type AidState = { entities: [Str], goals: [Str], constraints: [Str] }
+// AidStateChange: provisional (each list given replaces the current one).
+type AidStateChange = { entities?: [Untrusted<Str>], goals?: [Untrusted<Str>], constraints?: [Untrusted<Str>] }
+type SessionRef = { id: Str, title?: Untrusted<Str> }
+type SessionInfo = {
+  id: Str, title: Untrusted<Str>, environment: Str, folders: [Str], model: Str,
+  effort?: Effort, mode: PermissionMode, attended: Bool, harness_: Str, turn_index: Int,
+  max_steps: Int,
+}
+
+// eval
+enum TestFormat { auto, cargo, pytest, jest, vitest, go, tap, junit }
+enum TestStatus { pass, fail, skip }
+type TestCase = { name: Str, status: TestStatus, message?: Str }
+type TestReport = {
+  passed: Int, failed: Int, skipped: Int, ok: Bool, cases: [TestCase], exit_code: Int, raw: Str,
+}
+type EvalTask = { id: Str, prompt_: Untrusted<Str>, raw: Json }
+enum TapeMode { live, record, replay }
+type TapeInfo = { path?: Str, entries: Int, replayed: Int, diverged: Bool }
+type ScriptedReply = { match_?: Str, text?: Str, json?: Json, tool_calls?: [ToolCall], error?: ErrorKind }
+type ScriptedToolReply = { match_?: Json, ok: Bool, text: Str, denied?: DeniedBy }
+
+// meta
+enum HarnessSource { std, user, plugin, project, authored }
+enum EntryKind { turn, task }
+type SignatureParam = { name: Str, type_: Str, schema: Json, default?: Json }
+type SignatureType = { type_: Str, schema: Json }
+type Signature = { name: Str, params: [SignatureParam], returns: SignatureType }
+type HarnessInfo = {
+  name: Str, version: Str, source: HarnessSource, description: Untrusted<Str>,
+  entries: [EntryKind], public: [Signature], hash: Str, trust_sites: Int, offered: Bool,
+}
+type PackageInfo = { name: Str, version: Str, hash: Str, source: HarnessSource, path: Str }
+// AuthoredVersion: provisional beyond the fields chapter 06 lists.
+type AuthoredVersion = {
+  name: Untrusted<Str>, version: Int, closure_hash: Str, diagnostics: [Untrusted<Str>],
+  diffs_from_previous: Untrusted<Str>, author?: Str, approved?: Bool,
+}
+type FrameInfo = {
+  harness_: Str, title: Untrusted<Str>, depth: Int, path: [Str], model: Str, effort?: Effort,
+  mode: PermissionMode, location: Location, attended: Bool, context: ContextMode, tools: Int,
+}
+type CallerInfo = { harness_: Str, site: Site }
+type FrameLimits = { budget: Budget, depth: Int, width: Int, heap: Int }
+enum RuleAction { allow, ask, deny }
+type Rule = { tool: Str, action: RuleAction, pattern?: Str }
+type PermissionView = { mode: PermissionMode, location: Location, paths: [Str], extra_rules: [Rule], tools: [Str] }
+enum DecisionKind { run, ask, refuse }
+type Decision = { decision: DecisionKind, reason?: Str }
+enum ToolSource { builtin, mcp, plugin, provider }
+type ToolInfo = {
+  name: Untrusted<Str>, source: ToolSource, offered: Bool, deferred: Bool,
+  asks_by_default: Bool, description?: Untrusted<Str>,
+}
+type EngineInfo = { imperium_version: Str, protocol_version: Str, ratio_version: Str, os: Str }
+
+// time (chapter 06, `data`). `Instant` is a UTC timestamp in microseconds; Ratio has no opaque
+// type a program cannot build, so it is a record here (provisional).
+type Instant = { micros: Int }
+type Date = { year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, weekday: Int }

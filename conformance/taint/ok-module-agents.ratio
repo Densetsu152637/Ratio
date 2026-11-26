@@ -1,0 +1,64 @@
+// expect: check-ok
+
+// `agents` used as a harness typically does: spawn and collect, delegate a batch, steer and
+// resume, inspect, merge a writer, and ask a knowledge agent. Briefs and steering text may be
+// untrusted (they are framed for the subagent); a report's text comes back untrusted; package
+// names are trusted text.
+
+fn fan_out(briefs: [Untrusted<Str>]) -> [Untrusted<Str>] {
+  let reports = agents.map(briefs, package: "std:tdd_fix", limit: 2)
+  reports.map(|r| r.report)
+}
+
+fn one(brief: Untrusted<Str>, merge_writers: Bool) -> Untrusted<Str> {
+  let task = agents.spawn(brief, access: write, title: "fix the build")
+  agents.steer(task, "Also run the linter.")
+  let report = agents.join(task, timeout: 10m)
+  if merge_writers and report.ok and agents.worktree(task) != none {
+    let merged = agents.merge(task)
+    if not merged.merged {
+      return "conflicts in {text.join(merged.conflicts, ", ")}"
+    }
+  }
+  report.report
+}
+
+fn follow_up(task: Task<Report>, more: Untrusted<Str>) -> AgentStatus {
+  let again = agents.resume(task, more)
+  let all = agents.await([again], timeout: 1m)
+  agents.status(again).status
+}
+
+fn opts() -> SpawnOpts {
+  { tier: strong, effort: high, access: read }
+}
+
+fn delegated(brief: Untrusted<Str>) -> TaskReport {
+  agents.delegate(brief, opts: opts())
+}
+
+fn chunks(a: Artefact) -> Int {
+  agents.delegate_chunks(a, 4000, "Summarise this part.", reduce: "Merge the parts.").len()
+}
+
+fn knowledge(question: Untrusted<Str>) -> Untrusted<Str> {
+  let cards = agents.knowledge(query: "build system")
+  if cards.len() == 0 {
+    return "no knowledge agent"
+  }
+  agents.ask(cards[0].id, question)
+}
+
+fn keep(task: Task<Report>) -> Untrusted<Str> {
+  let card = agents.keep_as_knowledge(task, "the parser")
+  agents.retire_knowledge(task)
+  card.topic
+}
+
+fn who() -> Int {
+  let me = agents.current()
+  let others = agents.list()
+  let files = agents.named()
+  agents.cancel(agents.spawn("Look around."))
+  others.len() + files.len()
+}
