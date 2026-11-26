@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 7:11
+// expect: check-error C0035 at 8:11
+
 // Untrusted text among `steps`.
 
 fn ask(plan: [Untrusted<Str>]) -> Prompt {

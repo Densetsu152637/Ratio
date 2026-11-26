@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 5:28
+// expect: check-error C0035 at 6:28
+
 // The `summary` of `session.request_approval` is trusted text.
 
 fn approve(plan: Untrusted<Str>) -> Bool {

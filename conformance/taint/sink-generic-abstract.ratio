@@ -1,6 +1,7 @@
-// expect: check-error C0035 at 8:3
-// expect: check-error C0035 at 12:3
-// expect: check-error C0035 at 17:12
+// expect: check-error C0035 at 9:3
+// expect: check-error C0035 at 13:3
+// expect: check-error C0035 at 18:12
+
 // Inside generic code a value of a type parameter counts as possibly untrusted, so a
 // generic function cannot launder untrusted text into a `Str`, whatever it is called with.
 

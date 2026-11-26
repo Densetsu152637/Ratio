@@ -1,5 +1,6 @@
-// expect: check-error C0035 at 7:14
-// expect: check-error C0035 at 12:3
+// expect: check-error C0035 at 8:14
+// expect: check-error C0035 at 13:3
+
 // A `Brief` is never an instruction: it reaches `task` sections only.
 
 fn ask(t: Task) -> Prompt {

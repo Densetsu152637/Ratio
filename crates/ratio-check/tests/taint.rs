@@ -2,7 +2,10 @@
 //! are fixed here), trust sites listed transitively, the package summary and `harnesses.check`
 //! through a registry, and hostile inputs to the analyses.
 
-#![allow(clippy::format_push_string, reason = "the test programs are built by appending")]
+#![allow(
+    clippy::format_push_string,
+    reason = "the test programs are built by appending"
+)]
 
 use std::time::{Duration, Instant};
 

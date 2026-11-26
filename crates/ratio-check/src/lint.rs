@@ -44,7 +44,7 @@ use ratio_syntax::ast::{
 use crate::analysis::{Effects, Results};
 use crate::check::{Checker, FnKind, ItemSig};
 use crate::diag::Code;
-use crate::tables::{Key, LocalId, Origin, PatRes, Res};
+use crate::tables::{ArgSource, Key, LocalId, Origin, PatRes, Res};
 use crate::types::Ty;
 
 /// How many times an item is walked for its derived locals to settle.
@@ -63,6 +63,8 @@ struct St<'r> {
     /// Whether this walk reports (the last one).
     collect: bool,
     warnings: Vec<(Span, String)>,
+    /// Secrets passed where the callee cannot see their label (errors, not silenced).
+    errors: Vec<(Span, String)>,
     depth: usize,
 }
 
@@ -70,6 +72,7 @@ impl Checker<'_> {
     /// Runs the lint over every checked module.
     pub(crate) fn lint(&mut self, results: &Results) {
         let mut found: Vec<(ModuleId, Span, String)> = Vec::new();
+        let mut errors: Vec<(ModuleId, Span, String)> = Vec::new();
         for m in 0..self.loaded.modules.len() {
             if !self.checked[m] {
                 continue;
@@ -100,6 +103,7 @@ impl Checker<'_> {
                     changed: false,
                     collect: false,
                     warnings: Vec::new(),
+                    errors: Vec::new(),
                     depth: 0,
                 };
                 let mut settled = false;
@@ -120,6 +124,7 @@ impl Checker<'_> {
                 }
                 st.collect = true;
                 self.lint_item(&mut st, &item.kind);
+                errors.extend(st.errors.into_iter().map(|(s, w)| (module, s, w)));
                 if !allowed {
                     found.extend(st.warnings.into_iter().map(|(s, w)| (module, s, w)));
                 }
@@ -127,6 +132,9 @@ impl Checker<'_> {
         }
         for (module, span, message) in found {
             self.report(Origin::Module(module), Code::ModelGuard, span, message);
+        }
+        for (module, span, message) in errors {
+            self.report(Origin::Module(module), Code::Secret, span, message);
         }
     }
 
@@ -253,6 +261,16 @@ impl Checker<'_> {
 
     /// A condition: whether it is derived, and whether it is model-only.
     fn cond(&self, st: &mut St<'_>, e: &Expr) -> (bool, bool) {
+        if st.depth >= self.max_depth {
+            return (true, true);
+        }
+        st.depth += 1;
+        let out = self.cond_inner(st, e);
+        st.depth -= 1;
+        out
+    }
+
+    fn cond_inner(&self, st: &mut St<'_>, e: &Expr) -> (bool, bool) {
         match &e.kind {
             ExprKind::Paren(inner) => self.cond(st, inner),
             ExprKind::Unary {
@@ -306,6 +324,16 @@ impl Checker<'_> {
     }
 
     fn prompt(&self, st: &mut St<'_>, body: &ast::PromptBody) -> bool {
+        if st.depth >= self.max_depth {
+            return true;
+        }
+        st.depth += 1;
+        let d = self.prompt_inner(st, body);
+        st.depth -= 1;
+        d
+    }
+
+    fn prompt_inner(&self, st: &mut St<'_>, body: &ast::PromptBody) -> bool {
         use ast::SectionKind as S;
         let mut d = false;
         for section in &body.sections {
@@ -427,9 +455,9 @@ impl Checker<'_> {
                     let left = self.ex(st, lhs);
                     match &rhs.kind {
                         ExprKind::Call { callee, args, .. } => {
-                            self.lint_call(st, e.span, Some(callee), args, left)
+                            self.lint_call(st, e.span, Some(callee), args, (left, Some(lhs.span)))
                         }
-                        _ => self.lint_call(st, e.span, Some(rhs), &[], left),
+                        _ => self.lint_call(st, e.span, Some(rhs), &[], (left, Some(lhs.span))),
                     }
                 }
                 BinaryOp::And | BinaryOp::Or | BinaryOp::Coalesce => {
@@ -442,7 +470,7 @@ impl Checker<'_> {
                 }
             },
             ExprKind::Call { callee, args, .. } => {
-                self.lint_call(st, e.span, Some(callee), args, false)
+                self.lint_call(st, e.span, Some(callee), args, (false, None))
             }
             ExprKind::Member { object, .. } => {
                 let module = matches!(
@@ -568,7 +596,7 @@ impl Checker<'_> {
         span: Span,
         callee: Option<&Expr>,
         args: &[ast::Arg],
-        receiver: bool,
+        (receiver, lhs): (bool, Option<Span>),
     ) -> bool {
         let mut d = receiver;
         if let Some(c) = callee {
@@ -631,6 +659,65 @@ impl Checker<'_> {
                 ),
             ));
         }
+        if st.collect && effects.intersects(Effects::GUARDED) {
+            self.secret_into_generic(st, callee, args, lhs, info);
+        }
         derived
+    }
+
+    /// A statically secret value passed for a generic parameter of a declaration that may
+    /// write, run commands, delegate or reach the network is refused (`C0037`): the callee's
+    /// body is checked at its type parameter, which carries no label, so it cannot refuse the
+    /// sink itself. (A parameter declared `Secret<…>` is checked in the callee; the built-in
+    /// secrecy sinks refuse their own arguments.)
+    fn secret_into_generic(
+        &self,
+        st: &mut St<'_>,
+        callee: Option<&Expr>,
+        args: &[ast::Arg],
+        lhs: Option<Span>,
+        info: Option<&crate::tables::CallInfo>,
+    ) {
+        let Some(info) = info else {
+            return;
+        };
+        let Some(r) = info.callee else {
+            return;
+        };
+        let (Origin::Module(_), ItemSig::Fn(sig)) = (r.origin, self.sig(r)) else {
+            return;
+        };
+        let table = &self.tables[st.module.0];
+        for (param, source) in sig.params.iter().zip(&info.args) {
+            if !self.types.has_params(param.ty) {
+                continue;
+            }
+            let at = match source {
+                ArgSource::Arg(k) => args.get(*k).map(|a| a.value.span),
+                ArgSource::Receiver => lhs.or(match callee.map(|c| &c.kind) {
+                    Some(ExprKind::Member { object, .. }) => Some(object.span),
+                    _ => None,
+                }),
+                ArgSource::Default => None,
+            };
+            let Some(at) = at else {
+                continue;
+            };
+            if table
+                .types
+                .get(&Key::from(at))
+                .is_some_and(|t| self.types.secret_inside(*t))
+            {
+                st.errors.push((
+                    at,
+                    format!(
+                        "a secret cannot be passed for the generic parameter `{}` of a function \
+                         that may write, run commands, delegate or reach the network: it could \
+                         send the secret on (`declassify` asks the user)",
+                        param.name
+                    ),
+                ));
+            }
+        }
     }
 }

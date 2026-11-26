@@ -1,4 +1,5 @@
 // expect: check-ok
+
 // The flows chapter 03 allows: untrusted text in `data` sections, tool arguments, labels,
 // harness arguments of untrusted type and results; a `Brief` and trusted text in `task`
 // sections; trusted text and trusted prompts in instruction positions; scalars computed from

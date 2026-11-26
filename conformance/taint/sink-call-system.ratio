@@ -1,5 +1,6 @@
-// expect: check-error C0035 at 14:29
-// expect: check-error C0035 at 22:18
+// expect: check-error C0035 at 15:29
+// expect: check-error C0035 at 23:18
+
 // The `system` field of a call override, and of a `with` block, is a `TrustedPrompt`.
 
 harness echo(said: Untrusted<Str>) -> Untrusted<Str> {

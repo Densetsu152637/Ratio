@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 10:18
+// expect: check-error C0035 at 11:18
+
 // The `system` field of a harness's configuration is a `TrustedPrompt`.
 
 prompt framed(page: Untrusted<Str>) {

@@ -22,7 +22,10 @@
 //!   (`C0035`), and accepted programs use the audited conversions, generics, closures and
 //!   joins in sinks.
 
-#![allow(clippy::format_push_string, reason = "the test programs are built by appending")]
+#![allow(
+    clippy::format_push_string,
+    reason = "the test programs are built by appending"
+)]
 
 use ratio_check::Code;
 use ratio_names::{Loader, MemoryRegistry, PackageId, PackageName, QualifiedName, RelPath, Source};

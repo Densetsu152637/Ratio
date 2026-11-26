@@ -1,7 +1,8 @@
-// expect: check-error C0036 at 9:3
-// expect: check-error C0036 at 13:3
-// expect: check-error C0036 at 17:11
-// expect: check-error C0036 at 22:14
+// expect: check-error C0036 at 10:3
+// expect: check-error C0036 at 14:3
+// expect: check-error C0036 at 18:11
+// expect: check-error C0036 at 23:14
+
 // `trust`, `as_task` and `declassify` convert only at monomorphic types, and are called
 // directly: a generic helper or a function value would be a general-purpose launderer.
 

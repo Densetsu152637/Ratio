@@ -1,6 +1,7 @@
-// expect: check-error C0035 at 7:21
-// expect: check-error C0035 at 11:23
-// expect: check-error C0035 at 15:26
+// expect: check-error C0035 at 8:21
+// expect: check-error C0035 at 12:23
+// expect: check-error C0035 at 16:26
+
 // The `because` of `trust`, `as_task` and `declassify` is trusted text.
 
 fn a(x: Untrusted<Str>, why: Untrusted<Str>) -> Str {

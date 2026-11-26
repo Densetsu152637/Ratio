@@ -1010,7 +1010,7 @@ impl Checker<'_> {
             let t = self.types.resolve(t);
             self.types.secret_inside(t)
         });
-        let ret = if secret_arg && !self.types.secret_inside(ret) {
+        let ret = if secret_arg && carries_data(ret) && !self.types.secret_inside(ret) {
             self.types.secret(ret)
         } else {
             ret
@@ -1267,11 +1267,12 @@ impl Checker<'_> {
             }
         }
         // A result computed from a statically secret argument is secret too (chapter 03,
-        // "Propagation"), except where `declassify` removes the label and for prompts, whose
-        // sections keep labels at run time.
+        // "Propagation"), except where `declassify` removes the label, for prompts, whose
+        // sections keep labels at run time, and for `()`, which holds nothing.
         if secret_arg
             && traits.audited != Some(TrustKind::Declassify)
             && sig.kind != FnKind::Prompt
+            && carries_data(result)
             && !self.types.secret_inside(result)
         {
             result = self.types.secret(result);
@@ -1514,4 +1515,10 @@ fn plain_questions(args: &[Arg], slots: &[Option<ArgSource>]) -> bool {
                 ast::FieldInit::Field { .. } => true,
             })
     })
+}
+
+/// Whether a result of type `t` can hold anything a label would protect (`()` and `Never`
+/// cannot).
+fn carries_data(t: TypeId) -> bool {
+    !matches!(t, TypeId::UNIT | TypeId::NEVER | TypeId::ERROR)
 }

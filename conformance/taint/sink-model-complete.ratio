@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 5:18
+// expect: check-error C0035 at 6:18
+
 // `model.complete`'s text is an instruction position (a raw completion has no channels).
 
 fn complete(page: Untrusted<Str>) -> Untrusted<Str> {

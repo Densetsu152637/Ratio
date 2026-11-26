@@ -1,4 +1,5 @@
 // expect: check-ok
+
 // Audited conversions at monomorphic types: `trust` (its `T` is the argument's type without
 // its trust labels), `as_task` into a `task` section, and `declassify` of a static secret;
 // generic code may call a helper that trusts at a known type.

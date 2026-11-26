@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 5:24
+// expect: check-error C0035 at 6:24
+
 // The text of `context.notice` is trusted text (its `data` may be untrusted).
 
 fn notify(conv: Conversation, reply: Untrusted<Str>) -> () {

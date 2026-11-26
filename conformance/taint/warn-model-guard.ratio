@@ -1,5 +1,6 @@
-// expect: check-warning C0039 at 15:13
-// expect: check-warning C0039 at 26:13
+// expect: check-warning C0039 at 16:13
+// expect: check-warning C0039 at 27:13
+
 // The guarded-effect lint: a condition derived from model or tool output is the only guard on
 // an effect that writes, runs a command, delegates or reaches the network.
 

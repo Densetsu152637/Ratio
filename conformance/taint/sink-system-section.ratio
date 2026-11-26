@@ -1,6 +1,7 @@
-// expect: check-error C0035 at 9:12
-// expect: check-error C0035 at 16:12
-// expect: check-error C0035 at 27:12
+// expect: check-error C0035 at 10:12
+// expect: check-error C0035 at 17:12
+// expect: check-error C0035 at 28:12
+
 // Untrusted text, a Brief or an untrusted prompt in a `system` section (an instruction
 // position, chapter 03 "Sinks").
 

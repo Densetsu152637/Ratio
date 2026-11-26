@@ -7,7 +7,11 @@
 //! [`ratio_syntax`], are re-exported here, and so is stage 3, modules and names ([`names`]): a
 //! host implements [`Registry`] over its package sources and loads a package with a [`Loader`].
 //! Stage 4, the type checker ([`checker`]), checks what was loaded: [`check`] gives the
-//! [`Checked`] result, its diagnostics and the side tables later stages read.
+//! [`Checked`] result, its diagnostics and the side tables later stages read. Stage 5, schemas
+//! and taint, is part of the same check: the sinks, trust sites ([`Checked::trust_sites`] and
+//! the transitive [`Checked::summary`]), static secrets, the guarded-effect lint, schemas and
+//! type digests ([`Checked::schema`], [`Checked::digest`]), and `harnesses.check` as a library
+//! call ([`harnesses_check`]).
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -23,9 +27,10 @@ pub use ratio_names::{
     Source,
 };
 
-/// Stage 4: the type checker. Its diagnostic codes are [`checker::Code`] (`C`).
+/// Stages 4 and 5: the type checker, with schemas and taint. Its diagnostic codes are
+/// [`checker::Code`] (`C`).
 pub use ratio_check as checker;
-pub use ratio_check::{Checked, check};
+pub use ratio_check::{Checked, PackageCheck, check, harnesses_check};
 
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
@@ -34,5 +39,5 @@ pub use ratio_check::{Checked, check};
 /// constant matches the version line of `spec/README.md`.
 pub const SPEC_DRAFT: &str = "0.8";
 
-/// The implementation stage reached (chapter 10's table): the type checker.
-pub const STAGE: u32 = 4;
+/// The implementation stage reached (chapter 10's table): schemas and taint.
+pub const STAGE: u32 = 5;

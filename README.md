@@ -23,8 +23,9 @@ harness answer(question: Str) -> Str {
 
 ## Status
 
-Specification draft 0.8. Stages 1 and 2 of the [implementation plan](spec/10-implementation.md),
-the token reader and the parser, are built. Ratio is a language in its own right: this repository holds its specification,
+Specification draft 0.8. Stages 1 to 5 of the [implementation plan](spec/10-implementation.md)
+are built: the token reader, the parser, modules and names, the type checker, and schemas and
+taint. Ratio is a language in its own right: this repository holds its specification,
 its implementation, its conformance suite and its releases. Imperium is a host: it depends on a
 release of the `ratio` library and implements its `Host` trait against the agent engine
 ([chapter 10](spec/10-implementation.md#the-repository-split-and-the-boundary) says which stages
@@ -37,8 +38,10 @@ belong to which repository).
 | [`spec/`](spec/README.md) | The specification; start at [spec/README.md](spec/README.md) |
 | [`crates/ratio/`](crates/ratio/README.md) | Package `ratio-lang`, library `ratio`: the public facade, the only crate a host depends on |
 | [`crates/ratio-syntax/`](crates/ratio-syntax/README.md) | Package and library `ratio-syntax`: the token reader (stage 1), and the parser from stage 2 |
+| [`crates/ratio-names/`](crates/ratio-names/README.md) | Modules and names (stage 3): sources, imports, the registry trait and name resolution |
+| [`crates/ratio-check/`](crates/ratio-check/README.md) | The type checker (stage 4) with schemas and taint (stage 5) |
 | `std/` | The built-in packages' sources (`std:default` and the rest), embedded by the `ratio` library; it arrives with stage 23 |
-| `conformance/` | The conformance corpus, by chapter (`syntax/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
+| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/`); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
 | `scripts/` | The checks CI runs: `check-rust.sh`, and `ci/check-links.py` and `ci/check-license.py` |
 | `.github/workflows/` | `ci.yml` (every pull request and `main`) and `release.yml` (every `v*` tag) |
 

@@ -1,6 +1,7 @@
 # ratio-check
 
-Ratio's type checker: stage 4 of the [implementation plan](../../spec/10-implementation.md).
+Ratio's type checker, with schemas and taint: stages 4 and 5 of the
+[implementation plan](../../spec/10-implementation.md).
 Hosts do not depend on this crate; they use the [`ratio` facade](../ratio/README.md), which
 re-exports it as `ratio::checker` and its entry point as `ratio::check`.
 
@@ -88,9 +89,89 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
   record of untrusted fields, `Untrusted<Int>` is `Int`, a unit-only enum is itself), so field
   access and subtyping work through it.
 
-Taint proper is stage 5: sinks, where `Brief` and `TrustedPrompt` may go, `trust` and
-`as_task`, schemas and type digests, and static `Secret<T>` (which this stage only parses and
-relates covariantly).
+## Stage 5: schemas and taint
+
+Taint is part of the type relation, so most sinks are trusted positions the relation already
+guards; stage 5 makes them explicit, adds the conversions and the analyses, and lives in this
+crate rather than a second one because its rules change which programs type (the sections,
+`trust`'s inference, interpolation, secrets) and report through the same diagnostics. Chapter 03
+("Taint", "Secrecy", "Types are schemas"), chapter 05 (sections) and chapter 07:
+
+- **Sinks.** The `system`, `instruct`, `note` and `example` sections and `steps` take trusted
+  text only (`system` also a `TrustedPrompt`); a `task` section takes a `Brief` (and so `Str`
+  and `UserText`). Every other sink is a parameter or field of trusted type: `model.complete`'s
+  text, `session.request_approval`'s summary, `context.notice`'s text, the names given to
+  `meta.harness` and `agents.spawn`, the `because` of the conversions, a harness's or call's
+  `system: TrustedPrompt`. A value that would fit but for its trust labels is `C0035`, one that
+  would fit but for a secrecy label `C0037`; any other misfit stays `C0004`. Classification
+  never accepts anything the relation refuses.
+- **`Brief` and `TrustedPrompt` inference.** A string literal is as trusted as the least
+  trusted value it interpolates: untrusted text (or a type parameter, `Json`, an image) gives
+  `Untrusted<Str>`, a `Brief` with only trusted text otherwise a `Brief`, else `Str`
+  (concatenation already joins the same way). A prompt is a `TrustedPrompt` when it has no
+  `data`, `image` or `context` section, no `Brief` task and no included untrusted prompt; a
+  section expression is checked expecting `Str`, so a generic call in it is instantiated at the
+  most trusted type.
+- **Abstract generics.** A type parameter counts as possibly untrusted (stage 4's taint flag),
+  so `"{x}"` and `text.show(x)` over a `T` are `Untrusted<Str>`; `Untrusted<T>` stays abstract.
+- **Conversions.** `trust(x, because:)`, `as_task(x, because:)` and `declassify(x, because:)`
+  are audited trust sites. `trust`'s `T` is the turbofish's, else `x`'s type with its trust
+  labels removed (`Untrusted<Verdict>` gives `Verdict`), never what inference from the expected
+  type would bind. Each converts only at a monomorphic type, and may only be called directly:
+  a type parameter in `T`, or naming one as a value, is `C0036`. Every call is recorded
+  (`Checked::trust_sites`: kind, position, enclosing item, type, literal reason).
+- **Transitive trust sites and the summary.** The call graph has an edge from an item to every
+  declaration its source names (as for purity, effects count where a function value is made or
+  named; calling a harness *value* counts as every kind of effect). Over its strongly connected
+  components, callees first, each item gets the trust sites and `meta.harness` loads it
+  reaches and the kinds of effect (write, command, network, delegate, any tool of the frame,
+  model, other) and tools it may use (`Checked::summary`). The site sets are bounded
+  (`MAX_SITE_WORK` entries); past that every item lists every site, a superset, and
+  `Checked::approximate` says so.
+- **Static `Secret<T>`.** Only where the label is known: `session.ask`'s answers are
+  `[Secret<UserText>]` unless the questions are a list written out whose every question is a
+  record written out without `secret: true`; a declared `Secret<T>` parameter; `declassify`'s
+  argument. A result computed from a statically secret argument is secret (interpolation and
+  calls; not `()`, prompts, or `declassify`), and branching on a `Secret<Bool>` is allowed.
+  `Secret<T>` relates only to `Secret<U>`, so a secret reaches no unlabelled position (`C0037`):
+  the built-ins marked `@secrecy_sink` refuse one even for a generic parameter, and a secret
+  passed for a generic parameter of a function that may write, run commands, delegate or reach
+  the network is refused at the call (its body cannot see the label). Everything else is the
+  run-time labels' job (stage 6).
+- **Guarded-effect lint** (`C0039`, a warning; [`src/lint.rs`](src/lint.rs) states the rules):
+  an effect that writes, runs a command, delegates, reaches the network or runs a model-chosen
+  tool, every one of whose guards in its item is derived from model or tool output only.
+  Derivation over-approximates (values of untrusted type, effect results other than the
+  user's answers, locals assigned under derived guards, closure parameters, caught errors); a
+  trusted conjunct (`if v.pass and approved`) is a guard of its own. Each item is walked until
+  its derived locals settle, at most `MAX_ROUNDS` times, then every local counts as derived.
+  `@allow(model_guard)` on the item silences it (statements take no attributes).
+- **Schemas and digests** ([`src/schema.rs`](src/schema.rs) documents the canonical forms).
+  `schema(t)` is the JSON Schema (draft 2020-12) of chapter 03's table, with the labels dropped
+  and the record declarations' descriptions (`"…"` or `///`) and refinements (`@len`,
+  `@range`, `@pattern`, `@example`, checked against their fields: `C0038`) added, written as
+  canonical JSON (fixed key order, no whitespace); an enum that contains itself goes under
+  `$defs`. `digest(t)` is `sha256` (written out in [`src/sha256.rs`](src/sha256.rs), with the
+  standard's vectors) over a canonical form that keeps the labels (`Str` and `Untrusted<Str>`
+  differ) and leaves out descriptions and refinements. Records are structural, so equal
+  records share the metadata of the first declaration lowered. A `state` type, a `format`
+  type and the type arguments marked `@schema(T)` (`json.decode`, `json.encode`,
+  `model.generate_as`) must be schema-able (`C0038`).
+- **`harnesses.check`** ([`src/report.rs`](src/report.rs)). `Checked::harness_check(&loaded)`
+  summarises a package: effects and tools ("any tool of the frame" when it runs tools a model
+  chooses), every trust site with its position, the `meta.harness` names it loads, and per
+  harness its parameter and result schemas and whether a model may run it (`pub`, not an
+  entry, every parameter schema-able and free of trusted text; otherwise "not runnable by
+  models" with the reason). `harnesses_check(&registry, &builtin, &name)` loads and checks
+  through a registry and follows literal `meta.harness` names (the package is the name
+  without its last dotted part) to list the sites of everything the package can load, at most
+  `MAX_LOADED_PACKAGES` packages; a computed name or a package the registry lacks makes it
+  `complete: false`. `test` blocks against a scripted host need the interpreter.
+
+What stage 6 must carry at run time: the trust sites (kind, reason, site) to emit `ratio_trust`
+events with the value's digest; secrecy labels on every value, since the checker's static
+`Secret<T>` sees only what it can prove; the type digests for `state` and caches; and the
+schemas for structured generation and decoding.
 
 ## Architecture: interned types and span-keyed side tables
 
@@ -120,13 +201,18 @@ shapes the specification does not spell out (`Site`, `PermissionRequest`) are ma
 provisional there. Built-in functions are a declarative table in
 [`src/builtins.rs`](src/builtins.rs): one Ratio source per standard module, `fn` declarations
 with empty bodies, `@pure` where chapter 06's Needs column is `pure`. A declaration without
-`@pure` counts as effectful, so one added carelessly fails closed. The type-parameter names `S`
+`@pure` counts as effectful (of an unknown kind), so one added carelessly fails closed. Stage 5's
+attributes say the rest: `@audited(trust | as_task | declassify)`, `@effect(write | command |
+network | delegate | any_tool | model)`, `@tool(name)`, `@secrecy_sink`, `@schema(T)`, `@user`
+(the result is the person's answer), `@secret_answers` and `@loads`. A name that is a Ratio
+keyword is written with a trailing `_` (`meta.harness_`, `agents.spawn`'s `harness_`), which
+the checker drops. The type-parameter names `S`
 (any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,
 `Money`) carry chapter 06's bounds.
 
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
-(`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`), a few dozen of chapter
-06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
+(`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
+`meta`, `agents`), a few dozen of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
 reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
 that does not exist (`C0001`).
 
@@ -142,6 +228,10 @@ work without bound:
 | Aliases, constants or prompts resolved on demand inside each other | 64 | `C0022` |
 | Work on types (relations, substitutions, normalisations) per check | 20,000,000 units | `C0022` |
 | Exhaustiveness work per `match` (or irrefutable pattern), also charged to the check's budget | 200,000 units | `C0023` |
+| Trust-site and load set entries over the call graph | 4,000,000 | Every item lists every site (`approximate`) |
+| Rounds of the guarded-effect lint per item | 8 | Every local of the item counts as derived |
+| Schema or canonical form size, nesting; work per query | 1 MiB, 256 levels; 2,000,000 units | `SchemaError::TooLarge` (`C0038` where one is required) |
+| Packages `harnesses_check` loads through `meta.harness` | 32 | `complete: false` |
 
 Out of budget, relations fail closed (they do not hold), and the check reports `C0022` even
 when the budget ran out after the last expression.
@@ -192,18 +282,33 @@ refuses nesting beyond 12.
 | `C0032` | Warning: a local binding that shadows a standard module |
 | `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
 | `C0034` | A standard built-in the checker has no signature for yet (stages 7 to 12 add them) |
+| `C0035` | Untrusted text, a `Brief` or an untrusted prompt where trusted text is required: an instruction position, a `task` section (a `Brief` only), any trusted type |
+| `C0036` | `trust`, `as_task` or `declassify` at a type that is or holds a type parameter, or not called directly |
+| `C0037` | A statically secret value where an unlabelled one is required, at a secrecy sink, or for a generic parameter of a function that may send it on |
+| `C0038` | A type that must be schema-able and is not, or a schema attribute that does not fit its field |
+| `C0039` | Warning: a model-derived condition is the only guard on a write, command, delegation, network effect or model-chosen tool (lint `model_guard`) |
 
 ## Tests
 
-- `tests/conformance.rs` runs `conformance/types/`: each `.ratio` file is a package of one
+- `tests/conformance.rs` runs `conformance/types/` and `conformance/taint/` (one refused
+  program per sink, one accepted per allowed flow, trust sites, secrets, schemas, the lint): each `.ratio` file is a package of one
   file, each folder a package whose `main.ratio` imports the others by path. The entry's header
   says `check-ok`, or lists `check-error CODE at LINE:COL [in FILE]` and `check-warning …`
   lines, all of the checker's diagnostics in any order. Every code has a file.
+- `tests/taint.rs`: schema and digest snapshots (fixed bytes, so the same on every platform),
+  types without schemas, a doubling type refused quickly, trust sites listed transitively,
+  the package summary, `harnesses_check` following loads through a registry (and incomplete for
+  a computed or missing name), and the lint and analysis on hostile bodies.
+- `tests/taint_property.rs`: a fixed-seed generator of well-typed programs mixing untrusted
+  sources, joins, generics, closures, `var`s and the conversions, with ground truth computed by
+  data provenance; accepted programs never put untrusted text in an instruction position, a
+  `task` section or a `TrustedPrompt`, safe programs of the exactly typed fragment are
+  accepted, and coverage is asserted.
 - `tests/check.rs` covers the side tables (types, resolutions, call instantiations, coercions)
   and hostile input: deep expressions, doubling aliases, long alias, constant and
   instantiation chains, wide declarations and bodies, an exponential match, and the
   caller's-stack fallback on a 512 KiB thread.
 
-This stage is larger than chapter 10's 800-line guideline: the checker is one cohesive pass
-over the whole expression language, and splitting it would leave a stage that checks part of
-it.
+Stages 4 and 5 are each larger than chapter 10's 800-line guideline: the checker is one cohesive pass
+over the whole expression language, and taint is part of its relation and its diagnostics, so
+splitting either would leave a stage that checks part of it.

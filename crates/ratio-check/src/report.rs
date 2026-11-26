@@ -127,9 +127,18 @@ impl Checked {
             ..HarnessCheck::default()
         };
         let mut tools: BTreeSet<String> = BTreeSet::new();
-        for summary in self.summaries.values() {
-            out.effects = out.effects.union(summary.effects);
-            tools.extend(summary.tools.iter().cloned());
+        for ((module, index), summary) in &self.summaries {
+            // `test` blocks run only against a scripted host, never in a session.
+            let test = loaded.modules.get(module.0).is_some_and(|m| {
+                matches!(
+                    m.ast.items.get(*index).map(|i| &i.kind),
+                    Some(ItemKind::Test(_))
+                )
+            });
+            if !test {
+                out.effects = out.effects.union(summary.effects);
+                tools.extend(summary.tools.iter().cloned());
+            }
         }
         out.tools = tools.into_iter().collect();
         out.trust_sites = self

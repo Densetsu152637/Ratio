@@ -1,4 +1,5 @@
-// expect: check-error C0035 at 7:10
+// expect: check-error C0035 at 8:10
+
 // Untrusted text in a `note` section.
 
 fn ask(reply: Untrusted<Str>) -> Prompt {

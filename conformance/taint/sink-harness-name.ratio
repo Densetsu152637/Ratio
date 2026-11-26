@@ -1,5 +1,6 @@
-// expect: check-error C0035 at 6:61
-// expect: check-error C0035 at 10:23
+// expect: check-error C0035 at 7:61
+// expect: check-error C0035 at 11:23
+
 // Harness and package names given to `meta.harness` and `agents.spawn` are trusted text.
 
 fn load(name: Untrusted<Str>) -> harness(Untrusted<Str>) -> Untrusted<Str> {

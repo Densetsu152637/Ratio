@@ -209,10 +209,12 @@ impl Checker<'_> {
                 .collect();
             named.sort_unstable();
             for (key, r) in named {
-                let Some(index) = enclosing(&starts[m], key.start) else {
+                let Some(index) = starts.get(m).and_then(|s| enclosing(s, key.start)) else {
                     continue;
                 };
-                let from = node_of[&(ModuleId(m), index)];
+                let Some(&from) = node_of.get(&(ModuleId(m), index)) else {
+                    continue;
+                };
                 match r.origin {
                     Origin::Module(other) => {
                         if let Some(&to) = node_of.get(&(other, r.index)) {
@@ -228,18 +230,34 @@ impl Checker<'_> {
                 }
             }
         }
-        let records = std::mem::take(&mut self.records);
+        let mut records = std::mem::take(&mut self.records);
+        // In module and source order, each call once.
+        records
+            .trust_sites
+            .sort_by_key(|(m, span, ..)| (*m, span.start, span.end));
+        records
+            .trust_sites
+            .dedup_by_key(|(m, span, ..)| (*m, span.start, span.end));
+        records
+            .loads
+            .sort_by_key(|(m, span, _)| (*m, span.start, span.end));
+        records
+            .loads
+            .dedup_by_key(|(m, span, _)| (*m, span.start, span.end));
+        let node = |module: ModuleId, at: usize| {
+            enclosing(starts.get(module.0)?, at)
+                .and_then(|index| node_of.get(&(module, index)).map(|n| (*n, index)))
+        };
         for (module, span) in &records.harness_calls {
-            if let Some(index) = enclosing(&starts[module.0], span.start) {
-                let from = node_of[&(*module, index)];
+            if let Some((from, _)) = node(*module, span.start) {
                 effects[from] = Effects::ALL;
             }
         }
         for (module, span, kind, ty, reason) in records.trust_sites {
-            let Some(item) = enclosing(&starts[module.0], span.start) else {
+            let Some((from, item)) = node(module, span.start) else {
                 continue;
             };
-            sites[node_of[&(module, item)]].insert(out.trust_sites.len());
+            sites[from].insert(out.trust_sites.len());
             out.trust_sites.push(TrustSite {
                 kind,
                 module,
@@ -250,10 +268,10 @@ impl Checker<'_> {
             });
         }
         for (module, span, name) in records.loads {
-            let Some(item) = enclosing(&starts[module.0], span.start) else {
+            let Some((from, item)) = node(module, span.start) else {
                 continue;
             };
-            loads[node_of[&(module, item)]].insert(out.loads.len());
+            loads[from].insert(out.loads.len());
             out.loads.push(Load {
                 module,
                 span,
