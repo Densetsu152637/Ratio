@@ -77,8 +77,9 @@ pub(super) fn s_compare(a: &Args) -> Sizes {
     }
 }
 
-/// `list.window`: building `len − size + 1` windows costs O(log len) each (a slice shares
-/// everything it can), so they are charged as `len + windows · ⌈log2(len + 1)⌉`.
+/// `list.window`: building `len − size + 1` windows costs O(log len) nodes and two leaf copies
+/// each (a slice shares everything else), so they are charged as
+/// `len + windows · (⌈log2(len + 1)⌉ + 64)`.
 pub(super) fn s_window(a: &Args) -> Sizes {
     let len = a
         .first()
@@ -91,7 +92,7 @@ pub(super) fn s_window(a: &Args) -> Sizes {
         .and_then(|s| u64::try_from(s).ok())
         .filter(|s| *s >= 1);
     let windows = size.map_or(0, |s| if s <= len { len - s + 1 } else { 0 });
-    Sizes::n(len.saturating_add(windows.saturating_mul(log_work(len))))
+    Sizes::n(len.saturating_add(windows.saturating_mul(log_work(len) + 64)))
 }
 
 // ---- helpers ----

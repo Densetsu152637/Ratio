@@ -222,6 +222,17 @@ fn write_json(p: &Prepared, j: &Json, out: &mut String) {
 
 // ---- parse ----
 
+/// A container being read.
+enum Open {
+    Array(Vec<Value>),
+    Object {
+        entries: Vec<(Value, Value)>,
+        seen: std::collections::HashMap<String, usize>,
+        /// The key whose value is being read.
+        key: Value,
+    },
+}
+
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
@@ -231,6 +242,7 @@ struct Parser<'a> {
 
 /// Parses JSON text; every node carries `labels`. The error names the line and column.
 pub(crate) fn parse(heap: &Heap, text: &str, labels: Labels) -> Result<Value, Fault> {
+    crate::work::add(text.len() as u64);
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
@@ -238,7 +250,7 @@ pub(crate) fn parse(heap: &Heap, text: &str, labels: Labels) -> Result<Value, Fa
         labels,
     };
     p.ws();
-    let v = p.value(0)?;
+    let v = p.value()?;
     p.ws();
     if p.i != p.s.len() {
         return Err(p.fail("text after the JSON value"));
@@ -273,10 +285,8 @@ impl Parser<'_> {
         }
     }
 
-    fn value(&mut self, depth: usize) -> Result<Value, Fault> {
-        if depth >= MAX_JSON_DEPTH {
-            return Err(self.fail("nested deeper than 128"));
-        }
+    /// A string, number or literal at the cursor (not a container).
+    fn scalar(&mut self) -> Result<Value, Fault> {
         match self.s.get(self.i) {
             Some(b'n') => self.lit("null", Json::Null),
             Some(b't') => self.lit("true", Json::Bool(true)),
@@ -286,81 +296,118 @@ impl Parser<'_> {
                 let s = Str::new(self.heap, s)?;
                 self.node(Json::Str(s))
             }
-            Some(b'[') => {
-                self.i += 1;
-                let mut items = Vec::new();
-                self.ws();
-                if self.s.get(self.i) == Some(&b']') {
-                    self.i += 1;
-                } else {
-                    loop {
-                        self.ws();
-                        items.push(self.value(depth + 1)?);
-                        self.ws();
-                        match self.s.get(self.i) {
-                            Some(b',') => self.i += 1,
-                            Some(b']') => {
-                                self.i += 1;
-                                break;
-                            }
-                            _ => return Err(self.fail("expected `,` or `]`")),
-                        }
-                    }
-                }
-                let list = List::from_vec(self.heap, items)?;
-                self.node(Json::Array(list))
-            }
-            Some(b'{') => {
-                self.i += 1;
-                let mut entries: Vec<(Value, Value)> = Vec::new();
-                let mut seen: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-                self.ws();
-                if self.s.get(self.i) == Some(&b'}') {
-                    self.i += 1;
-                } else {
-                    loop {
-                        self.ws();
-                        if self.s.get(self.i) != Some(&b'"') {
-                            return Err(self.fail("expected a key"));
-                        }
-                        let k = self.string()?;
-                        let k = Value::new_text(self.heap, k)?.with_labels(self.labels);
-                        self.ws();
-                        if self.s.get(self.i) != Some(&b':') {
-                            return Err(self.fail("expected `:`"));
-                        }
-                        self.i += 1;
-                        self.ws();
-                        let v = self.value(depth + 1)?;
-                        // A repeated key: the later value wins, in the first one's place.
-                        let key = k.as_text().unwrap_or("").to_owned();
-                        if let Some(&at) = seen.get(&key) {
-                            entries[at].1 = v;
-                        } else {
-                            if entries.len() as u64 >= crate::value::MAX_ELEMS {
-                                return Err(Fault::TooLarge(
-                                    "an object of more than 1,000,000 keys",
-                                ));
-                            }
-                            seen.insert(key, entries.len());
-                            entries.push((k, v));
-                        }
-                        self.ws();
-                        match self.s.get(self.i) {
-                            Some(b',') => self.i += 1,
-                            Some(b'}') => {
-                                self.i += 1;
-                                break;
-                            }
-                            _ => return Err(self.fail("expected `,` or `}`")),
-                        }
-                    }
-                }
-                self.node(Json::Object(entries.into_boxed_slice()))
-            }
             Some(b'-' | b'0'..=b'9') => self.number(),
             _ => Err(self.fail("expected a value")),
+        }
+    }
+
+    /// Reads an object's next key and its `:`.
+    fn key(&mut self) -> Result<Value, Fault> {
+        self.ws();
+        if self.s.get(self.i) != Some(&b'"') {
+            return Err(self.fail("expected a key"));
+        }
+        let k = self.string()?;
+        let k = Value::new_text(self.heap, k)?.with_labels(self.labels);
+        self.ws();
+        if self.s.get(self.i) != Some(&b':') {
+            return Err(self.fail("expected `:`"));
+        }
+        self.i += 1;
+        Ok(k)
+    }
+
+    /// One JSON value, with the nesting kept on an explicit stack (never the Rust stack), so
+    /// a document nested as deep as the limit parses on any stack.
+    fn value(&mut self) -> Result<Value, Fault> {
+        let mut stack: Vec<Open> = Vec::new();
+        let mut done: Option<Value> = None;
+        loop {
+            let Some(v) = done.take() else {
+                // A value begins here.
+                if stack.len() >= MAX_JSON_DEPTH {
+                    return Err(self.fail("nested deeper than 128"));
+                }
+                self.ws();
+                match self.s.get(self.i) {
+                    Some(b'[') => {
+                        self.i += 1;
+                        self.ws();
+                        if self.s.get(self.i) == Some(&b']') {
+                            self.i += 1;
+                            let list = List::from_vec(self.heap, Vec::new())?;
+                            done = Some(self.node(Json::Array(list))?);
+                        } else {
+                            stack.push(Open::Array(Vec::new()));
+                        }
+                    }
+                    Some(b'{') => {
+                        self.i += 1;
+                        self.ws();
+                        if self.s.get(self.i) == Some(&b'}') {
+                            self.i += 1;
+                            done = Some(self.node(Json::Object(Box::default()))?);
+                        } else {
+                            let key = self.key()?;
+                            stack.push(Open::Object {
+                                entries: Vec::new(),
+                                seen: std::collections::HashMap::new(),
+                                key,
+                            });
+                        }
+                    }
+                    _ => done = Some(self.scalar()?),
+                }
+                continue;
+            };
+            // A value is complete: it belongs to the container being read, if any.
+            let Some(open) = stack.last_mut() else {
+                return Ok(v);
+            };
+            match open {
+                Open::Array(items) => {
+                    items.push(v);
+                    self.ws();
+                    match self.s.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(b']') => {
+                            self.i += 1;
+                            if let Some(Open::Array(items)) = stack.pop() {
+                                let list = List::from_vec(self.heap, items)?;
+                                done = Some(self.node(Json::Array(list))?);
+                            }
+                        }
+                        _ => return Err(self.fail("expected `,` or `]`")),
+                    }
+                }
+                Open::Object { entries, seen, key } => {
+                    // A repeated key: the later value wins, in the first one's place.
+                    let name = key.as_text().unwrap_or("").to_owned();
+                    if let Some(&at) = seen.get(&name) {
+                        entries[at].1 = v;
+                    } else {
+                        if entries.len() as u64 >= crate::value::MAX_ELEMS {
+                            return Err(Fault::TooLarge("an object of more than 1,000,000 keys"));
+                        }
+                        seen.insert(name, entries.len());
+                        entries.push((key.clone(), v));
+                    }
+                    self.ws();
+                    match self.s.get(self.i) {
+                        Some(b',') => {
+                            self.i += 1;
+                            *key = self.key()?;
+                        }
+                        Some(b'}') => {
+                            self.i += 1;
+                            if let Some(Open::Object { entries, .. }) = stack.pop() {
+                                done = Some(self.node(Json::Object(entries.into_boxed_slice()))?);
+                            }
+                        }
+                        _ => return Err(self.fail("expected `,` or `}`")),
+                    }
+                }
+            }
         }
     }
 
@@ -527,6 +574,7 @@ pub(crate) fn encode(
     if depth > MAX_DEPTH {
         return Err(Fault::Depth);
     }
+    crate::work::add(1);
     let labels = v.labels;
     let t = resolve(p, ty, env).cloned().unwrap_or(Type::Error);
     let node = match (&t, &v.repr) {
@@ -761,6 +809,7 @@ impl Decoder<'_> {
         let Repr::Json(node) = &j.repr else {
             return Ok(self.bad("not JSON"));
         };
+        crate::work::add(1);
         let labels = j.labels;
         let t = resolve(self.p, ty, env).cloned().unwrap_or(Type::Error);
         let heap = self.heap;
@@ -1053,10 +1102,13 @@ fn child(cur: &Value, key: Option<&str>, at: Option<u64>) -> Result<Value, Value
         return Err(miss());
     };
     let found = match (&n.node, key, at) {
-        (Json::Object(entries), Some(k), _) => entries
-            .iter()
-            .find(|(k2, _)| k2.as_text() == Some(k))
-            .map(|(k2, v)| v.clone().with_labels(k2.labels)),
+        (Json::Object(entries), Some(k), _) => {
+            crate::work::add(entries.len() as u64);
+            entries
+                .iter()
+                .find(|(k2, _)| k2.as_text() == Some(k))
+                .map(|(k2, v)| v.clone().with_labels(k2.labels))
+        }
         (Json::Array(l), _, Some(i)) => l.get(i).cloned(),
         _ => None,
     };

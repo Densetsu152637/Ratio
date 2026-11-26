@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use ratio_ir::BinOp;
 
 use crate::prepare::Prepared;
-use crate::value::{Json, Repr, Value};
+use crate::value::{Repr, Value};
 
 /// The steps a cost-class charge of work `w` costs: `1 + ⌈w / 64⌉` (chapter 06, `data`).
 pub(crate) fn steps_for(w: u64) -> u64 {
@@ -128,7 +128,7 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
         (Repr::Item(x), Repr::Item(y)) => x == y,
         (Repr::Builtin(x), Repr::Builtin(y)) => x == y,
         (Repr::Closure(x), Repr::Closure(y)) => std::sync::Arc::ptr_eq(x, y),
-        (Repr::Json(x), Repr::Json(y)) => json_eq(&x.node, &y.node),
+        (Repr::Json(_), Repr::Json(_)) => crate::jsonedit::json_equal(a, b),
         (Repr::Prompt(x), Repr::Prompt(y)) => {
             x.sections.len() == y.sections.len()
                 && x.sections.iter().zip(y.sections.iter()).all(|(s, t)| {
@@ -136,36 +136,6 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
                         && s.format == t.format
                         && s.values.len() == t.values.len()
                         && s.values.iter().zip(t.values.iter()).all(|(p, q)| eq(p, q))
-                })
-        }
-        _ => false,
-    }
-}
-
-fn json_eq(a: &Json, b: &Json) -> bool {
-    match (a, b) {
-        (Json::Null, Json::Null) => true,
-        (Json::Bool(x), Json::Bool(y)) => x == y,
-        (Json::Int(x), Json::Int(y)) => x == y,
-        #[allow(clippy::float_cmp, reason = "numbers compare by value")]
-        (Json::Float(x), Json::Float(y)) => x == y,
-        #[allow(clippy::cast_precision_loss, reason = "numbers compare by value")]
-        (Json::Int(x), Json::Float(y)) | (Json::Float(y), Json::Int(x)) => (*x as f64) == *y,
-        (Json::Str(x), Json::Str(y)) => x.as_str() == y.as_str(),
-        (Json::Array(x), Json::Array(y)) => {
-            let (vx, vy) = (x.to_vec(), y.to_vec());
-            vx.len() == vy.len() && vx.iter().zip(vy.iter()).all(|(p, q)| eq(p, q))
-        }
-        (Json::Object(x), Json::Object(y)) => {
-            let index: std::collections::HashMap<&str, &Value> = y
-                .iter()
-                .map(|(k, v)| (k.as_text().unwrap_or(""), v))
-                .collect();
-            x.len() == y.len()
-                && x.iter().all(|(k, v)| {
-                    index
-                        .get(k.as_text().unwrap_or(""))
-                        .is_some_and(|v2| eq(v, v2))
                 })
         }
         _ => false,
@@ -218,7 +188,7 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
             crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
             x.as_str().cmp(y.as_str())
         }
-        (Repr::Json(x), Repr::Json(y)) => json_cmp(&x.node, &y.node),
+        (Repr::Json(_), Repr::Json(_)) => crate::jsonedit::json_order(a, b),
         (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
         (Repr::VariantP(x), Repr::VariantP(y)) => (x.enum_, x.index)
             .cmp(&(y.enum_, y.index))
@@ -233,55 +203,6 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
         (Repr::List(x), Repr::List(y)) => lex(x.to_vec().into_iter(), y.to_vec().into_iter()),
         (Repr::Record(x), Repr::Record(y)) => lex(x.items.iter().cloned(), y.items.iter().cloned()),
         _ => kind_rank(a).cmp(&kind_rank(b)),
-    }
-}
-
-fn json_rank(j: &Json) -> u8 {
-    match j {
-        Json::Null => 0,
-        Json::Bool(_) => 1,
-        Json::Int(_) | Json::Float(_) => 2,
-        Json::Str(_) => 3,
-        Json::Array(_) => 4,
-        Json::Object(_) => 5,
-    }
-}
-
-/// The natural order of JSON values: `null`, booleans, numbers by value, text by code point,
-/// arrays lexicographically, objects as their entries sorted by key (so key order does not
-/// matter, as for `==`). Total, so a sort or a map of JSON keys is well defined.
-#[allow(clippy::cast_precision_loss, reason = "Int and Float compare by value")]
-fn json_cmp(a: &Json, b: &Json) -> Ordering {
-    match (a, b) {
-        (Json::Bool(x), Json::Bool(y)) => x.cmp(y),
-        (Json::Int(x), Json::Int(y)) => x.cmp(y),
-        (Json::Float(x), Json::Float(y)) => float_cmp(*x, *y),
-        (Json::Int(x), Json::Float(y)) => float_cmp(*x as f64, *y),
-        (Json::Float(x), Json::Int(y)) => float_cmp(*x, *y as f64),
-        (Json::Str(x), Json::Str(y)) => {
-            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
-            x.as_str().cmp(y.as_str())
-        }
-        (Json::Array(x), Json::Array(y)) => lex(x.cursor_values(), y.cursor_values()),
-        (Json::Object(x), Json::Object(y)) => {
-            let sorted = |e: &[(Value, Value)]| {
-                let mut v: Vec<(String, Value)> = e
-                    .iter()
-                    .map(|(k, x)| (k.as_text().unwrap_or("").to_owned(), x.clone()))
-                    .collect();
-                v.sort_by(|p, q| p.0.cmp(&q.0));
-                v
-            };
-            let (sx, sy) = (sorted(x), sorted(y));
-            for (p, q) in sx.iter().zip(sy.iter()) {
-                let o = p.0.cmp(&q.0).then_with(|| cmp_natural(&p.1, &q.1));
-                if o != Ordering::Equal {
-                    return o;
-                }
-            }
-            sx.len().cmp(&sy.len())
-        }
-        _ => json_rank(a).cmp(&json_rank(b)),
     }
 }
 

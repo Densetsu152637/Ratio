@@ -8,6 +8,7 @@
 //! `merge`, which recurses over the patch's depth (at most [`MAX_DEPTH`]) with a small frame.
 //! Buffers proportional to an object's width are charged to the heap before they are made.
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use crate::heap::{Charge, Heap, cost};
@@ -163,10 +164,12 @@ enum Pos {
 /// The child of `cur` that `token` names, if there is one.
 fn find(cur: &Value, token: &str) -> Option<Pos> {
     match node(cur)? {
-        Json::Object(e) => e
-            .iter()
-            .position(|(k, _)| k.as_text() == Some(token))
-            .map(Pos::Key),
+        Json::Object(e) => {
+            crate::work::add(e.len() as u64);
+            e.iter()
+                .position(|(k, _)| k.as_text() == Some(token))
+                .map(Pos::Key)
+        }
         Json::Array(l) => index_token(token).filter(|i| *i < l.len()).map(Pos::Index),
         _ => None,
     }
@@ -249,6 +252,7 @@ fn edit_leaf(
     match node(cur) {
         Some(Json::Object(entries)) => {
             let own = cur.labels | extra | key_labels(entries);
+            crate::work::add(2 * entries.len() as u64 + 1);
             let at = entries.iter().position(|(k, _)| k.as_text() == Some(token));
             let _charge = pre_charge(heap, 2 * (entries.len() as u64 + 1))?;
             let mut out: Vec<(Value, Value)> = Vec::with_capacity(entries.len() + 1);
@@ -308,6 +312,7 @@ fn replace_child(
     match (node(parent), pos) {
         (Some(Json::Object(entries)), Pos::Key(i)) => {
             let own = parent.labels | extra | key_labels(entries);
+            crate::work::add(2 * entries.len() as u64 + 1);
             let _charge = pre_charge(heap, 2 * entries.len() as u64)?;
             let mut out: Vec<(Value, Value)> = entries.to_vec();
             out[i].1 = child;
@@ -318,6 +323,147 @@ fn replace_child(
         }
         _ => Err(invalid("a pointer through a scalar")),
     }
+}
+
+// ---- equality and order ----
+
+/// Semantic equality of two JSON nodes (object key order ignored, numbers compared by value),
+/// with an explicit stack: it never recurses over the nesting.
+pub(crate) fn json_equal(a: &Value, b: &Value) -> bool {
+    let mut work = vec![(a.clone(), b.clone())];
+    while let Some((x, y)) = work.pop() {
+        crate::work::add(1);
+        match (node(&x), node(&y)) {
+            (Some(Json::Null), Some(Json::Null)) => {}
+            (Some(Json::Bool(p)), Some(Json::Bool(q))) if p == q => {}
+            (Some(Json::Int(p)), Some(Json::Int(q))) if p == q => {}
+            #[allow(clippy::float_cmp, reason = "numbers compare by value")]
+            (Some(Json::Float(p)), Some(Json::Float(q))) if p == q => {}
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::float_cmp,
+                reason = "numbers compare by value"
+            )]
+            (Some(Json::Int(p)), Some(Json::Float(q)))
+            | (Some(Json::Float(q)), Some(Json::Int(p)))
+                if (*p as f64) == *q => {}
+            (Some(Json::Str(p)), Some(Json::Str(q))) => {
+                crate::work::add(p.as_str().len().min(q.as_str().len()) as u64);
+                if p.as_str() != q.as_str() {
+                    return false;
+                }
+            }
+            (Some(Json::Array(p)), Some(Json::Array(q))) => {
+                if p.len() != q.len() {
+                    return false;
+                }
+                let (mut cp, mut cq) = (p.cursor(), q.cursor());
+                while let (Some(u), Some(v)) = (cp.next(), cq.next()) {
+                    work.push((u, v));
+                }
+            }
+            (Some(Json::Object(p)), Some(Json::Object(q))) => {
+                if p.len() != q.len() {
+                    return false;
+                }
+                let index: HashMap<&str, &Value> = q
+                    .iter()
+                    .map(|(k, v)| (k.as_text().unwrap_or(""), v))
+                    .collect();
+                for (k, u) in p.iter() {
+                    match index.get(k.as_text().unwrap_or("")) {
+                        Some(v) => work.push((u.clone(), (*v).clone())),
+                        None => return false,
+                    }
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn json_rank(j: &Json) -> u8 {
+    match j {
+        Json::Null => 0,
+        Json::Bool(_) => 1,
+        Json::Int(_) | Json::Float(_) => 2,
+        Json::Str(_) => 3,
+        Json::Array(_) => 4,
+        Json::Object(_) => 5,
+    }
+}
+
+/// What the order walk still has to do.
+enum Step {
+    Pair(Value, Value),
+    /// Object keys, compared before the values under them.
+    Keys(Value, Value),
+    /// The lengths of two arrays or objects, compared after their common prefix.
+    Lengths(usize, usize),
+}
+
+/// The natural order of JSON nodes: `null`, booleans, numbers by value, text by code point,
+/// arrays lexicographically, objects as their entries sorted by key. Total, so a sort or a map
+/// of JSON keys is well defined, and iterative.
+#[allow(clippy::cast_precision_loss, reason = "Int and Float compare by value")]
+pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
+    let float = |x: f64, y: f64| match (x.is_nan(), y.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+    };
+    let mut work = vec![Step::Pair(a.clone(), b.clone())];
+    while let Some(step) = work.pop() {
+        crate::work::add(1);
+        let o = match step {
+            Step::Lengths(p, q) => p.cmp(&q),
+            Step::Keys(p, q) => p.as_text().unwrap_or("").cmp(q.as_text().unwrap_or("")),
+            Step::Pair(x, y) => match (node(&x), node(&y)) {
+                (Some(Json::Bool(p)), Some(Json::Bool(q))) => p.cmp(q),
+                (Some(Json::Int(p)), Some(Json::Int(q))) => p.cmp(q),
+                (Some(Json::Float(p)), Some(Json::Float(q))) => float(*p, *q),
+                (Some(Json::Int(p)), Some(Json::Float(q))) => float(*p as f64, *q),
+                (Some(Json::Float(p)), Some(Json::Int(q))) => float(*p, *q as f64),
+                (Some(Json::Str(p)), Some(Json::Str(q))) => {
+                    crate::work::add(p.as_str().len().min(q.as_str().len()) as u64);
+                    p.as_str().cmp(q.as_str())
+                }
+                (Some(Json::Array(p)), Some(Json::Array(q))) => {
+                    work.push(Step::Lengths(p.len() as usize, q.len() as usize));
+                    let pairs: Vec<(Value, Value)> =
+                        p.cursor_values().zip(q.cursor_values()).collect();
+                    for (u, v) in pairs.into_iter().rev() {
+                        work.push(Step::Pair(u, v));
+                    }
+                    Ordering::Equal
+                }
+                (Some(Json::Object(p)), Some(Json::Object(q))) => {
+                    let sorted = |e: &[(Value, Value)]| {
+                        let mut v: Vec<(Value, Value)> = e.to_vec();
+                        v.sort_by(|m, n| {
+                            m.0.as_text().unwrap_or("").cmp(n.0.as_text().unwrap_or(""))
+                        });
+                        v
+                    };
+                    let (sp, sq) = (sorted(p), sorted(q));
+                    work.push(Step::Lengths(sp.len(), sq.len()));
+                    for ((k1, v1), (k2, v2)) in sp.into_iter().zip(sq).rev() {
+                        work.push(Step::Pair(v1, v2));
+                        work.push(Step::Keys(k1, k2));
+                    }
+                    Ordering::Equal
+                }
+                (Some(p), Some(q)) => json_rank(p).cmp(&json_rank(q)),
+                _ => Ordering::Equal,
+            },
+        };
+        if o != Ordering::Equal {
+            return o;
+        }
+    }
+    Ordering::Equal
 }
 
 // ---- merge ----
@@ -339,6 +485,7 @@ pub(crate) fn merge(
         return Ok(patch.clone());
     };
     let target_entries: &[(Value, Value)] = target.and_then(object).unwrap_or(&[]);
+    crate::work::add(2 * (target_entries.len() + patch_entries.len()) as u64 + 1);
     let mut own = patch.labels | key_labels(patch_entries) | key_labels(target_entries);
     if let Some(t) = target {
         own |= t.labels;
@@ -639,6 +786,12 @@ fn indent(out: &mut String, depth: usize) {
 /// per line, `[]` and `{}` for the empty), with an explicit stack. Stops writing once the text
 /// is longer than 16 MiB and returns `false`; the caller refuses the result.
 pub(crate) fn render(j: &Value, pretty: bool, out: &mut String) -> bool {
+    let done = render_nodes(j, pretty, out);
+    crate::work::add(out.len() as u64);
+    done
+}
+
+fn render_nodes(j: &Value, pretty: bool, out: &mut String) -> bool {
     let mut stack: Vec<Frame> = Vec::new();
     let mut next = Some(j.clone());
     loop {

@@ -85,7 +85,11 @@ fn header(text: &str, file: &str) -> Result<Spec, String> {
                 "value" => case.value = Some(arg.trim().to_owned()),
                 "error" => case.error = Some(arg.trim().to_owned()),
                 "steps" => {
-                    case.steps = Some(arg.trim().parse().map_err(|_| format!("{file}: bad steps"))?);
+                    case.steps = Some(
+                        arg.trim()
+                            .parse()
+                            .map_err(|_| format!("{file}: bad steps"))?,
+                    );
                 }
                 _ => return Err(format!("{file}: unknown case expectation `{what}`")),
             }
@@ -222,7 +226,11 @@ fn inner_labelled(v: &Value) -> Value {
 
 // ---- running ----
 
-fn load(path: &Path, name: &str, failures: &mut Vec<String>) -> Option<(Spec, std::sync::Arc<ratio_eval::Prepared>)> {
+fn load(
+    path: &Path,
+    name: &str,
+    failures: &mut Vec<String>,
+) -> Option<(Spec, std::sync::Arc<ratio_eval::Prepared>)> {
     let text = fs::read_to_string(path).unwrap();
     let spec = match header(&text, name) {
         Ok(s) => s,
@@ -256,7 +264,12 @@ fn load(path: &Path, name: &str, failures: &mut Vec<String>) -> Option<(Spec, st
     Some((spec, ratio_eval::prepare(&program).unwrap()))
 }
 
-fn run_cases(name: &str, spec: &Spec, p: &std::sync::Arc<ratio_eval::Prepared>, failures: &mut Vec<String>) {
+fn run_cases(
+    name: &str,
+    spec: &Spec,
+    p: &std::sync::Arc<ratio_eval::Prepared>,
+    failures: &mut Vec<String>,
+) {
     for (fname, case) in &spec.cases {
         if p.find("main.ratio", fname).is_none() {
             failures.push(format!("{name}: no function `{fname}`"));
@@ -274,10 +287,17 @@ fn run_cases(name: &str, spec: &Spec, p: &std::sync::Arc<ratio_eval::Prepared>, 
                 }
             }
             (Outcome::Raised(e), None) => {
-                failures.push(format!("{name}/{fname}: raised {} ({:?})", e.kind(p), e.message()));
+                failures.push(format!(
+                    "{name}/{fname}: raised {} ({:?})",
+                    e.kind(p),
+                    e.message()
+                ));
             }
             (Outcome::Returned(v), Some(kind)) => {
-                failures.push(format!("{name}/{fname}: returned {}, expected {kind}", to_json_text(p, v)));
+                failures.push(format!(
+                    "{name}/{fname}: returned {}, expected {kind}",
+                    to_json_text(p, v)
+                ));
             }
             (Outcome::Returned(v), None) => {
                 if let Some(want) = &case.value {
@@ -293,7 +313,10 @@ fn run_cases(name: &str, spec: &Spec, p: &std::sync::Arc<ratio_eval::Prepared>, 
         if let Some(want) = case.steps
             && f.steps != want
         {
-            failures.push(format!("{name}/{fname}: charged {} steps, expected {want}", f.steps));
+            failures.push(format!(
+                "{name}/{fname}: charged {} steps, expected {want}",
+                f.steps
+            ));
         }
     }
 }
@@ -312,12 +335,19 @@ fn reached(p: &std::sync::Arc<ratio_eval::Prepared>, outcome: &Outcome) -> Label
     }
 }
 
-fn run_labels(name: &str, spec: &Spec, p: &std::sync::Arc<ratio_eval::Prepared>, failures: &mut Vec<String>) {
+fn run_labels(
+    name: &str,
+    spec: &Spec,
+    p: &std::sync::Arc<ratio_eval::Prepared>,
+    failures: &mut Vec<String>,
+) {
     for (fname, lc) in &spec.labels {
         let base: Vec<Value> = lc.args.iter().map(|a| argument(a)).collect();
         let clean = reached(p, &support::run(p, fname, base.clone()).outcome);
         if !clean.is_empty() {
-            failures.push(format!("{name}/{fname}: invented a label from unlabelled arguments"));
+            failures.push(format!(
+                "{name}/{fname}: invented a label from unlabelled arguments"
+            ));
         }
         for i in 0..base.len() {
             for (inner, expect) in [

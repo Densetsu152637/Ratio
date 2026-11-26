@@ -108,16 +108,24 @@ pub(super) struct Validator<'a, 'b> {
     path: String,
     /// While above 0, violations are not reported (an `anyOf` branch, a `not`, an `if`).
     silent: u32,
-    sink: &'a mut dyn FnMut(&str, String) -> Result<(), RtError>,
+    sink: &'a mut Sink<'a>,
     pace: Pace,
+    /// How deep the walk may nest: the most the stack it runs on takes.
+    nest: u32,
     /// The patterns compiled so far, with the heap each holds.
     patterns: Vec<(String, Regex, Charge)>,
     /// The labels of the schema: what a bad schema's error depends on.
     labels: Labels,
 }
 
-/// Validates `instance` against `schema`, reporting each violation to `sink` as an instance
-/// pointer and a message.
+/// Receives each violation: the instance pointer and a message.
+pub(super) type Sink<'a> = dyn FnMut(&str, String) -> Result<(), RtError> + Send + 'a;
+
+/// Validates `instance` against `schema`, reporting each violation to `sink`.
+///
+/// The walk recurses over the nesting, which is bounded ([`MAX_NEST`]); it runs on a thread
+/// with a large stack (as the preparation pass does), so a caller's small stack cannot be
+/// exhausted by a deeply nested document or schema.
 ///
 /// # Errors
 ///
@@ -126,19 +134,31 @@ pub(super) fn validate(
     cx: &Cx<'_>,
     instance: &Value,
     schema: &Value,
-    sink: &mut dyn FnMut(&str, String) -> Result<(), RtError>,
+    sink: &mut Sink<'_>,
 ) -> Result<(), RtError> {
-    let mut v = Validator {
-        cx,
-        root: schema,
-        path: String::new(),
-        silent: 0,
-        sink,
-        pace: Pace::new(),
-        patterns: Vec::new(),
-        labels: schema.quick(),
-    };
-    v.check(instance, schema, 0, 0).map(|_| ())
+    crate::stack::run(|max_depth| {
+        let mut v = Validator {
+            cx,
+            root: schema,
+            path: String::new(),
+            silent: 0,
+            sink,
+            pace: Pace::new(),
+            nest: MAX_NEST.min(u32::try_from(max_depth).unwrap_or(MAX_NEST)),
+            patterns: Vec::new(),
+            labels: schema.quick(),
+        };
+        v.check(instance, schema, 0, 0).map(|_| ())
+    })
+    .unwrap_or_else(|| {
+        Err(raise(
+            cx.p,
+            Kind::Invalid,
+            "json.validate could not start its worker",
+            Labels::NONE,
+            cx.loc,
+        ))
+    })
 }
 
 impl Validator<'_, '_> {
@@ -223,7 +243,7 @@ impl Validator<'_, '_> {
 
     /// Checks `inst` against `schema`; `Ok(true)` when it is valid.
     fn check(&mut self, inst: &Value, schema: &Value, depth: u32, hops: u32) -> Check {
-        if depth > MAX_NEST {
+        if depth > self.nest {
             return Err(self.bad("the instance and the schema nest too deeply to validate"));
         }
         match node(schema) {
