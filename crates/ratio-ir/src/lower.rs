@@ -61,6 +61,17 @@ fn internal<T>(what: impl Into<String>) -> Res_<T> {
 /// The prelude enums the interpreter builds values of itself (errors and results).
 pub const RUNTIME_ENUMS: [&str; 4] = ["ErrorKind", "BudgetKind", "DeniedBy", "Result"];
 
+/// The prelude enums the frame readers (`meta.frame`, `meta.permissions`) build values of
+/// (stage 10). Like [`RUNTIME_ENUMS`], they are in every program; the canonical form names only
+/// the enums a package refers to, so they change no IR hash.
+pub const FRAME_ENUMS: [&str; 5] = [
+    "ModelRef",
+    "PermissionMode",
+    "Location",
+    "ContextMode",
+    "RuleAction",
+];
+
 /// Whether the built-in a program calls by `name` is pure (its table entry has `@pure`).
 fn pure_builtins() -> &'static HashMap<String, bool> {
     static PURE: OnceLock<HashMap<String, bool>> = OnceLock::new();
@@ -133,7 +144,9 @@ fn lower_on(loaded: &Loaded, checked: &Checked, max_depth: usize) -> Res_<Progra
             let def = checked
                 .types
                 .enum_def(EnumId(u32::try_from(id).unwrap_or(u32::MAX)));
-            if RUNTIME_ENUMS.contains(&def.name.as_str()) {
+            if RUNTIME_ENUMS.contains(&def.name.as_str())
+                || FRAME_ENUMS.contains(&def.name.as_str())
+            {
                 l.enum_index(EnumId(u32::try_from(id).unwrap_or(u32::MAX)))?;
             }
         }
@@ -406,15 +419,21 @@ impl Lowerer<'_> {
                 ItemKind::Fn(self.func(&d.params, &d.body)?),
             ),
             ast::ItemKind::Harness(d) => {
-                let func = self.func(&d.params, &d.body)?;
+                // The declared configuration is evaluated with the parameters bound, in the
+                // harness's own frame (chapter 04), so it is lowered in that frame.
+                self.push_frame();
+                let params = self.params(&d.params)?;
                 let config = match &d.config {
-                    Some(c) => {
-                        self.push_frame();
-                        let e = self.record_lit(c, c.span)?;
-                        self.frames.pop();
-                        Some(e)
-                    }
+                    Some(c) => Some(self.record_lit(c, c.span)?),
                     None => None,
+                };
+                let body = self.block(&d.body)?;
+                let frame = self.frames.pop().expect("a frame");
+                let func = Func {
+                    params,
+                    slots: frame.next,
+                    captures: frame.captures,
+                    body,
                 };
                 (d.name.name.clone(), ItemKind::Harness { func, config })
             }

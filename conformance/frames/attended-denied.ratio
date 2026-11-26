@@ -1,0 +1,12 @@
+// expect: runtime-error Denied
+
+// An unattended frame cannot open an attended one.
+harness asker() -> Int with { attended: true } { 1 }
+
+harness batch() -> Int with { attended: false } {
+  asker()
+}
+
+fn main() -> Int {
+  batch()
+}

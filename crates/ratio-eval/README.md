@@ -35,9 +35,8 @@ code always runs on the walk's own stack. Values are `Send + Sync`, and so is th
 brings real concurrency) and enforce the branch restriction: a `var` declared outside a branch
 cannot be assigned inside it. That is a program defect, not a recoverable error: it raises
 `Invalid` with the class `Fatal`, which no `catch`, `result` or sibling `race` branch can
-swallow. Harness calls, `with` blocks, call overrides, `with
-timeout`, tool sets and `state` raise `Unsupported` until frames (stage 10) and the host (stage
-11) exist.
+swallow. `with timeout` and `state` raise `Unsupported` until the host (stage 11) exists;
+harness calls, `with` blocks, call overrides and tool sets open frames (below).
 
 ## Values and secrecy labels
 
@@ -185,6 +184,101 @@ calibrated at one unit an element, an open item for stage 24's measurements. No 
 runs the queued jobs and joins every worker; a job submitted after that runs where it is
 submitted. Without a pool, everything runs inline.
 
+## Frames
+
+Stage 10 (chapter 04). The frame model lives in [`src/frame/`](src/frame/mod.rs), inside this
+crate rather than a crate of its own: opening a frame reads configuration values, labels and
+the step counter of the machine, so it belongs with the evaluator, while its pure half (scopes,
+attenuation, ledgers) depends on nothing else here and is public as `ratio_eval::frame`
+(`ratio::frame` through the facade) for a host to mirror.
+
+**Opening a frame.** A harness call evaluates its arguments, then its call's overrides
+(`f(x) with { … }`) in the caller's frame, then binds its parameters and evaluates its declared
+`with { … }` with them bound (the IR lowers the declaration in the harness's own frame for
+that), and opens its frame; an entry that is a harness opens its frame from the host's
+`Session` the same way, and a `with { … } { … }` block opens a frame at its frame's depth
+around its body. The parameter defaults and the declared configuration run before the frame
+opens, so both must be effect-free: the checker refuses effects there, including calls of
+function-valued parameters (`C0016`), and the machine refuses any effect reached while a
+harness is being set up. The configuration record is read into a `Request` (overrides win
+field by field, and within `budget`, `limits`, `sees` and `permissions` sub-field by
+sub-field; `deny` and `ask` rules of both apply); a value that cannot be read exactly (a
+negative cap, a tool pattern with an inner `*`, a folder that is not absolute or holds `..`,
+a width of 0, a list of more than 256 tools, folders or rules) raises `Invalid`. Opening is
+charged a step per comparison it makes, before it makes them: reading the lists (an entry,
+16 bytes of text and the cover filter), the tools' and paths' meets in both directions, the
+cover filters over their results, and `check_within`; a test keeps the time of a 256-folder
+opening within a fixed multiple of a pure loop's time per step.
+
+**Attenuation.** `frame::attenuate(parent, room, request, kind)` gives the child's `Scope` as
+the meet of the parent's and the request in every dimension: tools (names and prefix patterns
+intersected exactly; a missing `need` tool is `Denied { by: attenuation }`, a missing `want`
+tool is dropped), the permission mode (`plan < ask < default < auto, accept_edits < full`),
+rules (the caller's plus the callee's `deny` and `ask`, never an `allow`), paths (folders
+intersected component-wise: every folder is absolute, under a POSIX root `/`, a drive
+root matched without case (`C:/`; a bare `C:` is that drive's current directory and is
+refused), or a UNC share, and different roots never contain each other),
+location (`local` if either is; asking for `cloud` under `local`
+is refused), each budget cap (at most the request, the parent's cap and what the parent's
+ledgers have left), `sees` (fresh and `none` frames see nothing unless they ask; fork frames,
+blocks and entries inherit; asking beyond the caller is refused), depth (one more per harness
+call; past the limit, `Budget { which: depth }`), width, heap, attended (an unattended caller
+cannot open an attended frame), memory writes, and the context mode (`main` only in an entry's
+own frame). `frame::check_within(parent, child, kind)` is the independent check, a pure
+function of two scopes: the machine runs it on every frame it opens, and a host runs it
+against its own record of the parent (Imperium's `RatioHost::open_frame`), so a forged parent
+scope cannot widen a child. The host must take `kind` and the parent's depth from its own
+record too, never from the `FrameCtx`: a forged `kind` (a harness call passed off as a block)
+would skip the depth check.
+
+**`sees` and secrets.** A labelled value entering a frame whose `sees` lacks `secrets` raises
+`Denied { by: sees }`: any bound parameter (given or defaulted), any configuration value of the
+call's overrides or the declaration, any setting the frame holds (model, effort, thinking,
+sampling, system prompt, title; inherited ones included), a result or error leaving a frame
+into one, an effect answered with a labelled value or error in one, and a `with` block that
+dropped `secrets` reading a labelled local of its enclosing scope (by name, by capturing it
+in a closure, or by a compound assignment or an assignment into part of it). The ambient reads chapter 04
+gates (`session.turn`, `session.plan`, `memory.index`, …: `frame::gate`) are refused before
+the host is asked.
+
+**Budgets and the ledgers.** `frame::Ledgers` is the frame tree's ledgers, one node per frame
+under its caller's, behind one lock; a closed node is freed once nothing is held on it and it
+has no children (node ids carry a generation), and a closed node admits and opens nothing
+below it. An effect is admitted by reserving its charge on its
+frame's node and every ancestor's at once: a tool call one `tool_calls`; a model call one
+`model_calls`, its counted input and its effective `max_tokens` (the smallest of the requested
+`max_tokens`, the model's maximum output or window less the input, and what every ledger can
+still cover in tokens and in cost after the input), which the host sends. Below the reply
+floor (the smallest of `min_reply_tokens`, the request and the model's maximum, at least one)
+an admission waits while a reservation is held on the ledger whose cap binds, and is refused
+once none is; the same holds when the input alone cannot be covered. `Admission::Wait` carries
+the release epoch read under the lock: `wait_for_release` blocks the calling thread (for hosts and tests on threads of
+their own) and `register_waker` wakes an async waiter once a release moves it, so no release
+is lost; stage 11a's scheduler uses `register_waker` on the interpreter's thread, and wakers
+are woken after the ledgers' lock is dropped. A hosted
+model without prices is refused under any cost cap on the path, and a `local` model or a
+price of 0 counts as priced. Completion replaces the reservation with the actual charge, so
+unspent budget stays with the caller; a charge above the reservation is debited in full and
+returned as the overshoot, which the host records (stage 11a). A `Reservation` belongs to its
+tree and is given back once: another tree's, or a second give-back, is a `LedgerError`. Every
+sum saturates towards "spent". The `steps` ledger is the
+same tree's: the machine keeps its frame's limit as an absolute step count and debits the
+ledgers at every frame boundary and effect. A `Budget` raised because a frame's own cap ran
+out (a harness's, or a `with` block's) passes every `catch` and `result` inside that frame and
+becomes catchable once it leaves it; the turn's never does. Running-branch slots
+(`acquire_slot`, `release_slot`) are the width's ledger for the scheduler (stage 11a): a
+parked branch gives its slot back.
+
+**What a host receives.** Every `EffectRequest` carries the `FrameCtx` (the frame path, its
+parent's path, its kind and harness, the attenuated `Scope`, the `Ledgers` and its node, and the
+settings: model, effort, thinking, sampling, system prompt and title, inherited where left out)
+and the branch path within the frame. Frame paths follow chapter 01: `turn/critic@s41#0`, each
+element preceded by the branch path the call was made in (`c12#0.b2/`); a `with` block is an
+element named `with`. `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions` are answered from the frame without the host; `question(text, options)`
+builds the `Question` error a callee raises to its caller, which propagates and is caught like
+any error (and is refused by `sees` like any other value).
+
 ## Tests
 
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`
@@ -206,3 +300,18 @@ ReDoS probes (`(a+)+$`, `(a|a)*b`, `(.*a){20}`, …) finish on 1 MiB of `a`s; `s
 `src/pool.rs` unit-test the engine (syntax, refusals, the size limit) and the pool (the cap,
 shutdown, panics); `src/offload_tests.rs` checks that a cancelled branch's job keeps its place,
 steps and heap until it ends, and that a waiting evaluation is woken when its job finishes.
+
+Frames: `conformance.rs` also runs `conformance/frames/` (harness calls, configuration and
+overrides, attenuation of tools, modes, locations, `sees`, attended and context, scoped
+`steps` and depth budgets caught only outside their scope, questions, `meta`, frame paths);
+`tests/attenuation.rs` is the monotonicity property over random parents and requests in every
+dimension (with a folder-containment oracle written over the source strings, independent of
+`Folder::contains`), the check refusing a child widened in any dimension and a child of a
+forged parent, and the folder rules; `tests/ledgers.rs` checks the effective `max_tokens` formula, the reply floor, unpriced
+models under cost caps, and that concurrent model calls never pass a token cap (in a frame or a
+child frame with a lower cap) under a deterministic interleaving harness and under threads;
+`tests/frames.rs` covers the `sees` refusals of labelled arguments, results and errors, the
+frame context effects carry, and harness entries in a host's session; `tests/regressions.rs`
+holds the security review's probes (effects in defaults and configuration, secrets in
+settings and in blocks, bounded and charged opening, freed ledger nodes, which scope catches a
+`Budget`).

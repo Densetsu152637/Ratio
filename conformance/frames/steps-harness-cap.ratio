@@ -1,0 +1,17 @@
+// expect: value "fallback"
+
+// A harness's `steps` cap is its own: the caller catches the `Budget` and falls back.
+harness heavy(n: Int) -> Int with { budget: { steps: 100 } } {
+  var t = 0
+  for i in 0..n { t = t + i }
+  t
+}
+
+fn main() -> Str {
+  try {
+    heavy(1000)
+    "done"
+  } catch e {
+    if e.kind is Budget { "fallback" } else { "other" }
+  }
+}

@@ -483,7 +483,8 @@ failure.
 
 **Budgets cannot be swallowed where they run out.** A `Budget` error raised because the budget of
 a scope ran out (a harness call's, or a `with { budget: … }` block's) cannot be caught inside that
-scope, only by the code that opened it.
+scope, only by the code that opened it. When a scope's cap equals what its enclosing scope has
+left, the enclosing scope's is the one that ran out (the outermost of equal caps binds).
 
 **Cancellation cannot be swallowed.** `Cancelled` passes through `catch`. `defer { … }` blocks run
 on every exit from their scope (normal, error, cancellation) in reverse order; a `defer` block may

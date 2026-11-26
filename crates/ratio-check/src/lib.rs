@@ -101,7 +101,8 @@ impl Checked {
     /// Whether the check found no error (warnings allowed).
     #[must_use]
     pub fn is_clean(&self) -> bool {
-        self.diagnostics.iter().all(|d| d.code.is_warning())
+        // An error in the built-in tables themselves (a duplicate name) fails closed.
+        self.internal.is_empty() && self.diagnostics.iter().all(|d| d.code.is_warning())
     }
 
     /// The tables of module `id`.

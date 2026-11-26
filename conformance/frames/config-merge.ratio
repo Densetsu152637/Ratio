@@ -1,0 +1,15 @@
+// expect: value {"tokens": 10000, "wall": "5m", "steps": 4000, "depth": 3, "width": 2}
+
+// The declared configuration is evaluated with the parameters bound; a call's overrides win
+// field by field, and within `budget` and `limits` sub-field by sub-field.
+harness probe(steps: Int) -> FrameLimits
+  with { budget: { tokens: 80k, wall: 5m, steps: steps }, limits: { depth: 3, width: 4 } }
+{
+  meta.limits()
+}
+
+fn main() -> { tokens: Int, wall: Duration, steps: Int, depth: Int, width: Int } {
+  let l = probe(4000) with { budget: { tokens: 10k }, limits: { width: 2 } }
+  { tokens: l.budget.tokens ?? 0, wall: l.budget.wall ?? 0s, steps: l.budget.steps ?? 0,
+    depth: l.depth, width: l.width }
+}

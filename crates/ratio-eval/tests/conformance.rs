@@ -464,3 +464,39 @@ fn the_eval_corpus_runs_as_expected() {
         failures.join("\n")
     );
 }
+
+// ---- frames (stage 10) ----
+
+/// The frames corpus (`conformance/frames/`): harness calls, configuration and overrides,
+/// attenuation in every dimension a program can observe, scoped budgets, context modes,
+/// questions crossing frames, `meta` and frame paths. Same directives as `conformance/eval/`.
+#[test]
+fn the_frames_corpus_runs_as_expected() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/frames");
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ratio"))
+        .collect();
+    paths.sort();
+    assert!(paths.len() >= 15, "expected the stage 10 corpus");
+    let mut failures = Vec::new();
+    let mut kinds = std::collections::BTreeSet::new();
+    for path in &paths {
+        if let Some(k) = run_file(path, &mut failures).error {
+            kinds.insert(k);
+        }
+    }
+    for kind in ["Denied", "Budget", "Question"] {
+        if !kinds.contains(kind) {
+            failures.push(format!("no frames file expects runtime-error {kind}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} problem(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

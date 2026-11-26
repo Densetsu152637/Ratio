@@ -1,11 +1,36 @@
 # The Ratio specification
 
-Version: draft 0.14 (2026-11-28). Status: design; stages 1 to 7 of the implementation (the
-token reader, the parser, modules and names, the type checker, schemas and taint, the IR and
-core interpreter, and the `text` and `re` built-ins with the offload pool) are built in this
-repository.
+Version: draft 0.15 (2026-11-29). Status: design; stages 1 to 7 and 10 of the implementation
+(the token reader, the parser, modules and names, the type checker, schemas and taint, the IR
+and core interpreter, the `text` and `re` built-ins with the offload pool, and frames) are built
+in this repository.
 
-**Changes in draft 0.14.** Errata from stage 7, Data I. No grammar change.
+**Changes in draft 0.15.** Errata from stage 10, frames. No grammar change.
+
+- A harness's parameter defaults and declared configuration run before its frame opens, so both
+  are effect-free, with no calls of function values; every bound parameter, configuration value
+  and setting (inherited ones included) is checked against the new frame's `sees` like an
+  argument (chapter 04).
+- A `with` block whose `sees` lacks `secrets` refuses reads of labelled values from its
+  enclosing scope, by name, by capture and by assignment (chapter 04).
+- `paths` are absolute folders under `/`, a drive root (`C:/`; a bare `C:` is refused) or a UNC
+  share, roots never containing each other; tool patterns are prefixes ending in one `*`
+  (chapter 04).
+- Configuration lists hold at most 256 entries, and opening a frame is charged a step per
+  comparison (chapter 07).
+- An admission below the reply floor, or with its input uncovered, waits only while
+  reservations are held on the ledger whose cap binds; an overshoot is debited in full
+  (chapter 04).
+- Overrides merge `budget`, `limits`, `sees` and `permissions` sub-field by sub-field; an
+  attended request under an unattended caller, `context: main` outside an entry and `cloud`
+  under `local` raise `Denied { by: attenuation }`; a frame's `limits.heap` is attenuated, not
+  separately enforced (chapter 04).
+- A `with` block is a frame-path element named `with` (chapter 01); of equal caps the outermost
+  scope's runs out (chapter 03).
+- `FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword (chapter 06,
+  `meta`).
+
+**Changes in draft 0.14** (kept for reference). Errata from stage 7, Data I. No grammar change.
 
 - The `re` built-ins are `product`: the text's characters times the compiled pattern's size
   (times one plus the capture slots tracked), plus the compile work, charged on a cache hit and
