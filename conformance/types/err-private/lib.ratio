@@ -1,0 +1,11 @@
+// expect: parse-ok
+
+fn secret() -> Int {
+  1
+}
+
+pub fn open() -> Int {
+  2
+}
+
+type Hidden = Int

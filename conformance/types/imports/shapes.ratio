@@ -1,0 +1,15 @@
+// expect: parse-ok
+
+pub enum Shape { Square { side: Float }, Circle { r: Float }, None_ }
+
+pub const ORIGIN = 0.0
+
+pub const empty = Shape.None_
+
+pub fn area(s: Shape) -> Float {
+  match s {
+    Square { side } => side * side,
+    Circle { r } => 3.14 * r * r,
+    None_ => 0.0,
+  }
+}

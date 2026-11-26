@@ -1,0 +1,7 @@
+// expect: check-error C0023 at 4:3
+
+fn f(t: ((Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool), (Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool), (Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool))) -> Int {
+  match t {
+    ((true | false, true | false, true | false, true | false, true | false, true | false, true | false, true | false), (true | false, true | false, true | false, true | false, true | false, true | false, true | false, true | false), (true | false, true | false, true | false, true | false, true | false, true | false, true | false, true | false)) => 1,
+  }
+}

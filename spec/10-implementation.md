@@ -382,7 +382,9 @@ file starts with expectation lines:
 ```ratio
 // expect: ok                                   (checks and runs; value printed as JSON)
 // expect: value {"winner": "42", "agreement": 0.6}
-// expect: check-error E0412 at 7:13            (a checker diagnostic code and position)
+// expect: check-ok                             (checks without a diagnostic)
+// expect: check-error C0004 at 7:13            (a checker diagnostic and position; one line each)
+// expect: check-warning C0031 at 4:7           (a checker warning)
 // expect: runtime-error SchemaMismatch
 // expect: steps 1042                           (the interpreter steps the run is charged, exactly)
 // fixture: model replies.json                  (scripted model replies for this file)
@@ -484,6 +486,46 @@ and `N0021` are warnings):
 | `N0020` | Warning: a name that shadows a standard module |
 | `N0021` | Warning: a name that shadows `trust`, `as_task` or `declassify` |
 
+The checker's diagnostic codes (stage 4; chapters 02 and 03 define the rules, chapter 07 the
+limits; `C0031` and `C0032` are warnings):
+
+| Code | Diagnostic |
+| --- | --- |
+| `C0001` | A name that is no local, item, import or prelude name; a type or module used as a value |
+| `C0002` | A type name that resolves to no type |
+| `C0003` | Type arguments that do not fit a type (the wrong number, or some on a type that takes none) |
+| `C0004` | A value whose type is not a subtype of the type expected where it stands |
+| `C0005` | No such field, module member or method |
+| `C0006` | A record literal or pattern whose fields do not match the record type (missing, extra or repeated) |
+| `C0007` | An unknown variant, or a variant literal whose fields do not match its payload |
+| `C0008` | A bare variant name that several enums in scope define |
+| `C0009` | A `match` that is not exhaustive (the message names a missing case) |
+| `C0010` | A refutable pattern where an irrefutable one is needed (`let`, `for`, parameters) |
+| `C0011` | A pattern that cannot match a value of its type |
+| `C0012` | Arguments that do not fit the parameters (too many, too few, unknown or repeated names) |
+| `C0013` | A call of something that is not a function or harness |
+| `C0014` | A type parameter or closure parameter whose type cannot be inferred |
+| `C0015` | Type arguments that do not fit a function's type parameters or their bounds |
+| `C0016` | An effect in a constant expression (`const`, `state`, a harness's configuration) |
+| `C0017` | A constant whose value depends on itself |
+| `C0018` | A type alias that refers to itself |
+| `C0019` | An assignment to something that is not a `var`, or to a `var` a closure captured |
+| `C0020` | Branches or elements with no common supertype |
+| `C0021` | `return`, `break` or `continue` outside a function or loop, or `break` with a value outside `loop` |
+| `C0022` | A type deeper than the limit, nesting or on-demand chains over the limit, or the check's work budget spent |
+| `C0023` | A `match` too large to check for exhaustiveness within its bound |
+| `C0024` | A harness without a return type |
+| `C0025` | A call override (`with { … }`) on a call whose callee is not a harness |
+| `C0026` | An operator applied to operands it does not take |
+| `C0027` | A map key type that is not `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum |
+| `C0028` | A tuple with more than eight elements |
+| `C0029` | A member of another module that is not `pub` |
+| `C0030` | A name declared twice (variant, field, parameter, type parameter) or bound twice in a pattern |
+| `C0031` | Warning: a `let` that shadows an earlier binding (lint `shadowed_binding`) |
+| `C0032` | Warning: a local binding that shadows a standard module |
+| `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
+| `C0034` | A standard built-in the checker has no signature for yet (its module's stage adds it) |
+
 A single test runner runs every file with the scripted host. In stages 1 and 2 it is the syntax
 crate's runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`,
 `lex-error`, `tokens:`, `parse-ok`, `parse-error`, `tree:` and `option:` lines and skips the later
@@ -496,6 +538,12 @@ then one per source root (`std/`, `user/`, `project/`, `plugin/<plugin>/`, `auth
 `// expect: resolve-warning …` lines (all of the load's diagnostics, in any order); the syntax
 runner treats these as later-stage expectations. Every `N` code has a world, except those only a
 host or a limit can trigger (`N0003`, `N0010`, `N0011`, `N0016`), which the crate's tests cover.
+From stage 4, the types runner, `crates/ratio-check/tests/conformance.rs`, checks
+`conformance/types/`: each file is a package of one file, and each folder a package whose
+`main.ratio` imports the others by path. The entry says `// expect: check-ok`, or lists
+`// expect: check-error C0004 at 7:13 [in <file>]` and `// expect: check-warning …` lines (all of
+the checker's diagnostics, in any order); the package must load cleanly. Every `C` code has at
+least one file.
 `conformance/spec-map.txt` names the chapters each directory tests (above). Three coverage checks
 keep the suite honest:
 

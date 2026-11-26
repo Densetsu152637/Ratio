@@ -1,0 +1,6 @@
+// expect: check-error C0008 at 4:11
+
+fn f() -> Bool {
+  let x = Denied { by: user }
+  true
+}

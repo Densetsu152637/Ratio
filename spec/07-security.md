@@ -73,7 +73,7 @@ and run under bounds the model cannot lift.
 ## Harnesses reached by models
 
 Models reach harnesses through two tools: `spawn_agent`'s `harness` (a package's `@task` entry,
-whose input is a `Task` with an untrusted `Brief`) and `run_harness` (a public harness called like
+whose input is a `TaskInput` with an untrusted `Brief`) and `run_harness` (a public harness called like
 a function, defined in chapter 06, `meta`). The rules for `run_harness` hold for **every** source,
 `std`, user, plugin, project and authored alike:
 

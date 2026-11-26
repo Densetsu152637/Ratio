@@ -120,7 +120,7 @@ pub harness turn(turn: Turn) -> Reply
 
 /// A subagent: one call per turn of its task (the brief, then any follow-up).
 @task
-pub harness task(task: Task) -> Report
+pub harness task(task: TaskInput) -> Report
   with { context: main }
 {
   let conv = context.main()

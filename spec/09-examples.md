@@ -475,7 +475,7 @@ const PLAN_RUBRIC = "A good plan has steps in a workable order, an acceptance ch
 const QUESTION_MARK = "QUESTION:"
 
 @task
-pub harness task(task: Task) -> Report
+pub harness task(task: TaskInput) -> Report
   with { context: main }
 {
   let conv = context.main()
@@ -598,7 +598,7 @@ const EDIT_TOOLS: ToolSet = [read_file, grep, glob, list_dir, edit_file, write_f
 const TEST_PATH = r"(^|/)(tests?|__tests__|spec)/|_test\.(go|py|rs)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|/)test_[^/]*\.py$"
 
 @task
-pub harness fix(task: Task) -> Report
+pub harness fix(task: TaskInput) -> Report
   with { context: main, budget: { tokens: 400k, wall: 30m } }
 {
   let conv = context.main()

@@ -1,0 +1,42 @@
+// expect: check-ok
+
+fn risky(n: Int) -> Int {
+  if n < 0 {
+    raise fail("negative", "n was {n}")
+  }
+  n
+}
+
+fn guarded(n: Int) -> Int {
+  try {
+    risky(n)
+  } catch {
+    e if e.kind is Invalid => 0,
+    e if e.kind is ErrorKind.Denied => -1,
+    e => raise e,
+  }
+}
+
+fn bound(n: Int) -> Untrusted<Str> {
+  try {
+    text.show(risky(n))
+  } catch e {
+    e.message
+  }
+}
+
+fn collected() -> [Result<Int>] {
+  [result(|| risky(1)), result(|| risky(-1))]
+}
+
+fn unwrap(r: Result<Int>) -> Int {
+  match r {
+    Ok { value } => value,
+    Err { error } => raise error,
+  }
+}
+
+fn checks(n: Int) -> () {
+  assert(n > 0)
+  assert_eq(n, 1, message: "one")
+}

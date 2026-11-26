@@ -5,11 +5,14 @@ Imperium depends on this crate alone and reaches the language through the `ratio
 crates behind it are implementation details.
 
 Today it re-exports the token reader (stage 1) and the parser (stage 2) of
-[`ratio-syntax`](../ratio-syntax/README.md), and modules and names (stage 3) of
-[`ratio-names`](../ratio-names/README.md) as `ratio::names`: a host implements `ratio::Registry`
-over its package sources and loads a package with `ratio::Loader`. It also names the
-specification draft (`SPEC_DRAFT`) and the stage reached (`STAGE`, 3). The `Host` trait,
-the checker and the interpreter join it in later stages; chapter 10 of the
+[`ratio-syntax`](../ratio-syntax/README.md), modules and names (stage 3) of
+[`ratio-names`](../ratio-names/README.md) as `ratio::names`, and the type checker (stage 4) of
+[`ratio-check`](../ratio-check/README.md) as `ratio::checker`. A host implements
+`ratio::Registry` over its package sources, loads a package with `ratio::Loader`, and checks it
+with `ratio::check(&loaded)`, which returns `ratio::Checked`: the `C` diagnostics and the side
+tables (types, resolutions, call instantiations) the later stages read. It also names the
+specification draft (`SPEC_DRAFT`) and the stage reached (`STAGE`, 4). The `Host` trait and
+the interpreter join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 
 `tests/spec.rs` keeps the implementation and the specification beside it in step: `SPEC_DRAFT`

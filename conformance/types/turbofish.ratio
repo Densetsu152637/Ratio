@@ -1,0 +1,24 @@
+// expect: check-ok
+
+type Plan2 = { goal: Str, steps: [Str] }
+
+fn decoded(j: Json) -> Untrusted<Plan2> {
+  json.decode::<Plan2>(j)
+}
+
+fn generated(p: Prompt) -> [Untrusted<Str>] {
+  let plan = model.generate_as::<Plan2>(p)
+  plan.steps
+}
+
+fn explicit() -> [Int] {
+  list.push::<Int>([], 1)
+}
+
+fn identity<T>(x: T) -> T {
+  x
+}
+
+fn uses() -> Str {
+  identity::<Str>("x")
+}

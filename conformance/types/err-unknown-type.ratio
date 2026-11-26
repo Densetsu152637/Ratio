@@ -1,0 +1,10 @@
+// expect: check-error C0002 at 4:9
+// expect: check-error C0002 at 8:9
+
+fn f(x: Strr) -> Int {
+  1
+}
+
+fn g(x: critics.Verdict) -> Int {
+  1
+}

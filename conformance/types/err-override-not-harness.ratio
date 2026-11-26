@@ -1,0 +1,9 @@
+// expect: check-error C0025 at 8:13
+
+fn f(x: Int) -> Int {
+  x
+}
+
+fn g() -> Int {
+  f(1) with { effort: low }
+}

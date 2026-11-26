@@ -1,0 +1,7 @@
+// expect: parse-ok
+
+// The grammar gives an enum no type parameters, but the parser reads them after the name so
+// that the checker can refuse them by name (C0033, conformance/types/err-generic-enum.ratio):
+// only built-in enums such as Result<T> and Fold<A> may be generic.
+
+enum Verdict<T> { Pass, Fail { reason: Str }, Other { value: T, } }

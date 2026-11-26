@@ -142,13 +142,13 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
   `conformance/names/**`, and the draft 0.10 errata in `spec/**`.
 - Acceptance checks: resolution corpus; shadowing refused across trust levels; import-trust rules per
   source; imports cannot escape the root or follow links.
-- Status: in review (branch feat/wt-s3-names; spec draft 0.10)
+- Status: done (PR #5, cac8ab5; spec draft 0.10)
 
 ## Stage 4: Type checker
 
 - Depends on: 3. Owned paths: a new checker crate, `conformance/types/**`.
 - Acceptance checks: accepted and rejected programs with diagnostic codes in `conformance/types/`.
-- Status: in progress (branch feat/wt-s4-types)
+- Status: in review (branch feat/wt-s4-types; spec draft 0.11)
 
 ## Stage 5: Schemas and taint (security review)
 
@@ -156,7 +156,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Acceptance checks: one rejected program per sink and one accepted per allowed flow; property that
   generated programs never produce a `TrustedPrompt` or `task` section from untrusted sources; schema
   and digest snapshots; static `Secret<T>` labels where known.
-- Status: pending
+- Status: in progress (branch feat/wt-s5-taint)
 
 ## Stage 6: IR and core interpreter (security review)
 

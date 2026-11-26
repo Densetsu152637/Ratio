@@ -1,0 +1,22 @@
+// expect: check-error C0019 at 7:3
+// expect: check-error C0019 at 14:5
+// expect: check-error C0019 at 20:3
+
+fn f() -> Int {
+  let x = 1
+  x = 2
+  x
+}
+
+fn g() -> Int {
+  var n = 0
+  let bump = || {
+    n += 1
+  }
+  n
+}
+
+fn h(p: Int) -> Int {
+  p = 3
+  p
+}

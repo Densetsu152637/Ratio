@@ -1,0 +1,49 @@
+// expect: check-error C0004 at 11:3
+// expect: check-error C0004 at 19:5
+// expect: check-error C0004 at 23:3
+// expect: check-error C0004 at 27:3
+// expect: check-error C0004 at 31:3
+// expect: check-error C0004 at 35:3
+// expect: check-error C0004 at 39:3
+// expect: check-error C0004 at 47:38
+
+fn f() -> Int {
+  "a"
+}
+
+fn g(x: Int) -> Int {
+  x
+}
+
+fn h() -> Int {
+  g(true)
+}
+
+fn launder(page: Untrusted<Str>) -> Str {
+  page
+}
+
+fn brief_is_not_str(b: Brief) -> Str {
+  b
+}
+
+fn prompt_is_not_trusted(p: Prompt) -> TrustedPrompt {
+  p
+}
+
+fn option_is_not_value(x: Int?) -> Int {
+  x
+}
+
+fn no_width(r: { a: Int, b: Int }) -> { a: Int } {
+  r
+}
+
+fn ident<T>(x: T) -> T {
+  x
+}
+
+fn instantiated() -> Int {
+  let g: fn(Untrusted<Str>) -> Str = ident
+  1
+}

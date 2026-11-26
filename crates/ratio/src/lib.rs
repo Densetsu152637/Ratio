@@ -6,6 +6,8 @@
 //! parser (the [`ast`] module, [`Parsed`], [`parse`] and [`parse_with`]), both of
 //! [`ratio_syntax`], are re-exported here, and so is stage 3, modules and names ([`names`]): a
 //! host implements [`Registry`] over its package sources and loads a package with a [`Loader`].
+//! Stage 4, the type checker ([`checker`]), checks what was loaded: [`check`] gives the
+//! [`Checked`] result, its diagnostics and the side tables later stages read.
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -21,12 +23,16 @@ pub use ratio_names::{
     RegistryError, RelPath, Source,
 };
 
+/// Stage 4: the type checker. Its diagnostic codes are [`checker::Code`] (`C`).
+pub use ratio_check as checker;
+pub use ratio_check::{Checked, check};
+
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.10";
+pub const SPEC_DRAFT: &str = "0.11";
 
-/// The implementation stage reached (chapter 10's table): modules and names.
-pub const STAGE: u32 = 3;
+/// The implementation stage reached (chapter 10's table): the type checker.
+pub const STAGE: u32 = 4;

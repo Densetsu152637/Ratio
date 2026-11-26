@@ -1,0 +1,13 @@
+// expect: check-error C0004 at 12:12
+
+fn two<T>(x: T, f: fn(T) -> Str, g: fn() -> T) -> Str {
+  f(g())
+}
+
+fn id(s: Str) -> Str {
+  s
+}
+
+fn launder(web: Untrusted<Str>) -> Str {
+  two("a", |s| id(s), || web)
+}

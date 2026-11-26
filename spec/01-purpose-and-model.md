@@ -30,7 +30,7 @@ A package exposes up to two **entries**, marked with attributes:
 | Entry | Signature | Runs |
 | --- | --- | --- |
 | `@turn` | `harness name(turn: Turn) -> Reply` | Once per user turn of a session (or of an agent that a session runs as its root) |
-| `@task` | `harness name(task: Task) -> Report` | Once per turn of a subagent: its first turn (the brief) and every follow-up (`resume_agent`, a queued message) |
+| `@task` | `harness name(task: TaskInput) -> Report` | Once per turn of a subagent: its first turn (the brief) and every follow-up (`resume_agent`, a queued message) |
 
 A package used as a session harness needs `@turn`; one used for subagents needs `@task`; a
 package may have both, and when a parent runs under a package that has a `@task` entry, its

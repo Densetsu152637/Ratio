@@ -1,0 +1,10 @@
+// expect: check-error C0027 at 4:9
+// expect: check-error C0027 at 8:9
+
+fn f(m: Map<Float, Int>) -> Int {
+  1
+}
+
+fn g(m: Map<[Str], Int>) -> Int {
+  1
+}

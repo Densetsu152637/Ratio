@@ -1,0 +1,17 @@
+// expect: check-error C0021 at 7:3
+// expect: check-error C0021 at 12:5
+// expect: check-error C0021 at 14:3
+// expect: check-error C0021 at 17:16
+
+fn f() -> Int {
+  break
+}
+
+fn g(c: Bool) -> Int {
+  while c {
+    break 1
+  }
+  continue
+}
+
+const X: Int = return 1

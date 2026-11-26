@@ -1,0 +1,20 @@
+// expect: check-error C0016 at 6:17
+// expect: check-error C0016 at 12:15
+// expect: check-error C0016 at 15:28
+// expect: check-error C0016 at 20:26
+
+const SUMMARY = model.generate(prompt { instruct "Say hi." })
+
+fn reads(p: Untrusted<Str>) -> Int {
+  tools.read_file(p).total_lines
+}
+
+const LINES = reads("a.txt")
+
+harness h(x: Int) -> Int
+  with { budget: { tokens: reads("c.txt") } }
+{
+  x
+}
+
+state: { n: Int } = { n: reads("b.txt") }

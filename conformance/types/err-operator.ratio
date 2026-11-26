@@ -1,0 +1,30 @@
+// expect: check-error C0026 at 9:3
+// expect: check-error C0026 at 13:4
+// expect: check-error C0026 at 17:8
+// expect: check-error C0026 at 21:3
+// expect: check-error C0026 at 25:3
+// expect: check-error C0026 at 29:3
+
+fn f() -> Int {
+  1 + "a"
+}
+
+fn g() -> Bool {
+  -true
+}
+
+fn h(x: Int) -> Bool {
+  x is high
+}
+
+fn i(m: Money) -> Money {
+  m * m
+}
+
+fn j(x: Int) -> Int {
+  x ?? 1
+}
+
+fn k(a: Int, b: Float) -> Bool {
+  a < b
+}

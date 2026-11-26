@@ -3,9 +3,18 @@
 version = 4
 
 [[package]]
+name = "ratio-check"
+version = "0.1.0"
+dependencies = [
+ "ratio-names",
+ "ratio-syntax",
+]
+
+[[package]]
 name = "ratio-lang"
 version = "0.1.0"
 dependencies = [
+ "ratio-check",
  "ratio-names",
  "ratio-syntax",
 ]

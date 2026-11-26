@@ -36,11 +36,14 @@ Every binding, parameter, field and return has a type known before the program r
 and harness signatures are written out; local `let` and `var` bindings and closure parameters are
 inferred (bidirectional checking: the expected type flows into closures and literals). Generic
 type parameters are allowed on functions and type aliases; harnesses are monomorphic, because a
-harness signature is a contract recorded in the registry and used to derive schemas.
+harness signature is a contract recorded in the registry and used to derive schemas. Enums a
+program declares are not generic; only built-in enums (`Result<T>`, `Fold<A>`, chapter 06) may
+be generic.
 
 Records are structural: two record types with the same fields are the same type. A record value
-must have exactly the declared fields (no width subtyping); spread builds narrower records
-explicitly. Enums are nominal.
+must have exactly the declared fields (no width subtyping), and a required field may stand
+where the same field is declared optional; spread against a declared record type takes only the
+fields it declares, so it builds narrower records explicitly. Enums are nominal.
 
 **Subtyping** is deliberately small:
 
@@ -52,7 +55,8 @@ explicitly. Enums are nominal.
   `Untrusted<Str>`.
 - `TrustedPrompt` is a subtype of `Prompt`.
 - Lists, options, tuples, maps (in values) and records are covariant in their element types.
-  This is sound because values are immutable.
+  This is sound because values are immutable. An enum's type arguments relate by how its
+  payloads use each parameter (`Result<T>` and `Fold<A>` are covariant).
 - A function type is contravariant in parameters and covariant in result.
 
 `Json` is the one dynamic type. It comes from `json.parse`, from `tools.call_tool` and MCP
@@ -121,7 +125,7 @@ built-in's declared return type against it (chapter 10).
 | --- | --- | --- |
 | `Str` | Written in the program, or converted with `trust` | Anywhere |
 | `UserText` | The user's own message (`Turn.message`): typed by the user, or the configured starting prompt of an unattended session | Anywhere a `Str` may |
-| `Brief` | A task given to this agent: its brief from the dispatching agent (`Task.brief`), or text converted with `as_task(x, because:)`; trusted `Str` is a `Brief` too | `task` prompt sections, and anywhere untrusted text may; never instruction positions |
+| `Brief` | A task given to this agent: its brief from the dispatching agent (`TaskInput.brief`), or text converted with `as_task(x, because:)`; trusted `Str` is a `Brief` too | `task` prompt sections, and anywhere untrusted text may; never instruction positions |
 | `Untrusted<Str>` | Everything else from effects | Anywhere except instruction positions and `task` sections |
 
 `Turn.payloads` holds text that arrived with a turn but was not written by the user: CI logs,
@@ -385,7 +389,9 @@ Bindings are in scope in the first block only.
 
 - `if` without `else` has type `()`. With `else`, both branches must have a common supertype.
 - `match` must be exhaustive; the checker names the missing variants or literal cases. Guards
-  (`if …`) do not count towards exhaustiveness.
+  (`if …`) do not count towards exhaustiveness. A pattern other than a binding, `_` or `none`
+  matched against `T?` matches a present value and is checked against `T`; a binding matches
+  the option itself.
 - `for p in xs { … }` iterates lists, ranges and maps (as `(key, value)` tuples, in key order); its
   value is `()`. `while cond { … }` and `loop { … }` run until `break`; `break v` gives `loop` its
   value. `repeat n { … }` runs the block `n` times.

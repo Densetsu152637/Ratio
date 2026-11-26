@@ -58,7 +58,7 @@ are given below.
 | `permissions` | `PermissionRequest` | `mode`, extra `deny` and `ask` rules, `paths` (folders the file tools are confined to), `location` (`local` keeps every model call on this machine) |
 | `budget` | `Budget` | `tokens`, `cost`, `wall`, `steps`, `model_calls`, `tool_calls`; each a cap |
 | `limits` | `Limits` | `depth`, `width`, `heap` |
-| `context` | `ContextMode` | `fresh` (default), `fork`, `none`, or `main` (entries only) |
+| `context` | `ContextMode` | `fresh` (default), `fork`, `none`, or `main` (entries only); `none` is the variant, not an absent value (chapter 02, rule 10) |
 | `sees` | `Sees` | What the frame may read of the session besides its arguments (below); default empty for `fresh` and `none` frames |
 | `system` | `TrustedPrompt` | The system prompt of the frame's conversation; trusted text only |
 | `title` | `Str` | Shown on the frame's events, in the transcript and in the Agents panel; defaults to the harness name |
@@ -290,7 +290,7 @@ unattended frame. Both fields are untrusted text.
    (`docs/03-agent-engine.md#reactive-delegation`). A native-loop dispatcher reads it framed as
    data from the subagent; a Ratio dispatcher gets `TaskReport.question` as `Untrusted<Str>`. The
    dispatcher answers by resuming the subagent (`agents.resume` / `resume_agent`), whose next turn
-   receives the answer as its `Task.brief` with `follow_up: true`. This is the hand-back path
+   receives the answer as its `TaskInput.brief` with `follow_up: true`. This is the hand-back path
    roadmap item 64 needs (chapter 08).
 
 ## Versioning

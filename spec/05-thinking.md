@@ -13,8 +13,8 @@ A `Prompt` is an ordered list of **sections**, each with a role in the request a
 It is built with a `prompt { … }` expression or a `prompt` declaration (a function returning a
 prompt). A prompt whose every section holds trusted content only (no `data`, `image`, `context`
 from a conversation, untrusted `task`, or included untrusted prompt) has the type
-`TrustedPrompt`, a subtype of `Prompt`; the checker infers which of the two a literal is, and a
-`prompt` declaration may declare it (`prompt rules() -> TrustedPrompt { … }`). Only a
+`TrustedPrompt`, a subtype of `Prompt`; the checker infers which of the two a literal or a
+`prompt` declaration is (the declaration has no written result type). Only a
 `TrustedPrompt` may be a system prompt:
 
 ```ratio

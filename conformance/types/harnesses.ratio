@@ -1,0 +1,49 @@
+// expect: check-ok
+
+type Review = { verdict: Bool, notes: [Str] }
+
+prompt reviewer_system(focus: Str) {
+  system "You review code. Focus on {focus}."
+  instruct "Be brief."
+}
+
+prompt review_request(patch: Untrusted<Str>) {
+  instruct "Review this patch."
+  data patch as "diff"
+  format Review
+}
+
+pub harness reviewer(patch: Untrusted<Str>, focus: Str = "correctness") -> Untrusted<Review>
+  with {
+    model: model.route(tier: strong, tags: ["code"]),
+    effort: high,
+    sampling: { temperature: 0.2 },
+    tools: [read_file, grep, glob],
+    permissions: { mode: plan },
+    budget: { tokens: 80k, wall: 5m },
+    context: fresh,
+    system: reviewer_system(focus),
+  }
+{
+  model.generate_as::<Review>(review_request(patch))
+}
+
+harness caller(patch: Untrusted<Str>) -> Bool {
+  let full = reviewer(patch)
+  let quick = reviewer(patch, focus: "style") with { effort: low, budget: { tokens: 10k } }
+  full.verdict and quick.verdict
+}
+
+fn trusted() -> TrustedPrompt {
+  prompt {
+    system "Rules."
+    steps ["Restate", "Answer"]
+  }
+}
+
+fn untrusted(page: Untrusted<Str>) -> Prompt {
+  prompt {
+    instruct "Summarise."
+    data page as "page"
+  }
+}

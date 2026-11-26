@@ -1,0 +1,66 @@
+// expect: check-ok
+
+enum Mode { fast, careful }
+
+fn pick(mode: Mode) -> Int {
+  match mode {
+    fast => 1,
+    careful => 2,
+  }
+}
+
+fn calls() -> Int {
+  pick(fast) + pick(Mode.careful)
+}
+
+fn efforts() -> [Effort] {
+  [low, high, max]
+}
+
+fn opts() -> GenOpts {
+  { effort: high, model: "consul", tool_choice: no_tools }
+}
+
+fn routed() -> ModelRef {
+  model.route(tier: frontier, location: local)
+}
+
+fn compare(e: Effort) -> Bool {
+  e == high
+}
+
+fn fail_variant() -> Verdict {
+  fail
+}
+
+enum Verdict { pass, fail }
+
+fn tools() -> HarnessConfig {
+  { tools: [read_file, grep, "mcp__github__*"], context: fresh }
+}
+
+fn modes(m: ContextMode) -> Int {
+  match m {
+    fresh => 1,
+    fork => 2,
+    main => 3,
+    none => 4,
+  }
+}
+
+fn single_shot() -> HarnessConfig {
+  { context: none, effort: low }
+}
+
+fn qualified() -> ContextMode {
+  ContextMode.none
+}
+
+fn optional_modes(c: ContextMode?) -> Int {
+  let absent: ContextMode? = none
+  match c {
+    none => 0,
+    ContextMode.none => 1,
+    fresh | fork | main => 2,
+  }
+}

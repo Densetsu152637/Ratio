@@ -1,0 +1,40 @@
+// expect: check-error C0004 at 15:9
+// expect: check-error C0004 at 23:9
+// expect: check-error C0004 at 31:7
+// expect: check-error C0004 at 39:13
+
+fn apply<T>(f: fn(T) -> Str, x: T) -> Str {
+  f(x)
+}
+
+fn id(s: Str) -> Str {
+  s
+}
+
+fn launder(web: Untrusted<Str>) -> Str {
+  apply(id, web)
+}
+
+fn take_brief(b: Brief) -> Str {
+  "taken"
+}
+
+fn into_brief(web: Untrusted<Str>) -> Str {
+  apply(take_brief, web)
+}
+
+fn all<T>(fs: [fn(T) -> Str], x: T) -> Str {
+  "all"
+}
+
+fn listed(web: Untrusted<Str>) -> Str {
+  all([id], web)
+}
+
+fn both<T>(a: T, sink: fn(T) -> Str) -> Str {
+  sink(a)
+}
+
+fn reversed(up: UserText, web: Untrusted<Str>) -> Str {
+  both(web, id)
+}

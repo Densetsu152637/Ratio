@@ -1,0 +1,6 @@
+// expect: check-warning C0031 at 4:7
+
+fn f(n: Int) -> Int {
+  let n = text.len("abc")
+  n
+}

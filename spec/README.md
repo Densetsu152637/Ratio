@@ -1,9 +1,28 @@
 # The Ratio specification
 
-Version: draft 0.10 (2026-11-26). Status: design; stages 1 to 3 of the implementation (the
-token reader, the parser, and modules and names) are built in this repository.
+Version: draft 0.11 (2026-11-26). Status: design; stages 1 to 4 of the implementation (the
+token reader, the parser, modules and names, and the type checker) are built in this
+repository.
 
-**Changes in draft 0.10.** Errata from stage 3, modules and names. No grammar change.
+**Changes in draft 0.11.** Errata from stage 4, the type checker. One grammar change.
+
+- Enums a program declares take no type parameters: `enum_decl` loses `[ type_params ]`, and
+  only built-in enums (`Result<T>`, `Fold<A>`) may be generic (chapters 02, 03). An enum's type arguments relate by
+  how its payloads use each parameter (chapter 03).
+- A `prompt` declaration's type, `TrustedPrompt` or `Prompt`, is inferred; it has no written
+  result type (chapter 05).
+- The shared record `Task` is renamed `TaskInput`, so it no longer shares its name with the
+  handle `Task<T>` (chapters 01, 03, 04, 06, 07, 08, 09).
+- `ContextMode`'s variant `none` is read where a `ContextMode` is expected; where a
+  `ContextMode?` is, `none` is the absent value (chapters 02, 04).
+- A required record field may stand where it is declared optional, and spread against a declared
+  record type takes only its fields (chapter 03).
+- A pattern other than a binding, `_` or `none` matched against `T?` matches a present value
+  (chapter 03).
+- Chapter 10 adds the `C` codes (`C0001` to `C0034`) and the `check-ok`, `check-error` and
+  `check-warning` expectations of `conformance/types/`.
+
+**Changes in draft 0.10** (kept for reference). Errata from stage 3, modules and names. No grammar change.
 
 - Bare names resolve to `std`, then `user` only; plugin, project and authored packages need their
   qualified name (chapters 03, 08).
