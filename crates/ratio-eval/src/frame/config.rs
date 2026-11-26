@@ -126,6 +126,38 @@ fn tools(v: &Value) -> Result<ToolRequest, String> {
 /// # Errors
 ///
 /// A message for `Invalid` when a field cannot be read exactly.
+/// The work of reading a configuration's lists: one per entry and per 16 bytes of text, and
+/// the cover filter over each list (quadratic in its length, up to the limit).
+pub(crate) fn parse_work(cfg: &Value) -> u64 {
+    let mut work = 0u64;
+    let mut list = |v: Option<Value>| {
+        if let Some(items) = v.and_then(|x| x.elements()) {
+            let n = items.len() as u64;
+            let bytes: u64 = items
+                .iter()
+                .map(|x| x.as_text().map_or(0, |t| t.len() as u64))
+                .sum();
+            work = work
+                .saturating_add(n)
+                .saturating_add(bytes.div_ceil(16))
+                // A list over the limit is refused before its cover filter runs.
+                .saturating_add(n.min(MAX_CONFIG_LIST as u64).pow(2));
+        }
+    };
+    let tools = field(cfg, "tools");
+    list(tools.clone());
+    if let Some(t) = &tools {
+        list(field(t, "need"));
+        list(field(t, "want"));
+    }
+    if let Some(perm) = field(cfg, "permissions") {
+        for name in ["deny", "ask", "paths"] {
+            list(field(&perm, name));
+        }
+    }
+    work
+}
+
 pub(crate) fn read(p: &Prepared, cfg: &Value) -> Result<(Request, Settings), String> {
     let mut r = Request::default();
     if let Some(t) = field(cfg, "tools") {

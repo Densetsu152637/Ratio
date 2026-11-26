@@ -185,25 +185,37 @@ impl FrameStack {
             .unwrap_or(0);
     }
 
-    /// The work opening a frame with `request` does over the top frame: the meets of tools
-    /// and paths (pairwise, then the cover filter over the result) and the rules copied.
+    /// The comparisons opening a frame with `request` makes over the top frame, every pass
+    /// counted (one step each): for tools, each required tool met with the parent's, the
+    /// request's own cover filter, the pairwise meet and the cover filter over its result, and
+    /// `check_within`; for paths, the request's cover filter, both directions of the meet, the
+    /// cover filter over the result and `check_within`; the rules copied and compared; and a
+    /// constant for the other dimensions.
     pub(crate) fn open_work(&self, request: &Request) -> u64 {
         let s = &self.top().ctx.scope;
         let n = |x: usize| x as u64;
         let (pt, pp) = (n(s.tools.len()), n(s.paths.len()));
-        let rt = request
-            .tools
-            .as_ref()
-            .map_or(0, |t| n(t.need.len() + t.want.len()));
+        let (need, rt) = request.tools.as_ref().map_or((0, 0), |t| {
+            (n(t.need.len()), n(t.need.len() + t.want.len()))
+        });
         let rp = request.paths.as_ref().map_or(0, |p| n(p.len()));
         let rules = n(s.rules.allow.len() + s.rules.ask.len() + s.rules.deny.len())
             .saturating_add(n(request.deny.len() + request.ask.len()));
+        let mul = u64::saturating_mul;
         let square = |x: u64| x.saturating_mul(x);
-        rt.saturating_mul(pt)
-            .saturating_add(square(rt.saturating_add(pt)))
-            .saturating_add(rp.saturating_mul(pp))
-            .saturating_add(square(rp.saturating_add(pp)))
-            .saturating_add(rules)
+        let (ct, cp) = (rt.saturating_add(pt), rp.saturating_add(pp));
+        let tools = [
+            mul(need, pt),
+            square(rt),
+            mul(rt, pt),
+            square(ct),
+            mul(ct, pt),
+        ];
+        let paths = [square(rp), mul(2, mul(rp, pp)), square(cp), mul(cp, pp)];
+        tools
+            .into_iter()
+            .chain(paths)
+            .fold(mul(3, rules).saturating_add(32), u64::saturating_add)
     }
 
     /// Opens a frame of `kind` over the top frame with `request`; `site` is the call site

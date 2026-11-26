@@ -344,9 +344,6 @@ impl Tree {
             self.try_free(i);
         }
         self.releases = self.releases.wrapping_add(1);
-        for w in self.wakers.drain(..) {
-            w.wake();
-        }
         Ok(actual.minus(res.held))
     }
 
@@ -510,9 +507,11 @@ impl Ledgers {
         self.tree().releases
     }
 
-    /// Blocks until a release moves the epoch past `epoch` (the one a [`Admission::Wait`]
-    /// gave), then returns the new epoch. A release between the admission and this call is
-    /// not lost: the epoch already differs.
+    /// Blocks **the calling thread** until a release moves the epoch past `epoch` (the one a
+    /// [`Admission::Wait`] gave), then returns the new epoch. A release between the admission
+    /// and this call is not lost: the epoch already differs. For hosts and tests on threads
+    /// of their own; the interpreter's scheduler (stage 11a) must not block its thread here,
+    /// and uses [`Ledgers::register_waker`] instead.
     pub fn wait_for_release(&self, epoch: u64) -> u64 {
         let mut t = self.tree();
         while t.releases == epoch {
@@ -526,7 +525,9 @@ impl Ledgers {
     }
 
     /// Registers `waker` to be woken at the next release, for an async waiter: `false` (and
-    /// nothing registered) when the epoch already differs from `epoch`, so retry at once.
+    /// nothing registered) when the epoch already differs from `epoch`, so retry at once. This
+    /// is what the stage 11a scheduler uses on the interpreter's thread. Wakers are woken after
+    /// the ledger's lock is released, so a waker may touch the ledgers.
     #[must_use]
     pub fn register_waker(&self, epoch: u64, waker: &Waker) -> bool {
         let mut t = self.tree();
@@ -675,8 +676,22 @@ impl Ledgers {
         if r.tree != self.0.id {
             return Err(LedgerError::WrongTree);
         }
-        let out = self.tree().release(r, actual);
+        // The wakers are woken after the lock is dropped: a waker may poll a future that
+        // takes the lock again.
+        let (out, wakers) = {
+            let mut t = self.tree();
+            let out = t.release(r, actual);
+            let wakers = if out.is_ok() {
+                std::mem::take(&mut t.wakers)
+            } else {
+                Vec::new()
+            };
+            (out, wakers)
+        };
         self.0.released.notify_all();
+        for w in wakers {
+            w.wake();
+        }
         out
     }
 

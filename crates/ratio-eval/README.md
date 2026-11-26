@@ -120,7 +120,10 @@ field by field, and within `budget`, `limits`, `sees` and `permissions` sub-fiel
 sub-field; `deny` and `ask` rules of both apply); a value that cannot be read exactly (a
 negative cap, a tool pattern with an inner `*`, a folder that is not absolute or holds `..`,
 a width of 0, a list of more than 256 tools, folders or rules) raises `Invalid`. Opening is
-charged steps for the meets it computes (`1 + ⌈w / 64⌉` over the pairwise and cover work).
+charged a step per comparison it makes, before it makes them: reading the lists (an entry,
+16 bytes of text and the cover filter), the tools' and paths' meets in both directions, the
+cover filters over their results, and `check_within`; a test keeps the time of a 256-folder
+opening within a fixed multiple of a pure loop's time per step.
 
 **Attenuation.** `frame::attenuate(parent, room, request, kind)` gives the child's `Scope` as
 the meet of the parent's and the request in every dimension: tools (names and prefix patterns
@@ -128,7 +131,8 @@ intersected exactly; a missing `need` tool is `Denied { by: attenuation }`, a mi
 tool is dropped), the permission mode (`plan < ask < default < auto, accept_edits < full`),
 rules (the caller's plus the callee's `deny` and `ask`, never an `allow`), paths (folders
 intersected component-wise: every folder is absolute, under a POSIX root `/`, a drive
-letter matched without case, or a UNC share, and different roots never contain each other),
+root matched without case (`C:/`; a bare `C:` is that drive's current directory and is
+refused), or a UNC share, and different roots never contain each other),
 location (`local` if either is; asking for `cloud` under `local`
 is refused), each budget cap (at most the request, the parent's cap and what the parent's
 ledgers have left), `sees` (fresh and `none` frames see nothing unless they ask; fork frames,
@@ -147,7 +151,8 @@ would skip the depth check.
 call's overrides or the declaration, any setting the frame holds (model, effort, thinking,
 sampling, system prompt, title; inherited ones included), a result or error leaving a frame
 into one, an effect answered with a labelled value or error in one, and a `with` block that
-dropped `secrets` reading a labelled local of its enclosing scope. The ambient reads chapter 04
+dropped `secrets` reading a labelled local of its enclosing scope (by name, by capturing it
+in a closure, or by a compound assignment or an assignment into part of it). The ambient reads chapter 04
 gates (`session.turn`, `session.plan`, `memory.index`, …: `frame::gate`) are refused before
 the host is asked.
 
@@ -162,8 +167,10 @@ still cover in tokens and in cost after the input), which the host sends. Below 
 floor (the smallest of `min_reply_tokens`, the request and the model's maximum, at least one)
 an admission waits while a reservation is held on the ledger whose cap binds, and is refused
 once none is; the same holds when the input alone cannot be covered. `Admission::Wait` carries
-the release epoch read under the lock: `wait_for_release` blocks and `register_waker` wakes an
-async waiter (stage 11a's scheduler) once a release moves it, so no release is lost. A hosted
+the release epoch read under the lock: `wait_for_release` blocks the calling thread (for hosts and tests on threads of
+their own) and `register_waker` wakes an async waiter once a release moves it, so no release
+is lost; stage 11a's scheduler uses `register_waker` on the interpreter's thread, and wakers
+are woken after the ledgers' lock is dropped. A hosted
 model without prices is refused under any cost cap on the path, and a `local` model or a
 price of 0 counts as priced. Completion replaces the reservation with the actual charge, so
 unspent budget stays with the caller; a charge above the reservation is debited in full and

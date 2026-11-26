@@ -136,12 +136,47 @@ fn captured(s: Str) -> Str {
   with { sees: { secrets: false } } { f() }
 }
 fn plain(s: Str) -> Str { with { sees: { secrets: false } } { "fine" } }
+fn captures_in_block(s: Str) -> Str {
+  with { sees: { secrets: false } } {
+    let f = || s
+    "made a closure over it"
+  }
+}
+fn compound(s: Str) -> Str {
+  var t = s
+  with { sees: { secrets: false } } {
+    t += "!"
+    "appended to it"
+  }
+}
+fn into_part(s: Str) -> Str {
+  var xs = [s]
+  with { sees: { secrets: false } } {
+    xs[0] = "x"
+    "wrote into it"
+  }
+}
+fn overwrite(s: Str) -> Str {
+  var t = s
+  with { sees: { secrets: false } } {
+    t = "replaced"
+  }
+  "a plain `=` does not read the place"
+}
 "#,
     );
-    for name in ["blk", "viah", "captured"] {
+    for name in [
+        "blk",
+        "viah",
+        "captured",
+        "captures_in_block",
+        "compound",
+        "into_part",
+    ] {
         assert_eq!(sees(&p, name), denied_sees(), "{name}");
     }
     assert_eq!(sees(&p, "plain").0, "returned");
+    assert_eq!(sees(&p, "overwrite").0, "returned");
 }
 
 #[test]
@@ -177,8 +212,69 @@ fn main(n: Int) -> Int {
     let (one, many) = (steps(1), steps(256));
     let loop_cost = (many - one) / 255;
     assert!(
-        many - one > 255 * 20 + 1_000,
-        "opening was not charged: {one} vs {many} ({loop_cost} per iteration)"
+        many - one > 255 * 20 + 60_000,
+        "opening was not charged per comparison: {one} vs {many} ({loop_cost} per iteration)"
+    );
+}
+
+/// The time of the fastest of `runs` runs of `f`.
+fn fastest(runs: u32, mut f: impl FnMut()) -> std::time::Duration {
+    (0..runs)
+        .map(|_| {
+            let t = std::time::Instant::now();
+            f();
+            t.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn opening_a_frame_costs_time_in_proportion_to_its_charge() {
+    // A harness with 256 folders, opened once, against a pure loop, both charged in steps:
+    // the opening may take at most a fixed multiple of the loop's time per step.
+    let p = support::prepared(
+        r"
+harness h(ts: [Str]) -> Int with { permissions: { paths: ts } } { 1 }
+fn open(xs: [Str]) -> Int { h(xs) }
+fn spin(n: Int) -> Int {
+  var i = 0
+  while i < n { i = i + 1 }
+  i
+}
+",
+    );
+    let folders: Vec<Value> = (0..256)
+        .map(|i| Value::text(&format!("/repo/area{i}/sub")))
+        .collect();
+    let xs = Value::list(folders).unwrap();
+    let run = |name: &str, arg: Value| {
+        let entry = p.find("main.ratio", name).unwrap();
+        let eval = ratio_eval::evaluate(
+            Arc::clone(&p),
+            entry,
+            vec![arg],
+            Limits::default(),
+            CancelToken::new(),
+        )
+        .unwrap();
+        let f = ratio_eval::block_on(eval);
+        assert!(matches!(f.outcome, Outcome::Returned(_)), "{name}");
+        f.steps
+    };
+    let open_steps = run("open", xs.clone());
+    let spin_steps = run("spin", Value::int(100_000));
+    let open_time = fastest(5, || {
+        run("open", xs.clone());
+    });
+    let spin_time = fastest(5, || {
+        run("spin", Value::int(100_000));
+    });
+    let per_open = open_time.as_secs_f64() / f64::from(u32::try_from(open_steps).unwrap());
+    let per_spin = spin_time.as_secs_f64() / f64::from(u32::try_from(spin_steps).unwrap());
+    assert!(
+        per_open <= 8.0 * per_spin,
+        "opening: {open_steps} steps in {open_time:?}; the loop: {spin_steps} in {spin_time:?}"
     );
 }
 

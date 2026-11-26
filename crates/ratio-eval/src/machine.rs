@@ -1199,7 +1199,13 @@ impl Machine {
                 let f = &p.funcs[*func as usize];
                 let mut captured = Vec::with_capacity(f.captures.len());
                 for (outer, own) in &f.captures {
-                    captured.push((*own, self.get(*outer).unwrap_or_default()));
+                    let v = self.get(*outer).unwrap_or_default();
+                    // Capturing reads the local: a frame without `secrets` may not.
+                    if self.refuses_secret(&v) {
+                        let e = self.sees_refusal("a secret local was captured");
+                        return self.fail(e);
+                    }
+                    captured.push((*own, v));
                 }
                 match Value::new_closure(&self.heap, *func, captured) {
                     Ok(v) => self.mode = Mode::Ret(v),
@@ -1506,6 +1512,12 @@ impl Machine {
         let Some(root) = self.get(*slot) else {
             return self.invalid("a local slot out of range", Labels::NONE, loc);
         };
+        // A compound assignment, or one into a part of a container, reads the place: a frame
+        // without `secrets` may not read a secret there.
+        if (*op != AssignOp::Set || !path.is_empty()) && self.refuses_secret(&root) {
+            let e = self.sees_refusal("a secret local was read by an assignment");
+            return self.fail(e);
+        }
         // Walk down the path, keeping each container.
         let mut chain = vec![root];
         let mut idx = vals.into_iter();
@@ -3022,7 +3034,7 @@ impl Machine {
         // The meets are charged for the work they do (bounded by the configuration's list
         // limits, chapter 07).
         let work = self.frames.open_work(&request);
-        if let Err(e) = self.charge(steps_for(work), loc) {
+        if let Err(e) = self.charge(work, loc) {
             self.fail(e);
             return false;
         }
@@ -3063,6 +3075,11 @@ impl Machine {
         let Some(v) = v else {
             return Some((Request::default(), Settings::default()));
         };
+        // Reading the lists is paid for before it is done (their length is bounded too).
+        if let Err(e) = self.charge(crate::frame::config_work(v), loc) {
+            self.fail(e);
+            return None;
+        }
         match crate::frame::read_config(&self.p, v) {
             Ok(c) => Some(c),
             Err(m) => {

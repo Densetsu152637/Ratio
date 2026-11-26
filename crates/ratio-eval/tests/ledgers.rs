@@ -684,6 +684,35 @@ fn a_waiter_registered_or_blocked_sees_every_release() {
 }
 
 #[test]
+fn wakers_are_woken_after_the_lock_is_released() {
+    use std::task::{Wake, Waker};
+    // A waker that reads the ledgers when woken: it would deadlock if woken under the lock.
+    struct Reads(Ledgers, std::sync::atomic::AtomicUsize);
+    impl Wake for Reads {
+        fn wake(self: Arc<Self>) {
+            let held = self.0.held();
+            self.1.store(held + 1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
+    let first = admitted(ledgers.admit_model(root, &call(100, Some(800))));
+    let Admission::Wait { epoch, .. } = ledgers.admit_model(root, &call(50, None)) else {
+        panic!("expected a wait");
+    };
+    let reads = Arc::new(Reads(
+        ledgers.clone(),
+        std::sync::atomic::AtomicUsize::new(0),
+    ));
+    assert!(ledgers.register_waker(epoch, &Waker::from(Arc::clone(&reads))));
+    assert!(ledgers.cancel(&first).is_ok());
+    assert_eq!(
+        reads.1.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "woken, saw 0 held"
+    );
+}
+
+#[test]
 fn closed_frames_admit_and_open_nothing_below_them() {
     let (ledgers, root) = Ledgers::new(tokens(1_000), 16);
     let mid = ledgers.open(root, Caps::NONE, 16).unwrap();

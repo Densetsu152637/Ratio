@@ -350,7 +350,8 @@ impl Folder {
             let mut chars = text.chars();
             let letter = chars.next().filter(char::is_ascii_alphabetic)?;
             let rest = chars.as_str().strip_prefix(':')?;
-            if !(rest.is_empty() || rest.starts_with(sep)) {
+            // A bare `C:` is that drive's current directory on Win32, not its root.
+            if !rest.starts_with(sep) {
                 return None;
             }
             (Root::Drive(letter.to_ascii_uppercase()), rest)
@@ -387,6 +388,7 @@ impl fmt::Display for Folder {
             write!(f, "/{c}")?;
         }
         if self.parts.is_empty() && !matches!(self.root, Root::Unc(..)) {
+            // `/`, or a drive's root `C:/`.
             f.write_str("/")?;
         }
         Ok(())

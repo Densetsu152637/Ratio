@@ -36,4 +36,4 @@ pub use scope::{
 };
 pub use stack::{FrameCtx, Session};
 
-pub(crate) use config::read as read_config;
+pub(crate) use config::{parse_work as config_work, read as read_config};
