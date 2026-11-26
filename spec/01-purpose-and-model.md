@@ -156,7 +156,8 @@ rendered    : turn/critic@s41#0/c12#0.b2/c30#1.b0
 ```
 
 Occurrences, of effect sites, of harness call sites and of concurrent constructs alike, count per
-`(frame, branch path, site)`. A **branch index** is the written position for `par { … }` and
+`(frame, branch path, site)`. A `with timeout` block or `timeout(d, f)` is a cancellable scope of
+its branch, not a concurrent construct: it adds no branch-path element. A **branch index** is the written position for `par { … }` and
 `race { … }`, and the list position for `par([…])`, `race([…])`, `par_map`, `par_map_settled` and
 `par_fold`; a built-in that runs callbacks or calls concurrently numbers its branches by the
 position of the item each runs (`model.generate_n` and `think.self_consistency` by sample,
@@ -206,7 +207,9 @@ lift a limit on what the replay really consumes (chapter 07, T13).
 
 **Tape storage.** The tape is a JSON Lines file. In a session it is part of the journal
 (`ratio_effect` events, chapter 08); headless runs write and read it with `--ratio-tape`
-(chapter 08), and a headless tape file whose name ends in `.jsonl.zst` is zstd-compressed.
+(chapter 08), and a headless tape file whose name ends in `.jsonl.zst` is zstd-compressed; the
+host compresses and decompresses the file, and the library reads and writes the uncompressed
+lines.
 
 - A response body above 1 KiB is stored once per tape, in a blob line named by its BLAKE3 digest,
   and entries refer to it; in the journal, a `ratio_effect` whose body is already journalled (a
@@ -215,7 +218,16 @@ lift a limit on what the replay really consumes (chapter 07, T13).
   rejects the tape on a mismatch. In a headless tape a labelled body is never named by a plain
   hash, which would reveal a low-entropy secret, only by the per-session redaction digest
   (chapter 03); so are labelled cache keys and `memo` argument hashes of labelled arguments in
-  cache events (chapter 06, `control`).
+  cache events (chapter 06, `control`). Every other digest over labelled data in a headless tape
+  (a request digest, an output-only effect's digest in `full` mode, the reply digest, a drained
+  call's discarded response) is the redaction digest too, keyed with the session's key, which
+  recording requires. A tape whose recording stopped at its size limit says so and is refused
+  for replay.
+- The user's answers are never taken from a tape: an approval, a `declassify` and every other
+  built-in the user answers (`session.ask`) are asked live in replay, under the replaying
+  session's own rules (an unattended session refuses or recommends), so a crafted tape cannot
+  approve, declassify or speak for the user. A declassification's request digest covers the
+  redaction digest of what was declassified.
 - A chat request's digest is `H(chain head, tools digest, options digest)`, where the chain head
   is the conversation's chained digest `d(k) = H(d(k−1), H(message k with its labels))`, kept by
   the engine per message (so a rollback restores it) and read through the host (chapter 10).

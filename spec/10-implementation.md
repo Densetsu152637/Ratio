@@ -49,57 +49,73 @@ and the language could not be built, tested or released without the whole agent.
 putting the interpreter inside `imperium-engine` (untestable without the agent). Rejected: a
 separate process (chapter 01).
 
-### The `Host` trait (sketch)
+### The `Host` trait
 
-The host takes `&self`: concurrent branches hold the host at once and their effects run
-concurrently (two critics' model calls really overlap). Implementations use interior mutability
-(per-conversation locks, atomic ledgers, a lock-free event channel), and the order of effects on
-one conversation is serialised by that conversation's lock, not by the trait.
+The host's methods take `&self`, or `self: Arc<Self>` for the asynchronous ones: concurrent
+branches hold the host at once and their effects run concurrently (two critics' model calls
+really overlap). Implementations use interior mutability (per-conversation locks, atomic
+ledgers, a lock-free event channel), and the order of effects on one conversation is serialised
+by that conversation's lock, not by the trait. The asynchronous methods return a `HostFuture`, a
+boxed `Send + 'static` future: the trait is object-safe (a host is held as `Arc<dyn Host>`), the
+future borrows nothing (the interpreter keeps many in flight; a host may spawn them on its
+runtime), and the library needs no async runtime and no `async_trait`.
 
 ```rust
-#[async_trait]
-pub trait Host: Send + Sync {
-    // Every async method takes the effect's context (`EffectCtx`, below)
+pub type HostFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+pub trait Host: Send + Sync + 'static {
     // Models
-    async fn generate(&self, frame: &FrameCtx, cx: &EffectCtx, req: ModelRequest) -> Result<ModelResponse, HostError>;
-    async fn embed(&self, frame: &FrameCtx, cx: &EffectCtx, texts: Vec<Labelled<String>>, model: Option<ModelRef>) -> Result<Vec<Vec<f32>>, HostError>;
-    fn count_tokens(&self, frame: &FrameCtx, what: Countable) -> TokenCount;
-    fn resolve_model(&self, frame: &FrameCtx, m: &ModelRef) -> Result<ModelCard, HostError>;
+    fn generate(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, req: ModelRequest) -> HostFuture<Result<ModelResponse, HostError>>;
+    fn embed(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, texts: Vec<Labelled<String>>, model: Option<ModelRef>) -> HostFuture<Result<Vec<Vec<f32>>, HostError>>;
+    fn count_tokens(&self, frame: &FrameCtx, what: &Countable) -> u64;
+    fn resolve_model(&self, frame: &FrameCtx, model: &ModelRef) -> Result<ModelCard, HostError>;
     // Tools: every call carries the frame's scope and the arguments' secrecy flag;
     // the engine enforces both before its own checks
-    async fn call_tool(&self, frame: &FrameCtx, cx: &EffectCtx, call: ToolInvocation) -> Result<ToolOutcome, HostError>;
-    fn tool_class(&self, frame: &FrameCtx, tool: &ToolName) -> ToolClass;
+    fn call_tool(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, call: ToolInvocation) -> HostFuture<Result<ToolOutcome, HostError>>;
+    fn tool_class(&self, frame: &FrameCtx, tool: &str) -> ToolClass;
+    fn is_secret_path(&self, frame: &FrameCtx, path: &str) -> bool;
+    fn source_labels(&self, frame: &FrameCtx, builtin: &str, args: &[(Arc<str>, Value)]) -> Labels;
     // Conversations (engine-owned, append-only, any number per agent)
     fn conversation(&self, frame: &FrameCtx, which: ConvSelector) -> Result<ConvId, HostError>;
     fn conversation_digest(&self, frame: &FrameCtx, conv: ConvId) -> Result<Digest, HostError>;
-    async fn chat(&self, frame: &FrameCtx, cx: &EffectCtx, conv: ConvId, req: ChatRequest) -> Result<ModelReply, HostError>;
-    async fn safe_point(&self, frame: &FrameCtx, cx: &EffectCtx, conv: ConvId) -> Result<SafePoint, HostError>;
-    async fn dispatch(&self, frame: &FrameCtx, cx: &EffectCtx, conv: ConvId, calls: Vec<ToolCall>, concurrent: bool) -> Result<Vec<ToolResult>, HostError>;
-    fn append(&self, frame: &FrameCtx, conv: ConvId, msg: NewMessage) -> Result<(), HostError>;
-    fn rollback(&self, frame: &FrameCtx, conv: ConvId, mark: MarkId) -> Result<usize, HostError>;
-    async fn compact(&self, frame: &FrameCtx, cx: &EffectCtx, conv: ConvId, opts: CompactOpts) -> Result<Compaction, HostError>;
-    // Frames, agents, the session
-    fn open_frame(&self, parent: &FrameCtx, req: FrameRequest) -> Result<FrameCtx, HostError>;
-    fn close_frame(&self, frame: FrameCtx, outcome: FrameOutcome);
-    async fn agents(&self, frame: &FrameCtx, cx: &EffectCtx, op: AgentOp) -> Result<AgentResult, HostError>;
-    async fn memory(&self, frame: &FrameCtx, cx: &EffectCtx, op: MemoryOp) -> Result<MemoryResult, HostError>;
-    async fn session(&self, frame: &FrameCtx, cx: &EffectCtx, op: SessionOp) -> Result<SessionResult, HostError>;
-    async fn approve(&self, frame: &FrameCtx, cx: &EffectCtx, req: ApprovalRequest) -> Result<bool, HostError>;
-    // Recorded, authority-free effects
+    fn conversation_labels(&self, frame: &FrameCtx, conv: ConvId) -> Result<Labels, HostError>;
+    fn chat(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, conv: ConvId, req: ChatRequest) -> HostFuture<Result<ModelResponse, HostError>>;
+    // Frames
+    fn open_frame(&self, parent: &FrameCtx, child: &FrameCtx) -> Result<(), HostError>;
+    fn close_frame(&self, frame: &FrameCtx, outcome: FrameOutcome);
+    // The engine: agents, memory, session, context, eval, time (typed by their stages)
+    fn operate(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, op: Operation) -> HostFuture<Result<Value, HostError>>;
+    fn approve(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, req: ApprovalRequest) -> HostFuture<Result<bool, HostError>>;
+    // Recorded, authority-free
     fn now(&self) -> Instant;
     fn seed(&self) -> [u8; 32];
-    fn emit(&self, frame: &FrameCtx, event: RatioEvent);
-    fn cancelled(&self, frame: &FrameCtx) -> bool;
+    fn timer(&self, at: Instant) -> HostFuture<()>;
+    fn emit(&self, frame: &FrameCtx, event: RatioEvent) -> Result<(), HostError>;
 }
 ```
 
-Every value crossing the trait carries its secrecy labels (`Labelled<T>`: the arguments of tool calls, model requests, appends and agent operations). They are checked against the sinks of chapter 03 twice, once on each side of the boundary: in Ratio by a guard the interpreter wraps around every host (no host can opt out of it), and in Imperium by the engine's dispatch, from the per-call secrecy flag.
+Every value crossing the trait carries its secrecy labels (`Value`s their own; text is
+`Labelled<T>`). They are checked against the sinks of chapter 03 twice, once on each side of the
+boundary: in Ratio by a guard the interpreter wraps around every host and calls every host
+method through (no host can opt out of it), and in Imperium by the engine's dispatch, from the
+per-call secrecy flag. The guard's rules fail closed: they are read from the checker's table of
+built-ins, a tool or operation is a sink unless the table marks it as keeping its arguments on
+the machine, and a built-in without a rule reaches no host. The labelled parts of an approval's
+text and of a question the user is asked reach the host as `[secret: <label source>]`.
+`session.ask`, `declassify` and the other built-ins the user answers are never answered from a
+tape (chapter 01).
 
-`FrameCtx` carries the frame path (the key by which a host finds its own record of the frame), agent id, attenuated tool set, permission mode, extra rules,
-paths, location, `sees`, attended flag, authored tier and budget ledger handle. The tape is a
-wrapper (`TapeHost<H>`) that records or replays every input-bearing call by effect key and numbers
-the turn's scheduling events (chapter 01); because keys depend on frame paths, frames are built
-before the tape (stage order below).
+`FrameCtx` carries the frame path (the key by which a host finds its own record of the frame),
+its parent's path, its kind and harness name, the attenuated scope (tools, permission mode,
+extra rules, paths, location, budgets, `sees`, depth, width, attended), the ledger handle and the
+settings. **The kind and the harness name are Ratio's assertion, not proof**: a harness call
+passed off consistently as a `with` block (kind `Block`, harness `with`, its parent's depth) is
+within its parent in every dimension. A host therefore takes a frame's kind from its own
+knowledge (only its own harness loads and `run_harness` open harness frames) and requires an
+entry's frame to carry its parent's path. The tape is a wrapper (`TapeHost`) that records or
+replays every input-bearing call by effect key and numbers the turn's scheduling events
+(chapter 01); because keys depend on frame paths, frames are built before the tape (stage order
+below).
 
 **Effects, cancellation and deadlines.** `EffectCtx` carries the effect's key, a cancellation
 token and its **deadline** (chapter 03: the earliest enclosing `with timeout` deadline and the end
@@ -111,11 +127,17 @@ host ends the call by its class and reports how it ended: `aborted` (acknowledge
 discarded) or `withdrawn` (it was still waiting for an approval or a hook, and never ran); the
 interpreter records each outcome on the turn sequence. Withdrawal is atomic with the user's
 answer. These are **host-contract requirements**: every `drain`-class call must finish within its
-bound once started, or the drain fence of chapter 03 could wait without end. `count_tokens` and
-the `ModelCard` from `resolve_model` (its maximum output, window and prices) are the inputs of
-admission by reservation (chapter 04), and are recorded with each admission. `conversation_digest`
-returns the head of a conversation's chained digest (chapter 01). The sketch is not yet fixed:
-stage 11a ships the first `HOST_API_VERSION`, after the `RatioHost` spike.
+bound once started, or the drain fence of chapter 03 could wait without end. The interpreter
+does not rely on them alone: it fails a `drain` call at its declared bound itself (an outstanding
+one then releases the fence, recorded `failed`), and lets the scope of a cancelled `abort` call
+the host has not acknowledged within `ABORT_GRACE` (30 s) return (recorded `unacknowledged`,
+charged all its reservation held); each of these bounds is the earlier of the host's `timer` and
+the interpreter's own clock. `count_tokens` and the `ModelCard` from `resolve_model` (its maximum
+output, window and prices) are the inputs of admission by reservation (chapter 04), and are
+recorded with each admission. `conversation_digest` returns the head of a conversation's chained
+digest (chapter 01). Stage 11a ships `HOST_API_VERSION` 1, validated by the `RatioHost` spike;
+the operations still carried by `operate` are typed by the stages that implement them, each a
+version bump.
 
 ## What it touches in Imperium
 
@@ -214,7 +236,7 @@ may change in any release.
   chapter 01: entries for input-bearing effects only, the numbered turn-sequence events, blob
   lines named by BLAKE3 digest, the end-of-turn reply digest, `full` mode's digest-only entries
   and labels stored with every value or blob reference. Compression (`.jsonl.zst`) is a property
-  of the file, not a format version. It is separate from `IR_VERSION`: a
+  of the file, applied by the host that writes and reads it, not a format version. It is separate from `IR_VERSION`: a
   tape is replayable only when both match, because its keys come from the IR and its encoding
   from the tape format.
 - **What Imperium records.** Every pin (`harness_changed`) records the `ratio-lang` version and
@@ -290,7 +312,13 @@ may change in any release.
     the host's model calls reach.
   - **Unguarded sink cases.** The sink and frame cases drive the host directly, through the raw
     `Host` trait without Ratio's guard, so they test the host's own checks; a host that relied on
-    the guard would fail them.
+    the guard would fail them. The frame cases include the consistent forgery of a harness frame
+    as a block, at a path where the host itself started a harness.
+  - **What runs where.** The suite holds the cases a host can be driven through with its own
+    tools: frames, sinks, and the host-level cancellation cases (abort, abandon, the drain
+    bound, deadlines, withdrawal, session stop). The cases that need a program to cancel its own
+    calls (`race` and the drain fence, re-parenting, `defer`, a command killed by a timeout but
+    not by a `race`) are the interpreter's own tests, against `ScriptedHost`.
 - **Here, shared:** the prompt framing vectors (`conformance/framing/`, from stage 12), inputs
   and expected rendered text for every framing rule of chapter 05.
 - **In Imperium:** the host contract tests run against `RatioHost`; the framing vectors run
@@ -354,7 +382,7 @@ are committed; 27 is optional and 28 waits on Q9.
 | 8 | Data II | Ratio | `json`, `list`, `map` | As stage 7; a loop of N pushes or sets is charged at most O(N log N) steps |
 | 9 | Data III | Ratio | `math`, `hash`, `diff`, `template`, `vec`, `path`, `url`, `codec` | As stage 7; `diff.lines` charged on line counts plus both inputs' characters, debited before running, so `diff.lines` on large inputs raises `Budget { which: steps }` without running when the steps left cannot pay; float determinism with fixed bit patterns |
 | 10 | Frames | Ratio | Frame model and frame paths; configuration evaluation and merge; attenuation (tools, mode meet, rules, paths, location, budgets, `sees`, depth, width counting running branches, attended); the budget ledger with admission by reservation, the effective `max_tokens`, the reply floor and the refusal of unpriced hosted models under a cost cap; the shared `steps` ledger; context modes; `Question` crossing frames; `meta` | Attenuation monotonicity property; ledger tests: concurrent model calls never exceed a token cap, in the frame or in a child frame with a lower cap, and the `max_tokens` sent equals the formula; a request with `max_tokens: 1` is admitted with one output token reserved whatever `min_reply_tokens` says; an admission below the floor waits for a held reservation and is refused when none is held; an unpriced hosted model under a cost cap raises `Budget { which: cost }`, and one with a configured price of 0 is admitted; `sees` refusals, including labelled values entering frames without `secrets` |
-| 11a | Host, tape and scheduler | Ratio (spike in Imperium) | The `&self` `Host` trait with `Labelled<T>` values, `EffectCtx` (key, cancellation token, deadline), `tool_class` and `conversation_digest`, and the sink guard; `HOST_API_VERSION` and `TAPE_VERSION`; the host contract tests and their fixture, with the cancellation cases and the finite bound on every `drain`-class tool; the throwaway `RatioHost` spike in Imperium against the candidate commit; `ScriptedHost`; `TapeHost` with effect keys built from frame and branch paths, the turn sequence and verified replay (ledgers, step totals, cancellation outcomes), entries for input-bearing effects only, suppression and the reply digest, blobs and the label union; per-branch random generators; the scheduler: `par`, `par_map`, `race`, `timeout`, width with parked branches and admission in branch-path order, cancellation by class, withdrawal, re-parenting and the drain fence, deadlines | Replay determinism property under random completion orders with budgets just below total demand, the rebuilt ledgers verifying at every sequence number; replay of one fixed tape under permuted resolution orders passes every check; altering any sequence number, refusal, reading, recorded input count, card limit, price, step total, drained or withdrawn entry, or blob raises `Replay`; record-then-replay gives identical event streams; replayed values keep their labels, gain those the replaying session's rules set, and are untrusted; a change only to an output-only effect fails the reply digest, and replay makes no live `session.stream`, `session.emit` or log call; `replay/keys-retry-in-par-map`, `replay/budget-par-exhaustion`, `replay/crafted-tape-steps`, `replay/par-sibling-cancel-points`; `eval/width-nested-fanout` at width 2; running branches never exceed the width and start in branch-path order; tape size regression; real concurrency; every secrecy sink refuses a labelled value at the guard and, in the contract suite, at the unguarded host; the contract suite's frame and cancellation cases; a labelled blob in a headless tape is named by the redaction digest only |
+| 11a | Host, tape and scheduler | Ratio (spike in Imperium) | The `&self` `Host` trait with `Labelled<T>` values, `EffectCtx` (key, cancellation token, deadline), `tool_class` and `conversation_digest`, and the sink guard; `HOST_API_VERSION` and `TAPE_VERSION`; the host contract tests and their fixture, with the cancellation cases and the finite bound on every `drain`-class tool; the throwaway `RatioHost` spike in Imperium against the candidate commit; `ScriptedHost`; `TapeHost` with effect keys built from frame and branch paths, the turn sequence and verified replay (ledgers, step totals, cancellation outcomes), entries for input-bearing effects only, suppression and the reply digest, blobs and the label union; per-branch random generators; the scheduler: `par`, `par_map`, `race`, `timeout`, width with parked branches and admission in branch-path order, cancellation by class, withdrawal, re-parenting and the drain fence, deadlines | Replay determinism property under random completion orders with budgets just below total demand, the rebuilt ledgers verifying at every sequence number; replay of one fixed tape under permuted resolution orders passes every check; altering any sequence number, refusal, reading, recorded input count, card limit, price, step total, drained or withdrawn entry, or blob in a way that changes a recorded decision or breaks the tape's consistency with itself raises `Replay`; record-then-replay gives identical event streams; replayed values keep their labels, gain those the replaying session's rules set, and are untrusted; a change only to an output-only effect fails the reply digest, and replay makes no live `session.stream`, `session.emit` or log call; `replay/keys-retry-in-par-map`, `replay/budget-par-exhaustion`, `replay/crafted-tape-steps`, `replay/par-sibling-cancel-points`; `eval/width-nested-fanout` at width 2; running branches never exceed the width and start in branch-path order; tape size regression; real concurrency; every secrecy sink refuses a labelled value at the guard and, in the contract suite, at the unguarded host; the contract suite's frame and cancellation cases; a labelled blob in a headless tape is named by the redaction digest only |
 | 11b | Control, `rand`, `time`, `state` | Ratio | `control`, with `par_fold` and single-flight `cached`, `memo` and `once` whose session entries keep labels; `rand`; `time`; `state` | `par_fold` in index order, in completion order (record, then replay under another order), after `Stop` (branches not started make no model call) and with a raise in `step`; a `check-error` for `state.set` in `step` and a `runtime-error Invalid` for `model.chat` in `step` on an outside conversation; eight branches on one `cached` key make one model call; a failing producer promotes the first waiter in branch-path order; crossed keys complete; `eval/width-single-flight` completes; record then replay of cache events under permuted orders; a tape whose wait names another key's producer, a producer with no earlier miss, a cycle or the waiter's ancestor raises `Replay`; a labelled cached value reaching a frame without `secrets` raises `Denied { by: sees }`, and one stored with `scope: session` or `once` is labelled when read back in a later turn; `eval/rand-par-branches` draws identical values under permuted orders with no per-draw tape entries |
 | 12 | Model and think | Ratio | Prompt rendering with the framing rules of chapter 05 and the shared framing vectors (`conformance/framing/`); `model.*` and `think.*`, including `model.stream`'s `until` with deltas on the tape and `early_stop` for `think.self_consistency` and `think.best_of`; structured generation and repair; built-in prompt texts in the hash | Scripted-host tests per built-in; prompt rendering snapshots; a scripted stream of five deltas stopped by `until` after the third (the host sees a cancellation, the text is three deltas, and replay repeats the text and the callbacks); a `check-error` for an effectful `until`; self-consistency with `early_stop` and a scripted majority after four samples makes fewer than `n` model calls |
 | 13 | Engine host Ia: conversations and models | Imperium | The `ratio-lang` dependency at a release tag; `RatioHost` model calls; the host contract tests and framing vectors run against it; multi-conversation support with handles, forks and rollback; safe points; harness agents and their events; conversation labelling and its journal event; the conversation digest chain; deadlines as request timeouts; `BudgetGate`'s refusal of a hosted model without an explicitly configured price under any cost cap (a `local` model's card has price 0, which counts as priced). **Needs the turn, multi-conversation, prompts and model-request seams** | Engine tests with the scripted OpenAI-compatible endpoint of `crates/imperium-cli/tests/headless_eval.rs`, extended for `response_format`, `tool_choice`, image parts and logprobs; the host contract suite against `RatioHost`, including `open_frame` refusing a child scope wider than its parent in each dimension (tools, mode, rules, paths, location, budgets, `sees`, depth), also when the parent `FrameCtx` passed in has been forged wider than Imperium's record of that frame; under a cost cap, `BudgetGate` refuses an unpriced hosted model with `Budget { which: cost }` and admits a hosted model with a configured price of 0 and a `local` model; over random append and rollback sequences, the conversation digest chain equals a full recomputation |

@@ -170,7 +170,7 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: 6 (7, then 8, then 9). Owned paths: built-in modules, `conformance/data/**`.
 - Acceptance checks: one conformance test per built-in with each row's failures and label
   propagation; stage 9 adds float determinism with fixed bit patterns.
-- Status: 7 done (PR #9, 4837678); 8 in review (draft 0.16); 9 in review
+- Status: 7 done (PR #9, 4837678); 8 done (PR #12, dfb3d8f); 9 in review
 
 ## Stage 10: Frames (security review)
 
@@ -199,7 +199,7 @@ PC-4 and PC-9 in 11b).
   every dimension (the suite Imperium's `RatioHost::open_frame` must also pass, stage 13); the
   throwaway Imperium `RatioHost` spike's result against the candidate commit is recorded in the PR
   before merge (the spike code is never merged).
-- Status: in review. On merge: message "Imperium Implementation" (G6).
+- Status: in review (draft 0.17). On merge: message "Imperium Implementation" (G6).
 
 ### Stage 11b: Control, rand, time, state
 

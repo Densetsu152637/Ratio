@@ -1,11 +1,37 @@
 # The Ratio specification
 
-Version: draft 0.16 (2026-11-26). Status: design; stages 1 to 8 and 10 of the implementation
-(the token reader, the parser, modules and names, the type checker, schemas and taint, the IR
-and core interpreter, the `text` and `re` built-ins with the offload pool, the `json`, `list`
-and `map` built-ins, and frames) are built in this repository.
+Version: draft 0.17 (2026-11-26). Status: design; stages 1 to 8, 10 and 11a of the
+implementation (the token reader, the parser, modules and names, the type checker, schemas and
+taint, the IR and core interpreter, the `text` and `re` built-ins with the offload pool, the
+`json`, `list` and `map` built-ins, frames, and the host, the tape and the scheduler) are built
+in this repository.
 
-**Changes in draft 0.16.** Errata from stage 8, Data II. No grammar change.
+**Changes in draft 0.17.** Errata from stage 11a, the host, the tape and the scheduler. No
+grammar change.
+
+- The `Host` trait replaces the sketch: asynchronous methods take `self: Arc<Self>` and return a
+  boxed `'static` future (object-safe, no runtime); `open_frame` verifies and records the child
+  the interpreter built; `cancelled(frame)` gives way to the evaluation's cancellation token;
+  `timer`, `is_secret_path`, `source_labels` and `conversation_labels` are new; `emit` can refuse;
+  agents, memory and session go through `operate` until their stages type them (chapter 10).
+- A frame's kind and harness name are Ratio's assertion: a host takes the kind from its own
+  knowledge and checks an entry's path; the contract suite uses the consistent forgery
+  (chapter 10).
+- The contract suite holds the host-level cases; the cancellation cases that need a program run
+  against `ScriptedHost` in the interpreter's tests (chapter 10).
+- A tape alteration raises `Replay` when it changes a recorded decision or breaks the tape's
+  consistency (chapter 10, stage 11a).
+- `.jsonl.zst` compression is applied by the host to the file (chapters 01 and 10).
+- `with timeout` and `timeout(d, f)` add no branch-path element (chapter 01).
+- The `wall` deadline is measured from the start of the evaluation (chapter 03).
+- The recording mode with digest-only entries for output-only effects is `full` (the design
+  review's `strict`).
+- Approvals, `declassify` and every answer of the user are never taken from a tape; every digest
+  over labelled data in a headless tape is keyed; a truncated tape is refused (chapters 01, 07).
+- The interpreter bounds `drain` calls itself and gives an unacknowledged `abort` call
+  `ABORT_GRACE` (30 s) (chapters 03 and 10).
+
+**Changes in draft 0.16** (kept for reference). Errata from stage 8, Data II. No grammar change.
 
 - `json.validate` and `json.patch` are `product`, not `linear`: validation visits pairs of
   instance and schema nodes, and each patch operation may copy a path through the document
