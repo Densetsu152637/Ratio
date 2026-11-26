@@ -349,7 +349,7 @@ fn none_is_the_context_mode_variant_only_where_context_mode_is_expected() {
         end: second + 4,
     };
     assert!(
-        table.res.get(&key).is_none(),
+        !table.res.contains_key(&key),
         "`none` for a `ContextMode?` is absence"
     );
     let ty = table.types[&key];
