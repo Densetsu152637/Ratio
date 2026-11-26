@@ -37,6 +37,11 @@ pub(crate) struct EffectLog {
     pub(crate) calls: Vec<(ItemRef, Span)>,
     /// Constants read.
     pub(crate) consts: Vec<(ItemRef, Span)>,
+    /// Calls of function values (parameters, locals). They add nothing to a function's
+    /// purity (the value's effects were counted where it was made), but a harness's
+    /// configuration and parameter defaults may not make them: there the value can be an
+    /// argument from the caller, whose effects would run before the frame opens.
+    pub(crate) values: Vec<Span>,
 }
 
 impl Checker<'_> {
@@ -65,6 +70,17 @@ impl Checker<'_> {
             let Some(log) = log.cloned() else {
                 continue;
             };
+            if !own {
+                for span in log.values {
+                    self.report(
+                        r.origin,
+                        Code::EffectInConstant,
+                        span,
+                        "calling a function value, which may make effects, in a harness's configuration or defaults"
+                            .to_owned(),
+                    );
+                }
+            }
             for (span, what) in log.direct {
                 self.report(
                     r.origin,

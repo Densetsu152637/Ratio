@@ -1,0 +1,19 @@
+// expect: value ["mcp__github__issues", "mcp__github__pulls*"]
+
+// Tool patterns meet: a narrower pattern or name inside a wider one is kept, a disjoint one
+// is dropped.
+harness inner() -> [Str]
+  with { tools: { need: ["mcp__github__*"], want: ["mcp__slack__*"] } }
+{
+  meta.permissions().tools
+}
+
+harness outer() -> [Str]
+  with { tools: ["mcp__github__issues", "mcp__github__pulls*", read_file] }
+{
+  inner()
+}
+
+fn main() -> [Str] {
+  outer()
+}

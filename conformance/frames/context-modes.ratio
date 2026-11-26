@@ -1,0 +1,14 @@
+// expect: value ["fresh", "fork", "none", "none"]
+
+// A harness frame's conversation defaults to `fresh`; a `with` block keeps its frame's.
+harness fresh() -> ContextMode { meta.frame().context }
+harness forked() -> ContextMode with { context: fork } { meta.frame().context }
+
+harness single() -> [ContextMode] with { context: none } {
+  [meta.frame().context, with { budget: { tokens: 1k } } { meta.frame().context }]
+}
+
+fn main() -> [ContextMode] {
+  let s = single()
+  [fresh(), forked(), s[0], s[1]]
+}

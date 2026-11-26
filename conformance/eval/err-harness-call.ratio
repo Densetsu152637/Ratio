@@ -1,8 +1,0 @@
-// expect: runtime-error Unsupported
-harness helper(n: Int) -> Int {
-  n + 1
-}
-
-fn main() -> Int {
-  helper(1)
-}

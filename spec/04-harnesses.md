@@ -54,15 +54,15 @@ are given below.
 | `effort` | `Effort` | `low`, `medium`, `high`, `max`, sent only to models that can reason (`docs/04-models-and-routing.md#reasoning-effort`) |
 | `thinking` | `Thinking` | Effort plus an optional token budget for backends that take one (chapter 05) |
 | `sampling` | `Sampling` | Defaults for model calls in the frame (chapter 05) |
-| `tools` | `ToolSet` | A list of tool names, all required; or `{ need: [...], want: [...] }`, where `want` tools are dropped with a log line when the caller lacks them; tool names may be patterns such as `"mcp__github__*"` |
-| `permissions` | `PermissionRequest` | `mode`, extra `deny` and `ask` rules, `paths` (folders the file tools are confined to), `location` (`local` keeps every model call on this machine) |
+| `tools` | `ToolSet` | A list of tool names, all required; or `{ need: [...], want: [...] }`, where `want` tools are dropped with a log line when the caller lacks them; tool names may be prefix patterns ending in one `*`, such as `"mcp__github__*"` (any other `*` is `Invalid`) |
+| `permissions` | `PermissionRequest` | `mode`, extra `deny` and `ask` rules, `paths` (folders the file tools are confined to), `location` (`local` keeps every model call on this machine); `paths` are absolute folders: under `/`, a drive root (`C:/` or `C:\`, the letter matched without case; a bare `C:` is that drive's current directory and is `Invalid`) or a UNC share (`//server/share`), roots never containing each other; empty, `.`, relative folders and `..` are `Invalid` |
 | `budget` | `Budget` | `tokens`, `cost`, `wall`, `steps`, `model_calls`, `tool_calls`; each a cap |
-| `limits` | `Limits` | `depth`, `width`, `heap` |
+| `limits` | `Limits` | `depth`, `width`, `heap` (a frame's `heap` is attenuated and reported; the run's own heap limit is what is enforced) |
 | `context` | `ContextMode` | `fresh` (default), `fork`, `none`, or `main` (entries only); `none` is the variant, not an absent value (chapter 02, rule 10) |
 | `sees` | `Sees` | What the frame may read of the session besides its arguments (below); default empty for `fresh` and `none` frames |
 | `system` | `TrustedPrompt` | The system prompt of the frame's conversation; trusted text only |
 | `title` | `Str` | Shown on the frame's events, in the transcript and in the Agents panel; defaults to the harness name |
-| `attended` | `Bool` | `false` makes the frame treat the session as unattended (no questions to the user); `true` is refused if the caller is unattended |
+| `attended` | `Bool` | `false` makes the frame treat the session as unattended (no questions to the user); `true` is refused if the caller is unattended (with `Denied { by: attenuation }`) |
 
 Tool names in `tools` are resolved by the checker against the tool universe it knows (Imperium's
 built-in tools and the `mcp__<server>__<tool>` form); an unknown literal name is a warning at
@@ -73,7 +73,20 @@ call, after the arguments, in the harness's own lexical scope with its parameter
 `system: reviewer_system(focus)` can use `focus`). It must be effect-free: the checker refuses
 calls to effectful built-ins and harnesses in it. A call's override `f(x) with { … }` is evaluated
 in the **caller's** frame, after the arguments and before the declared configuration; it may
-make effects, charged to the caller. Overrides win over declarations field by field.
+make effects, charged to the caller. Overrides win over declarations field by field, and within
+`budget`, `limits`, `sees` and `permissions` sub-field by sub-field; the `deny` and `ask` rules of
+both apply.
+
+**Defaults and configuration run before the frame opens.** A harness's parameter defaults are
+evaluated after the given arguments are bound, then its declared configuration, both in the
+harness's lexical scope and both before its frame opens, so both must be effect-free: the checker
+refuses effectful built-ins, harness calls and calls of function values (a parameter's value may
+be the caller's closure) in either, and the interpreter refuses any effect reached there. Once
+the frame opens, every bound parameter (given or defaulted), every configuration value (of the
+override and of the declaration) and every setting the frame holds, inherited ones included
+(`model`, `effort`, `thinking`, `sampling`, `system`, `title`), is checked against the frame's
+`sees` like an argument: a labelled one in a frame without `secrets` raises
+`Denied { by: sees }`.
 
 ## Calling a harness
 
@@ -127,7 +140,10 @@ Defaults: an entry's own frame sees everything; a `fork` frame inherits its call
 (it already holds the caller's conversation); a `fresh` or `none` frame sees nothing unless its
 configuration asks. A request is attenuated like every other dimension (`sees ⊆ caller's`). A
 gated read outside `sees` raises `Denied { by: sees }`. Memory search and read, being tools, are
-governed by the tool set instead.
+governed by the tool set instead. A `with { … } { … }` block shares its enclosing code's locals,
+so a block whose `sees` lacks `secrets` refuses, with `Denied { by: sees }`, every read of a
+labelled value from the enclosing scope: by name, by capturing it in a closure, or by a compound
+assignment or an assignment into part of it (a plain `x = v` does not read `x`).
 
 **Context modes.**
 
@@ -136,7 +152,7 @@ governed by the tool set instead.
 | `fresh` | New and empty, with the frame's `system` prompt; created on first use | The default |
 | `fork` | A copy of the caller's conversation as it is at the call; the callee appends to its copy, which is discarded at return | Continuing someone else's work, or reusing a local model's cached prefix |
 | `none` | No conversation; `model.chat` and `context.current()` raise `Invalid`; single-shot `model.generate*` calls still work | Pure transformations and judges |
-| `main` | The agent's main conversation: the session's root conversation for a `@turn` entry, the subagent's kept conversation for a `@task` entry | Only an entry's own frame; refused elsewhere |
+| `main` | The agent's main conversation: the session's root conversation for a `@turn` entry, the subagent's kept conversation for a `@task` entry | Only an entry's own frame; refused elsewhere with `Denied { by: attenuation }` |
 
 Explicit passing is the other way to share context: `context.excerpt(conv, last_turns: 4)` gives
 a `Transcript` value (an immutable snapshot of messages) that a callee takes as an argument and
@@ -157,7 +173,7 @@ per dimension, at frame opening, and again by the engine at every effect.
 | Permission mode | `meet(requested, caller's)` | Order: `plan` < `ask` < `default` < `auto`, `accept_edits` < `full`; `meet(auto, accept_edits)` is `default` |
 | Rules | Caller's rules plus the callee's `deny` and `ask` rules | A callee cannot add `allow` rules; deny still wins over ask over allow |
 | Paths | Requested ∩ caller's folders and grants | Only narrows |
-| Model location | `local` if either is `local` | A caller confined to this machine cannot reach a hosted model through a callee |
+| Model location | `local` if either is `local` | A caller confined to this machine cannot reach a hosted model through a callee; asking for `cloud` under a `local` caller raises `Denied { by: attenuation }`, asking for `any` gives `local` |
 | Model choice | Any model the frame's location allows | Cost is bounded by the budget, not by forbidding models |
 | Effort, sampling | As requested | Bounded by budget |
 | Budgets | `min(requested, caller's remaining)` per budget kind | Spending debits every ancestor; unspent returns |
@@ -202,14 +218,17 @@ can be **reserved** on the frame's ledgers and every ancestor's before it starts
 - **A reply floor.** The effective `max_tokens` may not fall below a floor: the smallest of
   `ratio.limits.min_reply_tokens` (chapter 07; default 256), the requested `max_tokens` (when set)
   and the model's maximum output, so a call that asks for fewer tokens than the setting is never
-  held to it. When the effective `max_tokens` would fall below the floor, the admission waits while
-  other reservations in the frame tree are still held (they release as their effects complete);
-  if it is still below the floor once none is held, or if the input alone cannot be covered, the
-  effect is not started and raises `Budget { which }` in its branch. The wait may starve a branch
-  (siblings may take the released budget first) but cannot deadlock it, since it awaits only host
-  effects.
+  held to it. When the effective `max_tokens` would fall below the floor, or the input alone
+  cannot be covered, the admission waits while reservations are still held on the ledger whose
+  cap binds (they release as their effects complete; a release elsewhere cannot make room there);
+  once none is held there, the effect is not started and raises `Budget { which }` in its branch.
+  The wait may starve a branch (siblings may take the released budget first) but cannot deadlock
+  it, since it awaits only host effects; it waits for the release epoch it read when it was
+  refused, so no release is missed.
 
-Completion replaces the reservation with the actual charge. A drained call (chapter 03) keeps its
+Completion replaces the reservation with the actual charge; a charge above the reservation (an
+input count the provider reports higher) is debited in full, so later admissions see it, and is
+recorded as an overshoot. A drained call (chapter 03) keeps its
 reservation until it finishes. The `steps` ledger that concurrent branches share is kept the same
 way, and when it runs out the branch that reaches the limit raises `Budget { which: steps }`.
 

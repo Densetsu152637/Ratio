@@ -100,7 +100,7 @@ literals, on a number, kept as the decimal literals written), `@pattern(r"…")`
 `@pattern` must be in the regular-expression syntax both JSON Schema validators (ECMAScript) and
 `re` read: alternation, groups and `(?:…)`, classes, the quantifiers `*`, `+`, `?` and `{m,n}`,
 anchors, and `\`-escapes of punctuation and `d`, `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`,
-`t`; look-around, back-references and named groups are refused. The derived schema is written as
+`t`; look-around, back-references and named groups are refused. A pattern means what ECMAScript says: `.` excludes `\n`, `\r`, U+2028 and U+2029; `\d` and `\w` are ASCII; `\s` is ECMAScript's white space (U+FEFF in, U+0085 out); a character outside the basic plane is one character (the `u` flag). `json.validate` refuses, as `Invalid`, the forms the two syntaxes read differently: `\b` and `\B`, `\D`, `\W` and `\S` inside a class, a class that starts with `]` or `^]`, `--` and a `-` next to a Perl class. The derived schema is written as
 canonical JSON and is part of the IR hash: no whitespace; a schema object's keys in the fixed
 order `$ref`, `type`, `const`, `enum`, `anyOf`, `oneOf`, `properties`, `required`,
 `additionalProperties`, `propertyNames`, `prefixItems`, `items`, `pattern`, then a field's
@@ -483,7 +483,8 @@ failure.
 
 **Budgets cannot be swallowed where they run out.** A `Budget` error raised because the budget of
 a scope ran out (a harness call's, or a `with { budget: … }` block's) cannot be caught inside that
-scope, only by the code that opened it.
+scope, only by the code that opened it. When a scope's cap equals what its enclosing scope has
+left, the enclosing scope's is the one that ran out (the outermost of equal caps binds).
 
 **Cancellation cannot be swallowed.** `Cancelled` passes through `catch`. `defer { … }` blocks run
 on every exit from their scope (normal, error, cancellation) in reverse order; a `defer` block may

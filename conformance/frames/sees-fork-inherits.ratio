@@ -1,0 +1,16 @@
+// expect: value 1
+
+// A `fork` frame inherits its caller's `sees`, so it may grant what the caller had.
+harness planner() -> Int with { sees: { plan: true } } { 1 }
+
+harness forked() -> Int with { context: fork } {
+  planner()
+}
+
+harness viewer() -> Int with { sees: { plan: true } } {
+  forked()
+}
+
+fn main() -> Int {
+  viewer()
+}

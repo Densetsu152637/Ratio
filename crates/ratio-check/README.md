@@ -238,6 +238,17 @@ the checker drops. The type-parameter names `S`
 (any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,
 `Money`) carry chapter 06's bounds.
 
+The frames block at the end of `src/builtins.rs` (`FRAME_PRELUDE`, `FRAME_MODULES`, stage 10)
+adds `question` to `control`, `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions`, and the provisional types they return (`FrameInfo`, `CallerInfo`,
+`FrameLimits`, `PermissionView`, `Rule`); a module named in more than one table has its sources
+joined in table order, so the block grows without touching the tables of other stages.
+`FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword. A
+harness's parameter defaults are checked under the same rule as its declared configuration
+(both run before its frame opens): no effects, and no calls of function values, since a
+parameter's value may be the caller's closure (`C0016`). A built-in named twice across the
+joined tables is an internal error, and a check with internal errors is never clean.
+
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
 (`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
 `meta`, `agents`); stages 7 to 12 extend it module by module. `list`, `map` and `json` are

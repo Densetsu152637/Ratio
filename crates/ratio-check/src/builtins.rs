@@ -500,3 +500,44 @@ pub(crate) fn primitive(name: &str) -> Option<Primitive> {
     };
     Some(Primitive::Plain(plain))
 }
+
+// ---- frames (stage 10) ----
+//
+// The frame built-ins and the shared types `meta` reports with. Entries here are merged into the
+// module of the same name above (and these types into the prelude), so this block can grow
+// without touching the tables other stages extend.
+
+/// The shared types of the frame built-ins (chapter 06, `meta`). Their shapes are provisional:
+/// chapter 06 names them without spelling out every field.
+pub(crate) const FRAME_PRELUDE: &str = r"
+type FrameInfo = {
+  name: Str, title: Str, depth: Int, path: Str, model: ModelRef, effort?: Effort,
+  mode: PermissionMode, location: Location, attended: Bool, context: ContextMode, tools: Int,
+}
+type CallerInfo = { name: Str, site: Site }
+type FrameLimits = { budget: Budget, depth: Int, width: Int, heap: Int }
+type PermissionView = { mode: PermissionMode, location: Location, paths?: [Str], extra_rules: [Rule], tools: [Str] }
+type Rule = { action: RuleAction, rule: Str }
+enum RuleAction { deny, ask }
+";
+
+/// The frame built-ins, by module. `meta`'s readers answer from the frame alone (`@local`: they
+/// send nothing anywhere); they are not `@pure`, since what they return depends on the frame.
+pub(crate) const FRAME_MODULES: &[(&str, &str)] = &[
+    (
+        "control",
+        r"
+@pure fn question(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error {}
+",
+    ),
+    (
+        "meta",
+        r"
+@local fn frame() -> FrameInfo {}
+@local fn caller() -> CallerInfo? {}
+@local fn depth() -> Int {}
+@local fn limits() -> FrameLimits {}
+@local fn permissions() -> PermissionView {}
+",
+    ),
+];

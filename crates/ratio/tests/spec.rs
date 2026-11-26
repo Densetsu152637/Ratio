@@ -313,10 +313,6 @@ fn implemented_data_built_ins_have_their_chapter_06_class() {
             || n.starts_with("list.")
             || n.starts_with("map.")
     };
-    // Charged as `product` where chapter 06 says `linear`, because they cannot be linear: a
-    // validation visits pairs of instance and schema nodes, and each patch operation may copy a
-    // path through the document (a proposed erratum, see the `ratio-eval` README).
-    let product_not_linear = ["json.validate", "json.patch"];
     let mut problems = Vec::new();
     for (name, class) in &implemented {
         if !data(name) {
@@ -324,7 +320,6 @@ fn implemented_data_built_ins_have_their_chapter_06_class() {
         }
         match spec.get(name).copied() {
             Some(c) if c == class.name() => {}
-            Some("linear") if class.name() == "product" && product_not_linear.contains(name) => {}
             Some(c) => problems.push(format!(
                 "{name}: implemented as {}, expected {c}",
                 class.name()

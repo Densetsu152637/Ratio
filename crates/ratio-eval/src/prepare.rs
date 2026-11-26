@@ -117,6 +117,8 @@ pub(crate) enum PKind {
         args: Box<[NodeId]>,
         order: Box<[ArgFrom]>,
         type_args: Box<[u32]>,
+        /// The call's overrides (`f(x) with { … }`), evaluated after the arguments.
+        config: Option<NodeId>,
     },
     Effect {
         name: Arc<str>,
@@ -158,6 +160,12 @@ pub(crate) enum PKind {
     /// `Unsupported` without evaluating anything.
     Unsupported(&'static str),
     ToolName(Value),
+    /// `with { config } { body }`: a block in its own frame (stage 10).
+    With(NodeId, NodeId),
+    /// `call with { … }`: the call node, which holds the overrides.
+    Override(NodeId),
+    /// A tool set: the list or `{ need, want }` record it is written as.
+    ToolSet(NodeId),
 }
 
 #[derive(Debug)]
@@ -201,6 +209,8 @@ pub(crate) struct PFunc {
     pub body: NodeId,
     pub kind: FuncKind,
     pub name: Arc<str>,
+    /// A harness's declared configuration, evaluated with its parameters bound.
+    pub config: Option<NodeId>,
 }
 
 #[derive(Debug)]
@@ -255,6 +265,8 @@ pub(crate) struct Runtime {
     pub site: Arc<Layout>,
     /// `Violation { message, pointer }` (`json.validate`).
     pub violation: Arc<Layout>,
+    /// The prelude enums the program holds, by name (for the values `meta` reports).
+    pub prelude_enums: HashMap<String, u32>,
 }
 
 /// Why a program could not be prepared.
@@ -413,6 +425,13 @@ fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, Prepa
                 .map(Arc::from)
                 .collect(),
         }),
+        prelude_enums: program
+            .enums
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.origin == "prelude")
+            .filter_map(|(i, e)| Some((e.name.clone(), u32::try_from(i).ok()?)))
+            .collect(),
     };
     let mut p = Preparer {
         program,
@@ -469,8 +488,11 @@ fn prepare_on(program: &ir::Program, max_depth: usize) -> Result<Prepared, Prepa
             let name: Arc<str> = Arc::from(item.name.as_str());
             let kind = match &item.kind {
                 ir::ItemKind::Fn(f) => PItemKind::Func(p.func(f, FuncKind::Fn, Arc::clone(&name))),
-                ir::ItemKind::Harness { func, .. } => {
-                    PItemKind::Func(p.func(func, FuncKind::Harness, Arc::clone(&name)))
+                ir::ItemKind::Harness { func, config } => {
+                    let f = p.func(func, FuncKind::Harness, Arc::clone(&name));
+                    let config = config.as_ref().map(|c| p.expr(c));
+                    p.out.funcs[f as usize].config = config;
+                    PItemKind::Func(f)
                 }
                 ir::ItemKind::Prompt(f) => {
                     PItemKind::Func(p.func(f, FuncKind::Prompt, Arc::clone(&name)))
@@ -552,6 +574,7 @@ impl Preparer<'_> {
             body,
             kind,
             name,
+            config: None,
         });
         id
     }
@@ -696,6 +719,7 @@ impl Preparer<'_> {
                     args: self.exprs(args),
                     order: order.clone().into_boxed_slice(),
                     type_args: type_args.clone().into_boxed_slice(),
+                    config: None,
                 }
             }
             E::Effect {
@@ -796,10 +820,23 @@ impl Preparer<'_> {
             E::WithTimeout { .. } => {
                 PKind::Unsupported("`with timeout` needs the scheduler (stage 11)")
             }
-            E::With { .. } => PKind::Unsupported("`with` blocks need frames (stage 10)"),
-            E::Override { .. } => PKind::Unsupported("call overrides need frames (stage 10)"),
+            E::With { config, body } => {
+                let c = self.expr(config);
+                PKind::With(c, self.expr(body))
+            }
+            E::Override { call, config } => {
+                let c = self.expr(call);
+                let cfg = self.expr(config);
+                match &mut self.out.nodes[c as usize].kind {
+                    PKind::Call { config, .. } => {
+                        *config = Some(cfg);
+                        PKind::Override(c)
+                    }
+                    _ => PKind::Unsupported("overrides on something other than a harness call"),
+                }
+            }
             E::ToolName(n) => PKind::ToolName(Value::tool(crate::value::Str::plain(n))),
-            E::ToolSet(_) => PKind::Unsupported("tool sets need frames (stage 10)"),
+            E::ToolSet(x) => PKind::ToolSet(self.expr(x)),
         };
         self.push(kind, e)
     }
@@ -960,6 +997,7 @@ pub(crate) fn empty_for_tests() -> Prepared {
             violation: layout(),
             error: layout(),
             site: layout(),
+            prelude_enums: HashMap::new(),
         },
         by_name: HashMap::new(),
     }

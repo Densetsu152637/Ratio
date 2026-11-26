@@ -1,0 +1,13 @@
+// expect: runtime-error Denied
+
+// A callee cannot have a tool its caller lacks: a required tool raises
+// `Denied { by: attenuation }` before the body runs.
+harness fetcher() -> Int with { tools: [web_fetch] } { 1 }
+
+harness reader() -> Int with { tools: [read_file, grep] } {
+  fetcher()
+}
+
+fn main() -> Int {
+  reader()
+}

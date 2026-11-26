@@ -1,0 +1,11 @@
+// expect: value [["grep"], ["grep", "read_file"]]
+
+// A `with` block narrows the frame for its body only.
+harness reader() -> [[Str]] with { tools: [read_file, grep] } {
+  let inside = with { tools: [grep] } { meta.permissions().tools }
+  [inside, meta.permissions().tools]
+}
+
+fn main() -> [[Str]] {
+  reader()
+}

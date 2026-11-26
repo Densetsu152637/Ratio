@@ -1,0 +1,19 @@
+// expect: value ["plan", "default", "accept_edits"]
+
+// The permission mode is the meet of the caller's and the request's: plan < ask < default <
+// auto, accept_edits < full; auto and accept_edits meet at default.
+harness asks_full() -> PermissionMode with { permissions: { mode: full } } {
+  meta.frame().mode
+}
+
+harness asks_edits() -> PermissionMode with { permissions: { mode: accept_edits } } {
+  meta.frame().mode
+}
+
+harness planner() -> PermissionMode with { permissions: { mode: plan } } { asks_full() }
+harness auto() -> PermissionMode with { permissions: { mode: auto } } { asks_edits() }
+harness editor() -> PermissionMode with { permissions: { mode: accept_edits } } { asks_full() }
+
+fn main() -> [PermissionMode] {
+  [planner(), auto(), editor()]
+}

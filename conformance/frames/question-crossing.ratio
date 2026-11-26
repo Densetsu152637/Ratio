@@ -1,0 +1,17 @@
+// expect: value "which file?"
+
+// A callee hands a question back by raising `Question`; its caller may catch it and decide.
+harness clarify(task: Str) -> Str {
+  raise question("which file?", ["a.txt", "b.txt"])
+}
+
+fn main() -> Untrusted<Str> {
+  try {
+    clarify("fix it")
+  } catch e {
+    match e.kind {
+      Question { question, options } => question,
+      _ => "other",
+    }
+  }
+}

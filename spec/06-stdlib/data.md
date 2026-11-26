@@ -42,8 +42,8 @@ does.
 | --- | --- | --- |
 | `const` | 1 | `text.len`, `text.is_empty`, `list.len`, `list.is_empty`, `list.first`, `list.last`, `map.len`, `map.is_empty`, `json.type_of`; every `math` built-in on scalars (`abs`, `sign`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `trunc`, `to_float`, `sqrt`, `pow`, `exp`, `ln`, `log2`, `log10`, `is_nan`); `time.add`, `time.diff`, `time.date`, `time.duration`, `time.seconds`, `time.show` |
 | `log` | ⌈log2(n + 1)⌉; for a map built-in, times the key's size \|k\|, since every comparison walks the key (so are `m[k]`, `k in m` and `m[k] = v`) | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
-| `nlogn` | n · ⌈log2(n + 1)⌉; `list.sort_by` adds W · ⌈log2(n + 1)⌉ for keys of total weight W | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
-| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`; for a `re` built-in, the text's characters plus one and the compiled pattern's size, under [`re`](#re), where an iteration's later work and the output are debited as they are done) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff`, `re.is_match`, `re.find`, `re.find_all`, `re.captures`, `re.captures_all`, `re.replace`, `re.replace_all`, `re.split` |
+| `nlogn` | n · ⌈log2(n + 1)⌉; where a built-in compares whole elements (`list.sort`, `list.unique`, `map.from`) n is their total weight W, since every comparison walks the values; `list.sort_by`, `list.unique_by`, `list.group_by` and `map.count_by` add W · ⌈log2(n + 1)⌉ for keys of total weight W | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
+| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff` and `json.validate` (the instance's and the schema's), and for `json.patch` the document plus the operations against the operations, since each operation may copy a path through the document; characters for `text.similarity`; for a `re` built-in, the text's characters plus one and the compiled pattern's size, under [`re`](#re), where an iteration's later work and the output are debited as they are done) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff`, `json.validate`, `json.patch`, `re.is_match`, `re.find`, `re.find_all`, `re.captures`, `re.captures_all`, `re.replace`, `re.replace_all`, `re.split` |
 | `output` | m; for `text.pad_start` and `text.pad_end`, plus the fill's characters | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
 | `linear` | n + m | Every other pure built-in of this page (for example `list.map`, `list.filter`, `text.split`, `text.contains`, `text.replace`, `json.parse`, `hash.stable`, `template.render`) |
 
@@ -168,15 +168,15 @@ is built, one unit per element and per character.
 | Built-in | Signature | Semantics | Fails with |
 | --- | --- | --- | --- |
 | `json.parse` | `(s: S) -> Json` | Parses JSON text (at most 16 MiB, nesting at most 128) | `Invalid` (with line and column) |
-| `json.stringify` | `<T>(v: T, pretty: Bool = false) -> S` | Encodes any schema-able value (keys in declared or key order); untrusted if `v` holds untrusted text | `Invalid` (handles, functions) |
+| `json.stringify` | `<T>(v: T, pretty: Bool = false) -> S` | Encodes any schema-able value (a record's keys in field-name order, a map's in key order, an object's in document order); untrusted if `v` holds untrusted text (the checker types the result `Untrusted<Str>`) | `Invalid` (handles, functions) |
 | `json.decode` | `<T>(j: Json) -> Untrusted<T>` | Validates against `T`'s schema and converts | `SchemaMismatch` (every violation) |
 | `json.encode` | `<T>(v: T) -> Json` | A schema-able value as `Json`; secrecy labels stay on the leaves (chapter 03) | `Invalid` |
 | `json.schema` | `<T>() -> Json` | `T`'s derived JSON Schema (chapter 03) | — |
-| `json.validate` | `(j: Json, schema: Json) -> [Violation]` | Validates against any JSON Schema (draft 2020-12, no remote references); `{ pointer, message }` per violation | `Invalid` (bad schema) |
+| `json.validate` | `(j: Json, schema: Json) -> [Violation]` | Validates against any JSON Schema (draft 2020-12, no remote references: a `$ref` names a place in the same schema; `unevaluated*` and `format` are ignored); `Violation` per violation. A `pattern` is read as ECMAScript reads it within chapter 03's `@pattern` subset, and `\b`, `\B`, a negated Perl class inside a class, a class that starts with `]` and a `-` next to a Perl class are refused. Past a fixed multiple of its charge the walk raises `Budget { which: steps }` | `Invalid` (bad schema, a refused pattern) |
 | `json.get` | `(j: Json, pointer: Str) -> Json?` | RFC 6901 pointer lookup | `Invalid` (bad pointer) |
 | `json.set` | `(j: Json, pointer: Str, v: Json) -> Json` | A copy with the value at the pointer replaced or added | `Invalid` |
 | `json.keys` | `(j: Json) -> [Untrusted<Str>]` | An object's keys in document order; empty for non-objects. Keys come from the data and are untrusted | — |
-| `json.type_of` | `(j: Json) -> JsonType` | `null`, `bool`, `number`, `string`, `array`, `object` | — |
+| `json.type_of` | `(j: Json) -> JsonType` | `null`, `bool`, `number`, `string`, `array`, `object` (the variants of `JsonType`, chapter 06 shared types) | — |
 | `json.merge` | `(a: Json, b: Json) -> Json` | RFC 7396 merge patch of `b` onto `a` | — |
 | `json.patch` | `(j: Json, ops: Json) -> Json` | Applies an RFC 6902 patch | `Invalid` (failed `test`, bad path) |
 | `json.diff` | `(a: Json, b: Json) -> Json` | An RFC 6902 patch turning `a` into `b` | — |
@@ -192,8 +192,8 @@ is built, one unit per element and per character.
 | `list.first` | `<T>(xs: [T]) -> T?` | First element | — |
 | `list.last` | `<T>(xs: [T]) -> T?` | Last element | — |
 | `list.push` | `<T>(xs: [T], x: T) -> [T]` | A new list with `x` appended | — |
-| `list.insert` | `<T>(xs: [T], i: Int, x: T) -> [T]` | A new list with `x` at `i` | `Invalid` (out of range) |
-| `list.remove_at` | `<T>(xs: [T], i: Int) -> [T]` | A new list without element `i` | `Invalid` |
+| `list.insert` | `<T>(xs: [T], i: Int, x: T) -> [T]` | A new list with `x` at `i`, for `i` in `0..=len`; a negative `i` is out of range | `Invalid` (out of range) |
+| `list.remove_at` | `<T>(xs: [T], i: Int) -> [T]` | A new list without element `i`, for `i` in `0..len`; a negative `i` is out of range | `Invalid` (out of range) |
 | `list.concat` | `<T>(xs: [T], ys: [T]) -> [T]` | `xs` then `ys` (also `xs + ys`) | — |
 | `list.flatten` | `<T>(xss: [[T]]) -> [T]` | One level of nesting removed | — |
 | `list.range` | `(start: Int, end: Int, step: Int = 1) -> [Int]` | `start..end` by `step` (at most 1,000,000 elements) | `Invalid` (`step` 0) |
@@ -220,12 +220,12 @@ is built, one unit per element and per character.
 | `list.sort` | `<T>(xs: [T]) -> [T]` | Stable sort by natural order (`NaN` last) | — |
 | `list.sort_by` | `<T, K>(xs: [T], key: fn(T) -> K, descending: Bool = false) -> [T]` | Stable sort by key | Errors of `key` |
 | `list.reverse` | `<T>(xs: [T]) -> [T]` | Reversed | — |
-| `list.unique` | `<T>(xs: [T]) -> [T]` | First occurrence of each value, in order | — |
+| `list.unique` | `<T>(xs: [T]) -> [T]` | First occurrence of each value, in order; values are equal when their natural order says so (so every `NaN` is one value) | — |
 | `list.unique_by` | `<T, K>(xs: [T], key: fn(T) -> K) -> [T]` | First occurrence of each key | Errors of `key` |
-| `list.group_by` | `<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, [T]>` | Groups by key, order kept within groups | Errors of `key` |
+| `list.group_by` | `<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, [T]>` | Groups by key, order kept within groups; keys are equal as for `list.unique` | Errors of `key` |
 | `list.partition` | `<T>(xs: [T], f: fn(T) -> Bool) -> ([T], [T])` | Those that satisfy `f`, and the rest | Errors of `f` |
 | `list.chunk` | `<T>(xs: [T], size: Int) -> [[T]]` | Consecutive groups of `size` (last may be shorter) | `Invalid` (`size` < 1) |
-| `list.window` | `<T>(xs: [T], size: Int) -> [[T]]` | Sliding windows | `Invalid` |
+| `list.window` | `<T>(xs: [T], size: Int) -> [[T]]` | Sliding windows of `size` elements (none when `size` > len) | `Invalid` (`size` < 1) |
 | `list.zip` | `<A, B>(xs: [A], ys: [B]) -> [(A, B)]` | Pairs up to the shorter length | — |
 | `list.unzip` | `<A, B>(ps: [(A, B)]) -> ([A], [B])` | Splits pairs | — |
 | `list.enumerate` | `<T>(xs: [T]) -> [(Int, T)]` | With indexes | — |
@@ -241,7 +241,7 @@ literal `{}` is an empty map where a map is expected.
 
 | Built-in | Signature | Semantics | Fails with |
 | --- | --- | --- | --- |
-| `map.from` | `<K, V>(pairs: [(K, V)]) -> Map<K, V>` | Builds a map; later pairs win | — |
+| `map.from` | `<K, V>(pairs: [(K, V)]) -> Map<K, V>` | Builds a map; later pairs win; keys are equal as for `list.unique` | — |
 | `map.len` | `<K, V>(m: Map<K, V>) -> Int` | Number of keys | — |
 | `map.is_empty` | `<K, V>(m: Map<K, V>) -> Bool` | No keys | — |
 | `map.get` | `<K, V>(m: Map<K, V>, k: K) -> V?` | Value for a key (also `m[k]`, which raises `NotFound`) | — |
