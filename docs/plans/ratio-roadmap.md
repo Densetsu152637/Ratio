@@ -163,14 +163,14 @@ Related docs: `spec/10-implementation.md` (authoritative stage definitions), `CO
 - Depends on: 5. Owned paths: new IR and interpreter crates, `conformance/eval/**`.
 - Acceptance checks: `conformance/eval/`; IR hash stability snapshots across platforms; run-time label
   propagation tests for every operator; branch restrictions; steps, heap and call-depth limits.
-- Status: in review (branch feat/wt-s6-interp; spec draft 0.13; security review rounds 1 and 2 addressed)
+- Status: done (PR #8, edc3dad, released as v0.1.0)
 
 ## Stages 7, 8, 9: Data I, II, III
 
 - Depends on: 6 (7, then 8, then 9). Owned paths: built-in modules, `conformance/data/**`.
 - Acceptance checks: one conformance test per built-in with each row's failures and label
   propagation; stage 9 adds float determinism with fixed bit patterns.
-- Status: pending
+- Status: 7 in review (draft 0.14); 8, 9 in progress
 
 ## Stage 10: Frames (security review)
 

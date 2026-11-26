@@ -132,16 +132,16 @@ text.parse_int	(s: S) -> Int?	pure	linear
 text.parse_float	(s: S) -> Float?	pure	linear
 text.similarity	(a: S, b: S) -> Float	pure	product
 text.extract_json	(s: S) -> Json?	pure	linear
-text.code_blocks	(s: S, lang: Str? = none) -> [CodeBlock]	pure	linear
+text.code_blocks	(s: S, lang: Str? = none) -> [CodeBlock<S>]	pure	linear
 text.quote	(s: S, label: Str = "data") -> Untrusted<Str>	pure	linear
-re.is_match	(pattern: Str, s: S) -> Bool	pure	linear
-re.find	(pattern: Str, s: S) -> Match?	pure	linear
-re.find_all	(pattern: Str, s: S, limit: Int = 1000) -> [Match]	pure	linear
-re.captures	(pattern: Str, s: S) -> Captures?	pure	linear
-re.captures_all	(pattern: Str, s: S, limit: Int = 1000) -> [Captures]	pure	linear
-re.replace	(pattern: Str, s: S, with: S) -> S	pure	linear
-re.replace_all	(pattern: Str, s: S, with: S) -> S	pure	linear
-re.split	(pattern: Str, s: S) -> [S]	pure	linear
+re.is_match	(pattern: Str, s: S) -> Bool	pure	product
+re.find	(pattern: Str, s: S) -> Match<S>?	pure	product
+re.find_all	(pattern: Str, s: S, limit: Int = 1000) -> [Match<S>]	pure	product
+re.captures	(pattern: Str, s: S) -> Captures<S>?	pure	product
+re.captures_all	(pattern: Str, s: S, limit: Int = 1000) -> [Captures<S>]	pure	product
+re.replace	(pattern: Str, s: S, with: S) -> S	pure	product
+re.replace_all	(pattern: Str, s: S, with: S) -> S	pure	product
+re.split	(pattern: Str, s: S) -> [S]	pure	product
 re.escape	(s: Str) -> Str	pure	linear
 json.parse	(s: S) -> Json	pure	linear
 json.stringify	<T>(v: T, pretty: Bool = false) -> S	pure	linear

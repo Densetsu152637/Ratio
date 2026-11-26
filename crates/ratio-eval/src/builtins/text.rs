@@ -8,9 +8,10 @@
 
 use super::{Args, Sizes, arg, int, new_list, new_text, opt, text};
 use crate::error::{Kind, RtError, raise};
+use crate::heap::{Charge, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
-use crate::value::{Fault, Layout, MAX_STR_BYTES, Value};
+use crate::value::{Fault, Layout, MAX_ELEMS, MAX_STR_BYTES, Value};
 use std::sync::Arc;
 
 /// The union of the arguments' own labels.
@@ -35,12 +36,84 @@ fn piece(cx: &mut Cx<'_>, s: &str, labels: Labels) -> Result<Value, RtError> {
     out(cx, s.to_owned(), labels)
 }
 
-fn list_of(cx: &mut Cx<'_>, parts: Vec<&str>, labels: Labels) -> Result<Value, RtError> {
-    let mut items = Vec::with_capacity(parts.len());
-    for p in parts {
-        items.push(piece(cx, p, labels)?);
+/// A list being built: each element is charged a slot to the heap before it is added (all of
+/// them at once when the count is known), and more than 1,000,000 is refused (`Invalid`)
+/// before anything is allocated for them.
+pub(super) struct Items {
+    list: Vec<Value>,
+    reserved: usize,
+    charge: Charge,
+}
+
+impl Items {
+    pub(super) fn new() -> Items {
+        Items {
+            list: Vec::new(),
+            reserved: 0,
+            charge: Charge::none(),
+        }
     }
-    new_list(cx, items, labels)
+
+    /// A list of `n` elements to come.
+    pub(super) fn reserve(cx: &Cx<'_>, n: u64, labels: Labels) -> Result<Items, RtError> {
+        if n > MAX_ELEMS {
+            return Err(invalid(
+                cx,
+                "a list of more than 1,000,000 elements",
+                labels,
+            ));
+        }
+        let mut charge = Charge::none();
+        charge
+            .grow(cx.heap, n * cost::SLOT)
+            .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
+        let n = usize::try_from(n).unwrap_or(0);
+        Ok(Items {
+            list: Vec::with_capacity(n),
+            reserved: n,
+            charge,
+        })
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub(super) fn push(&mut self, cx: &Cx<'_>, v: Value, labels: Labels) -> Result<(), RtError> {
+        if self.list.len() as u64 >= MAX_ELEMS {
+            return Err(invalid(
+                cx,
+                "a list of more than 1,000,000 elements",
+                labels,
+            ));
+        }
+        if self.list.len() >= self.reserved {
+            self.charge
+                .grow(cx.heap, cost::SLOT)
+                .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
+        }
+        self.list.push(v);
+        Ok(())
+    }
+
+    pub(super) fn finish(self, cx: &Cx<'_>, labels: Labels) -> Result<Value, RtError> {
+        new_list(cx, self.list, labels)
+    }
+}
+
+/// The `count` parts `parts` gives, as a list of new texts.
+fn list_of<'s>(
+    cx: &mut Cx<'_>,
+    count: usize,
+    parts: impl Iterator<Item = &'s str>,
+    labels: Labels,
+) -> Result<Value, RtError> {
+    let mut items = Items::reserve(cx, count as u64, labels)?;
+    for p in parts {
+        let v = piece(cx, p, labels)?;
+        items.push(cx, v, labels)?;
+    }
+    items.finish(cx, labels)
 }
 
 /// Counts `n` bytes read.
@@ -96,8 +169,20 @@ pub(super) fn is_empty(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 pub(super) fn lower(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
     let t = text(cx, s)?;
-    scan(cx, t.len());
-    // A lower-cased text can be longer than its source (`İ` is two characters in lower case).
+    scan(cx, 2 * t.len());
+    // A lower-cased text can be longer than its source (`İ` is two characters in lower case):
+    // its size is checked before it is built.
+    let size: usize = t
+        .chars()
+        .map(|c| c.to_lowercase().map(char::len_utf8).sum::<usize>())
+        .sum();
+    if size > MAX_STR_BYTES {
+        return Err(invalid(
+            cx,
+            "the lower-cased text is longer than 16 MiB",
+            s.labels,
+        ));
+    }
     let lowered = t.to_lowercase();
     out(cx, lowered, s.labels)
 }
@@ -310,44 +395,40 @@ pub(super) fn split(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         }
         _ => None,
     };
-    scan(cx, t.len());
-    let parts: Vec<&str> = match limit {
-        Some(l) => t.splitn(l, sep).collect(),
-        None => t.split(sep).collect(),
-    };
-    list_of(cx, parts, labels)
+    // Counted first, so an over-long list is refused before any part is built.
+    scan(cx, 2 * t.len());
+    let all = t.matches(sep).count() + 1;
+    match limit {
+        Some(l) => list_of(cx, all.min(l), t.splitn(l, sep), labels),
+        None => list_of(cx, all, t.split(sep), labels),
+    }
 }
 
 pub(super) fn lines(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
     let t = text(cx, s)?;
-    scan(cx, t.len());
-    list_of(cx, t.lines().collect(), s.labels)
+    scan(cx, 2 * t.len());
+    list_of(cx, t.lines().count(), t.lines(), s.labels)
 }
 
 pub(super) fn words(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
     let t = text(cx, s)?;
-    scan(cx, t.len());
-    list_of(cx, t.split_whitespace().collect(), s.labels)
+    scan(cx, 2 * t.len());
+    list_of(
+        cx,
+        t.split_whitespace().count(),
+        t.split_whitespace(),
+        s.labels,
+    )
 }
 
 pub(super) fn chars(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let s = arg(cx, args, 0)?;
     let t = text(cx, s)?;
     scan(cx, t.len());
-    if t.chars().count() as u64 > crate::value::MAX_ELEMS {
-        return Err(invalid(
-            cx,
-            "a list of more than 1,000,000 characters",
-            s.labels,
-        ));
-    }
-    let parts: Vec<&str> = t
-        .char_indices()
-        .map(|(i, c)| &t[i..i + c.len_utf8()])
-        .collect();
-    list_of(cx, parts, s.labels)
+    let parts = t.char_indices().map(|(i, c)| &t[i..i + c.len_utf8()]);
+    list_of(cx, t.chars().count(), parts, s.labels)
 }
 
 // ---- replacing and padding ----
@@ -390,7 +471,8 @@ fn replacing(cx: &mut Cx<'_>, args: &Args, first: bool) -> Result<Value, RtError
 }
 
 /// `text.pad_start` and `text.pad_end` (`output`): the result has `max(width, |s|)`
-/// characters. A result over 16 MiB is charged nothing here and refused before it is built.
+/// characters, plus the fill's characters (as input). A result over 16 MiB is charged nothing
+/// here and refused before it is built.
 pub(super) fn s_pad(a: &Args) -> Sizes {
     let s = a.first().and_then(Option::as_ref);
     let width = a.get(1).and_then(Option::as_ref).and_then(Value::as_int);
@@ -404,7 +486,7 @@ pub(super) fn s_pad(a: &Args) -> Sizes {
         return Sizes::default();
     }
     Sizes {
-        m: width.max(len),
+        m: width.max(len).saturating_add(super::sz(a, 2)),
         ..Sizes::default()
     }
 }
@@ -427,19 +509,16 @@ fn pad(cx: &mut Cx<'_>, args: &Args, start: bool) -> Result<Value, RtError> {
         return piece(cx, t, labels);
     }
     let need = width - len;
-    let fill_chars: Vec<char> = fill.chars().collect();
-    let cycle = fill_chars.len();
-    let partial: usize = fill_chars[..need % cycle]
-        .iter()
-        .map(|c| c.len_utf8())
-        .sum();
-    let bytes = (need / cycle)
-        .checked_mul(fill.len())
-        .and_then(|b| b.checked_add(partial + t.len()));
-    if bytes.is_none_or(|b| b > MAX_STR_BYTES) {
+    // Only the fill characters used are read: every one is at least a byte.
+    if need + t.len() > MAX_STR_BYTES {
         return Err(invalid(cx, "the padded text is longer than 16 MiB", labels));
     }
-    let padding: String = fill_chars.iter().cycle().take(need).collect();
+    let bytes: usize = fill.chars().cycle().take(need).map(char::len_utf8).sum();
+    scan(cx, bytes);
+    if bytes + t.len() > MAX_STR_BYTES {
+        return Err(invalid(cx, "the padded text is longer than 16 MiB", labels));
+    }
+    let padding: String = fill.chars().cycle().take(need).collect();
     let s = if start {
         padding + t
     } else {
@@ -519,17 +598,23 @@ pub(super) fn wrap(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let t = text(cx, arg(cx, args, 0)?)?;
     let width = usize::try_from(int_or(cx, args, 1, 80)?.max(1)).unwrap_or(usize::MAX);
     scan(cx, 2 * t.len());
-    let mut o = String::with_capacity(t.len());
-    let mut para: Vec<&str> = Vec::new();
-    let flush = |para: &mut Vec<&str>, o: &mut String| {
-        if para.is_empty() {
-            return;
+    // Streamed: each word is written as it is read, so nothing but the output is kept.
+    let mut o = String::new();
+    let mut in_para = false;
+    let mut col = 0;
+    for line in t.lines() {
+        if is_blank(line) {
+            in_para = false;
+            continue;
         }
-        if !o.is_empty() {
-            o.push_str("\n\n");
+        if !in_para {
+            if !o.is_empty() {
+                o.push_str("\n\n");
+            }
+            in_para = true;
+            col = 0;
         }
-        let mut col = 0;
-        for w in para.iter().flat_map(|l| l.split_whitespace()) {
+        for w in line.split_whitespace() {
             let wl = w.chars().count();
             if col > 0 && col + 1 + wl > width {
                 o.push('\n');
@@ -541,16 +626,7 @@ pub(super) fn wrap(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             o.push_str(w);
             col += wl;
         }
-        para.clear();
-    };
-    for line in t.lines() {
-        if is_blank(line) {
-            flush(&mut para, &mut o);
-        } else {
-            para.push(line);
-        }
     }
-    flush(&mut para, &mut o);
     out(cx, o, labels)
 }
 
@@ -686,7 +762,8 @@ pub(super) fn extract_json(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtErro
 /// The length of the bracketed span at the start of `b` (`{…}` or `[…]`), skipping brackets
 /// inside strings, or `None` when it does not close.
 fn balanced_end(b: &[u8], work: &mut u64) -> Option<usize> {
-    let mut stack: Vec<u8> = Vec::new();
+    // No deeper span would parse (JSON nesting is limited), so the stack is bounded too.
+    let mut stack: Vec<u8> = Vec::with_capacity(crate::json::MAX_JSON_DEPTH + 1);
     let mut in_str = false;
     let mut escaped = false;
     for (i, &c) in b.iter().enumerate() {
@@ -702,6 +779,7 @@ fn balanced_end(b: &[u8], work: &mut u64) -> Option<usize> {
         }
         match c {
             b'"' => in_str = true,
+            b'{' | b'[' if stack.len() > crate::json::MAX_JSON_DEPTH => return None,
             b'{' => stack.push(b'}'),
             b'[' => stack.push(b']'),
             b'}' | b']' => {
@@ -740,6 +818,10 @@ pub(super) fn new_record(
     record(cx, fields, labels)
 }
 
+/// A fenced block being read: its fence character and length, its language, and its
+/// content's byte span so far.
+type OpenBlock<'a> = (char, usize, Option<&'a str>, Option<(usize, usize)>);
+
 /// A fence line: its character, its length and the info string after it.
 fn fence(line: &str) -> Option<(char, usize, &str)> {
     let body = line.trim_start_matches(' ');
@@ -770,41 +852,52 @@ pub(super) fn code_blocks(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError
         _ => None,
     };
     scan(cx, 2 * t.len());
-    let mut found: Vec<(Option<&str>, Vec<&str>)> = Vec::new();
-    let mut open: Option<(char, usize, Option<&str>, Vec<&str>)> = None;
-    for line in t.lines() {
-        match open.take() {
-            None => {
-                if let Some((c, len, info)) = fence(line) {
-                    let lang = info.split_whitespace().next();
-                    open = Some((c, len, lang, Vec::new()));
-                }
-            }
-            Some((c, len, lang, mut body)) => match fence(line) {
-                Some((c2, len2, "")) if c2 == c && len2 >= len => found.push((lang, body)),
-                _ => {
-                    body.push(line);
-                    open = Some((c, len, lang, body));
-                }
-            },
-        }
-    }
-    if let Some((_, _, lang, body)) = open {
-        found.push((lang, body));
-    }
-    let mut items = Vec::new();
-    for (lang, body) in found {
+    let mut items = Items::new();
+    // A block as it is read: its fence, its language and its content's byte span.
+    let mut open: Option<OpenBlock<'_>> = None;
+    let mut emit = |cx: &mut Cx<'_>, lang: Option<&str>, span: Option<(usize, usize)>| {
         if want.is_some_and(|w| Some(w) != lang) {
-            continue;
+            return Ok(());
         }
-        let code = piece(cx, &body.join("\n"), labels)?;
+        let body = span.map_or("", |(a, z)| &t[a..z]);
+        let code = if body.contains('\r') {
+            body.replace("\r\n", "\n")
+        } else {
+            body.to_owned()
+        };
+        let code = out(cx, code, labels)?;
         let lang = match lang {
             Some(l) => piece(cx, l, labels)?,
             None => Value::none().with_labels(labels),
         };
-        items.push(record(cx, vec![("code", code), ("lang", lang)], labels)?);
+        let block = record(cx, vec![("code", code), ("lang", lang)], labels)?;
+        items.push(cx, block, labels)
+    };
+    let mut at = 0;
+    for raw in t.split_inclusive('\n') {
+        let start = at;
+        at += raw.len();
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        match open.take() {
+            None => {
+                if let Some((c, len, info)) = fence(line) {
+                    open = Some((c, len, info.split_whitespace().next(), None));
+                }
+            }
+            Some((c, len, lang, span)) => match fence(line) {
+                Some((c2, len2, "")) if c2 == c && len2 >= len => emit(cx, lang, span)?,
+                _ => {
+                    let end = start + line.len();
+                    open = Some((c, len, lang, Some((span.map_or(start, |s| s.0), end))));
+                }
+            },
+        }
     }
-    new_list(cx, items, labels)
+    if let Some((_, _, lang, span)) = open {
+        emit(cx, lang, span)?;
+    }
+    items.finish(cx, labels)
 }
 
 /// The tag names framed text may not open or close (provisional: chapter 05's `HARNESS_TAGS`

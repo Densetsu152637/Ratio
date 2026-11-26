@@ -287,22 +287,8 @@ fn builtins_txt_is_generated_from_chapter_06() {
     );
 }
 
-/// Built-ins whose implemented class differs from chapter 06, pending a proposed erratum: a
-/// regex search costs the text's length times the compiled program's size, so the
-/// implementation charges `re` as `product` (text × program), not `linear`.
-const CLASS_ERRATA: &[(&str, &str)] = &[
-    ("re.is_match", "product"),
-    ("re.find", "product"),
-    ("re.find_all", "product"),
-    ("re.captures", "product"),
-    ("re.captures_all", "product"),
-    ("re.replace", "product"),
-    ("re.replace_all", "product"),
-    ("re.split", "product"),
-];
-
 #[test]
-fn implemented_text_and_re_built_ins_have_their_chapter_06_class() {
+fn implemented_data_built_ins_have_their_chapter_06_class() {
     let generated = generate_builtins();
     let spec: BTreeMap<&str, &str> = generated
         .lines()
@@ -313,17 +299,20 @@ fn implemented_text_and_re_built_ins_have_their_chapter_06_class() {
         })
         .collect();
     let implemented = ratio::interp::builtins::implemented();
+    // Every implemented `data` built-in (stage 6's and stage 7's) has its class; every `text`
+    // and `re` built-in of the chapter is implemented (stage 7).
+    let data = |n: &str| {
+        ["text.", "re.", "list.", "map.", "json.", "math."]
+            .iter()
+            .any(|m| n.starts_with(m))
+    };
     let ours = |n: &str| n.starts_with("text.") || n.starts_with("re.");
     let mut problems = Vec::new();
     for (name, class) in &implemented {
-        if !ours(name) {
+        if !data(name) {
             continue;
         }
-        let want = CLASS_ERRATA
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or_else(|| spec.get(name).copied(), |(_, c)| Some(*c));
-        match want {
+        match spec.get(name).copied() {
             Some(c) if c == class.name() => {}
             Some(c) => problems.push(format!(
                 "{name}: implemented as {}, expected {c}",

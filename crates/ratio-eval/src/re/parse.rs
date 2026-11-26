@@ -113,7 +113,10 @@ impl Frame {
     }
 }
 
+/// A concatenation, without its parts that match nothing (`(?:)`), so no repetition copy
+/// walks them again.
 fn concat(mut v: Vec<Node>) -> Node {
+    v.retain(|n| !is_nothing(n));
     match v.len() {
         0 => Node::Empty,
         1 => v.pop().unwrap_or(Node::Empty),
@@ -389,6 +392,16 @@ impl Parser {
         if matches!(last, Node::Repeat { .. }) {
             return self.err("a repetition of a repetition; use a group");
         }
+        // `e{0}` matches only the empty string, and a repetition of nothing is nothing: both
+        // collapse here, so they cost no program and no compile time.
+        if max == Some(0) {
+            cur.concat.push(Node::Empty);
+            return Ok(());
+        }
+        if is_nothing(&last) {
+            cur.concat.push(last);
+            return Ok(());
+        }
         cur.concat.push(Node::Repeat {
             node: Box::new(last),
             min,
@@ -597,7 +610,14 @@ impl Parser {
                 }
                 ('\\', _) => match self.escape(true)? {
                     Esc::Char(lo) => self.class_range(lo, &mut ranges)?,
-                    Esc::Set(s) => items.push(s),
+                    Esc::Set(s) => {
+                        if self.peek() == Some('-')
+                            && !matches!(self.peek_at(1), Some(']' | '-') | None)
+                        {
+                            return self.err("a class range starting with a class");
+                        }
+                        items.push(s);
+                    }
                     Esc::Look(_) => return self.err("an assertion inside a class"),
                 },
                 (lo, _) => self.class_range(lo, &mut ranges)?,
@@ -667,6 +687,16 @@ impl Parser {
         } else {
             set
         })
+    }
+}
+
+/// Whether a node matches only the empty string and records nothing.
+fn is_nothing(node: &Node) -> bool {
+    match node {
+        Node::Empty => true,
+        Node::Group { index: None, node } => is_nothing(node),
+        Node::Concat(v) => v.iter().all(is_nothing),
+        _ => false,
     }
 }
 
