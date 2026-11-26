@@ -32,6 +32,10 @@ pub(super) fn to_re(pattern: &str) -> Result<String, String> {
     let mut out = String::with_capacity(pattern.len() + 16);
     let mut i = 0;
     let mut in_class = false;
+    // Inside a class: the last item was a `\d`, `\w` or `\s`, and nothing came before the
+    // first item.
+    let mut after_perl = false;
+    let mut first = false;
     while i < chars.len() {
         let c = chars[i];
         i += 1;
@@ -49,12 +53,16 @@ pub(super) fn to_re(pattern: &str) -> Result<String, String> {
                 'S' => (Some(format!("[^{SPACE}]")), None),
                 'b' | 'B' => return Err("`\\b` and `\\B` are not supported".to_owned()),
                 _ => {
+                    first = false;
+                    after_perl = false;
                     out.push('\\');
                     out.push(e);
                     continue;
                 }
             };
             if in_class {
+                first = false;
+                after_perl = matches!(e, 'd' | 'w' | 's');
                 match inside {
                     Some(s) => out.push_str(s),
                     None => return Err(format!("`\\{e}` inside a class is not supported")),
@@ -65,15 +73,42 @@ pub(super) fn to_re(pattern: &str) -> Result<String, String> {
             continue;
         }
         if in_class {
-            if c == ']' {
-                in_class = false;
+            let was_first = std::mem::replace(&mut first, false);
+            let was_perl = std::mem::replace(&mut after_perl, false);
+            match c {
+                ']' => {
+                    in_class = false;
+                    out.push(c);
+                }
+                // Literal in ECMAScript, set operations and nested classes in the `re` syntax.
+                '&' | '~' | '[' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '-' => {
+                    let next = chars.get(i).copied();
+                    let perl_next = next == Some('\\')
+                        && chars
+                            .get(i + 1)
+                            .is_some_and(|n| matches!(n, 'd' | 'D' | 'w' | 'W' | 's' | 'S'));
+                    if next == Some('-') {
+                        return Err("`--` in a class is not supported".to_owned());
+                    }
+                    if (was_perl && next != Some(']')) || (perl_next && !was_first) {
+                        return Err(
+                            "a `-` next to `\\d`, `\\w` or `\\s` is not supported".to_owned()
+                        );
+                    }
+                    out.push('-');
+                }
+                other => out.push(other),
             }
-            out.push(c);
             continue;
         }
         match c {
             '[' => {
                 in_class = true;
+                first = true;
                 out.push('[');
                 if chars.get(i) == Some(&'^') {
                     out.push('^');

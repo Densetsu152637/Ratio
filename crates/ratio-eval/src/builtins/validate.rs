@@ -340,7 +340,7 @@ impl Validator<'_, '_> {
         match node(schema) {
             Some(Json::Bool(true)) => return Ok(true),
             Some(Json::Bool(false)) => return self.fail("no value is valid against `false`"),
-            Some(Json::Object(entries)) => self.pace.tick(self.cx, 1 + entries.len() as u64)?,
+            Some(Json::Object(entries)) => self.work(1 + entries.len() as u64)?,
             _ => return Err(self.bad("a schema is an object or a boolean")),
         }
         let kw = self.collect(schema)?;
@@ -418,7 +418,7 @@ impl Validator<'_, '_> {
             let mut found = false;
             let mut c = l.cursor();
             while let Some(x) = c.next() {
-                self.pace.tick(self.cx, 1)?;
+                self.work(1 + inst.weight().min(x.weight()))?;
                 if crate::ops::eq(inst, &x) {
                     found = true;
                     break;
@@ -427,6 +427,9 @@ impl Validator<'_, '_> {
             if !found {
                 ok &= self.fail("is not one of the allowed values")?;
             }
+        }
+        if let Some(c) = kw.constant {
+            self.work(1 + inst.weight().min(c.weight()))?;
         }
         if let Some(c) = kw.constant
             && !crate::ops::eq(inst, c)
@@ -489,6 +492,13 @@ impl Validator<'_, '_> {
             }
         }
         Ok(ok)
+    }
+
+    /// Counts `units` of work (for the counters and for cancellation) and spends them from the
+    /// walk's budget, so what is done inside one check is paid for, not only the checks.
+    fn work(&mut self, units: u64) -> Result<(), RtError> {
+        self.spend(units)?;
+        self.pace.tick(self.cx, units)
     }
 
     /// Adds work to the walk's count: past the budget the call is refused (`Budget { steps }`).
@@ -647,7 +657,7 @@ impl Validator<'_, '_> {
         let mut c = l.cursor();
         let mut i = 0u64;
         while let Some(item) = c.next() {
-            self.pace.tick(self.cx, 1)?;
+            self.work(1)?;
             let sub = prefix.and_then(|p| p.get(i)).or(kw.items);
             if let Some(sub) = sub {
                 ok &= self.descend(&item, sub, &i.to_string(), depth)?;
@@ -661,7 +671,13 @@ impl Validator<'_, '_> {
             let mut c = l.cursor();
             let mut duplicate = false;
             while let Some(item) = c.next() {
-                self.pace.tick(self.cx, 1)?;
+                // Each item is compared with the ones on a path of the map: its weight times
+                // the path's length.
+                self.work(
+                    1 + item
+                        .weight()
+                        .saturating_mul(crate::ops::log_work(seen.len())),
+                )?;
                 if seen.get_entry(&item).is_some() {
                     duplicate = true;
                     break;
@@ -723,7 +739,7 @@ impl Validator<'_, '_> {
                 let Some(name) = string_of(&n) else {
                     return Err(self.bad("`required` is an array of names"));
                 };
-                self.pace.tick(self.cx, 1 + width)?;
+                self.work(1 + width)?;
                 if field(inst, name).is_none() {
                     ok &= self.fail(&format!("is missing the required property `{name}`"))?;
                 }
@@ -741,7 +757,7 @@ impl Validator<'_, '_> {
             let name = k.as_text().unwrap_or("");
             let mut matched = false;
             if let Some(d) = declared {
-                self.pace.tick(self.cx, 1 + d.len() as u64)?;
+                self.work(1 + d.len() as u64)?;
                 if let Some((_, sub)) = d.iter().find(|(n, _)| n.as_text() == Some(name)) {
                     matched = true;
                     ok &= self.descend(v, sub, name, depth)?;
@@ -775,6 +791,7 @@ impl Validator<'_, '_> {
                 return Err(self.bad("`dependentRequired` is an object"));
             };
             for (name, needs) in deps {
+                self.work(1 + width)?;
                 if field(inst, name.as_text().unwrap_or("")).is_none() {
                     continue;
                 }
@@ -786,6 +803,7 @@ impl Validator<'_, '_> {
                     let Some(need) = string_of(&n) else {
                         return Err(self.bad("`dependentRequired` maps names to arrays of names"));
                     };
+                    self.work(1 + width)?;
                     if field(inst, need).is_none() {
                         ok &= self.fail(&format!(
                             "has `{}` but not `{need}`",
@@ -800,6 +818,7 @@ impl Validator<'_, '_> {
                 return Err(self.bad("`dependentSchemas` is an object"));
             };
             for (name, sub) in deps {
+                self.work(1 + width)?;
                 if field(inst, name.as_text().unwrap_or("")).is_some() {
                     ok &= self.check(inst, sub, depth + 1, 0)?;
                 }

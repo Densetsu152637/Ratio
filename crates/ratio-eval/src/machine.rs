@@ -1799,8 +1799,14 @@ impl Machine {
     }
 
     fn with_index(&self, c: &Value, k: &Value, v: Value, loc: Loc) -> Result<Value, RtError> {
-        // Which element changed depends on the index.
-        let labels = c.labels | k.labels;
+        // Which element changed depends on the index, and for a map on every key the index
+        // was compared with (and what is inside a composite key).
+        let labels = c.labels
+            | k.quick()
+            | match &c.repr {
+                Repr::Map(m) => m.probe(k).1,
+                _ => Labels::NONE,
+            };
         let out = match (&c.repr, &k.repr) {
             (Repr::List(l), Repr::Int(i)) => {
                 let i = u64::try_from(*i).map_err(|_| {
@@ -1825,7 +1831,14 @@ impl Machine {
 
     /// `c[k]`.
     fn index_value(&self, c: &Value, k: &Value, loc: Loc) -> Result<Value, RtError> {
-        let labels = c.labels | k.labels;
+        // A map lookup (a hit or a miss) depends on every key on its path, composite keys'
+        // parts included.
+        let labels = c.labels
+            | k.quick()
+            | match &c.repr {
+                Repr::Map(m) => m.probe(k).1,
+                _ => Labels::NONE,
+            };
         match (&c.repr, &k.repr) {
             (Repr::List(l), Repr::Int(i)) => u64::try_from(*i)
                 .ok()
@@ -1842,7 +1855,7 @@ impl Machine {
                 }),
             (Repr::Map(m), _) => m
                 .get_entry(k)
-                .map(|(stored, v)| v.clone().with_labels(labels | stored.labels))
+                .map(|(stored, v)| v.clone().with_labels(labels | stored.quick()))
                 .ok_or_else(|| {
                     raise(
                         &self.p,

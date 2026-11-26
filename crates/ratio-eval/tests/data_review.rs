@@ -332,3 +332,126 @@ fn a_wide_repeated_class_is_charged_and_bounded() {
         }
     }
 }
+
+/// A chain of `$defs` that each apply the next one twice, ending in `leaf`.
+fn doubling_chain(n: u32, leaf: &str) -> String {
+    let mut defs: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r##""a{i}":{{"allOf":[{{"$ref":"#/$defs/a{j}"}},{{"$ref":"#/$defs/a{j}"}}]}}"##,
+                j = i + 1
+            )
+        })
+        .collect();
+    defs.push(format!(r#""a{n}":{leaf}"#));
+    format!(
+        r##"{{"$ref":"#/$defs/a0","$defs":{{{}}}}}"##,
+        defs.join(",")
+    )
+}
+
+/// The work inside one check (an `enum`'s comparisons, `uniqueItems`' map) is paid for, not
+/// only the checks: a shared sub-schema reached over and over cannot do unpaid work.
+#[test]
+fn work_inside_one_check_is_bounded_by_the_charge() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let values: Vec<String> = (0..800).map(|i| i.to_string()).collect();
+    let enum_leaf = format!("{{\"enum\":[{}]}}", values.join(","));
+    let items: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+    let list = format!("[{}]", items.join(","));
+    let cases = [
+        ("799", doubling_chain(16, &enum_leaf)),
+        (list.as_str(), doubling_chain(16, r#"{"uniqueItems":true}"#)),
+        ("1", doubling_chain(16, r#"{"const":[1,2,3]}"#)),
+        (
+            r#"{"a":1,"b":2}"#,
+            doubling_chain(
+                16,
+                r#"{"required":["a","b","c"],"dependentRequired":{"a":["b"]}}"#,
+            ),
+        ),
+    ];
+    for (instance, schema) in cases {
+        let start = Instant::now();
+        let f = run(&p, "v", vec![Value::text(instance), Value::text(&schema)]);
+        let Outcome::Raised(e) = &f.outcome else {
+            panic!("returned for {instance:.20}")
+        };
+        assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{instance:.20}");
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+    // The same checks, unshared, are validated.
+    let f = run(
+        &p,
+        "v",
+        vec![Value::text(&list), Value::text(r#"{"uniqueItems":true}"#)],
+    );
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
+    let f = run(&p, "v", vec![Value::text("799"), Value::text(&enum_leaf)]);
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
+}
+
+/// Class syntax of the `re` engine that ECMAScript reads differently is escaped or refused.
+#[test]
+fn class_syntax_keeps_its_ecmascript_meaning() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let w = "\\".repeat(2) + "w";
+    let cases: Vec<(String, String, Result<i64, &str>)> = vec![
+        ("\"&\"".into(), "^[a&&b]$".into(), Ok(0)),
+        ("\"a\"".into(), "^[a&&b]$".into(), Ok(0)),
+        ("\"x\"".into(), "^[a&&b]$".into(), Ok(1)),
+        ("\"~\"".into(), "^[a~~b]$".into(), Ok(0)),
+        ("\"[\"".into(), "^[a[b]$".into(), Err("Invalid")),
+        ("\"_\"".into(), format!("^[{w}-z]$"), Err("Invalid")),
+        ("\"-\"".into(), format!("^[{w}-]$"), Ok(0)),
+        ("\"b\"".into(), "^[a-c]$".into(), Ok(0)),
+        ("\"-\"".into(), "^[a--b]$".into(), Err("Invalid")),
+        ("\"-\"".into(), format!("^[a-{w}]$"), Err("Invalid")),
+    ];
+    for (instance, pattern, want) in cases {
+        let schema = format!("{{\"pattern\":\"{pattern}\"}}");
+        let got = violations(&p, &instance, &schema);
+        assert_eq!(
+            got,
+            want.map_err(str::to_owned),
+            "{instance} against {pattern}"
+        );
+    }
+}
+
+/// The machine's own map paths (`m[k]`, `m[k] = v`, `in`) carry the labels inside a composite
+/// key, and of every key on the path.
+#[test]
+fn machine_map_paths_carry_interior_key_labels() {
+    let p = prepared(
+        &r"
+fn index(s: Int) -> Int { map.from([((5, 0), 1)])[(s, 0)] }
+fn missing(s: Int) -> Int {
+  try { map.from([((5, 0), 1)])[(s + 1, 0)] } catch e { 0 }
+}
+fn missing_error(s: Int) -> Untrusted<Str> {
+  try { let n = map.from([((5, 0), 1)])[(s + 1, 0)]; 'none' } catch e { e.message }
+}
+fn assign(s: Int) -> Int {
+  var m = map.from([((5, 0), 1)])
+  m[(s, 0)] = 2
+  map.len(m)
+}
+fn member(s: Int) -> Bool { (s, 0) in map.from([((5, 0), 1)]) }
+fn stored(s: Int) -> Bool { (5, 0) in map.from([((s, 0), 1)]) }
+"
+        .replace('\'', "\""),
+    );
+    for name in ["index", "assign", "member", "stored", "missing_error"] {
+        let f = run(&p, name, vec![Value::int(5).with_labels(SECRET)]);
+        assert!(scan(&f).contains(SECRET), "{name} dropped the label");
+    }
+}
