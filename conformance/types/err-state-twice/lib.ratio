@@ -1,3 +1,5 @@
+// expect: parse-ok
+
 state: { more: Int } = { more: 0 }
 
 pub fn one() -> Int { 1 }

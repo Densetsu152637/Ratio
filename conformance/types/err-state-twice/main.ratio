@@ -1,4 +1,4 @@
-// expect: check-error C0030 at 1:1 in lib.ratio
+// expect: check-error C0030 at 3:1 in lib.ratio
 // expect: check-error C0030 at 9:1
 
 // A package declares one `state`, in whichever of its files: a second is refused.
