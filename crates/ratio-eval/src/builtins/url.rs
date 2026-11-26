@@ -385,10 +385,11 @@ fn parse_host(host: &str, special: bool) -> Option<String> {
     {
         return None;
     }
-    let lower = host.to_ascii_lowercase();
     if !special {
-        return Some(lower);
+        // A non-special host keeps its case, as the standard keeps it; `url.host` lowers it.
+        return Some(host.to_owned());
     }
+    let lower = host.to_ascii_lowercase();
     match ipv4_host(&lower) {
         Ipv4::Address(addr) => Some(addr),
         Ipv4::Invalid => None,
@@ -528,7 +529,7 @@ fn parse_url(s: &str) -> Option<Parsed> {
         } else {
             let h = parse_host(host_text, special)?;
             // `localhost` is the local machine: the empty host of a `file` URL.
-            if scheme == "file" && h == "localhost" {
+            if scheme == "file" && h.eq_ignore_ascii_case("localhost") {
                 String::new()
             } else {
                 h
@@ -674,7 +675,7 @@ pub(super) fn host(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let t = text(cx, s)?;
     work::add(t.len().min(MAX_URL + 1) as u64);
     match parse_url(t) {
-        Some(u) if !u.host.is_empty() => new_text(cx, u.host, s.labels),
+        Some(u) if !u.host.is_empty() => new_text(cx, u.host.to_ascii_lowercase(), s.labels),
         _ => Ok(Value::none().with_labels(s.labels)),
     }
 }

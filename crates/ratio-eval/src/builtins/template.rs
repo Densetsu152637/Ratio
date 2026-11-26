@@ -259,7 +259,7 @@ struct Render {
 
 /// The value one step into `v` under `key`: a record's field or a map's `Str` key, with the
 /// labels of what was consulted added to `acc` on a miss and to the value on a hit.
-fn child(v: &Value, key: &str, acc: &mut Labels) -> Option<Value> {
+fn child(v: &Value, key: &str, acc: &mut Labels, work: &mut u64) -> Option<Value> {
     match &v.repr {
         Repr::Record(_) => {
             let found = v.field(key);
@@ -269,6 +269,8 @@ fn child(v: &Value, key: &str, acc: &mut Labels) -> Option<Value> {
             found
         }
         Repr::Map(m) => {
+            // Each comparison walks the key: counted with the walk's own work.
+            *work += crate::ops::log_work(m.len()).saturating_mul(key.len() as u64 + 1);
             if let Some((stored, x)) = m.get_entry(&Value::text(key)) {
                 Some(x.clone().with_labels(v.labels | stored.labels))
             } else {
@@ -318,14 +320,14 @@ impl Render {
         self.work += name.len() as u64 + 1;
         for scope in self.scopes.iter().rev() {
             self.work += 1;
-            if let Some(v) = child(scope, first, &mut self.acc) {
+            if let Some(v) = child(scope, first, &mut self.acc, &mut self.work) {
                 found = Some(v);
                 break;
             }
         }
         let mut cur = found?;
         for seg in segs {
-            cur = child(&cur, seg, &mut self.acc)?;
+            cur = child(&cur, seg, &mut self.acc, &mut self.work)?;
         }
         Some(cur)
     }

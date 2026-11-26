@@ -147,6 +147,10 @@ fn f5_relative_paths_stay_relative() {
            path.normalize(\"./C:\\\\Windows\"),\n\
            path.normalize(\"a/../c:\"),\n\
            text.show(path.relative_to(\"a/b\", \"a\")),\n\
+           text.show(path.relative_to(\"/a/C:/x\", \"/a\")),\n\
+           text.show(path.relative_to(\"C:/a/D:/x\", \"C:/a\")),\n\
+           text.show(path.relative_to(\"C:a/D:/x\", \"C:a\")),\n\
+           text.show(path.relative_to(\"//s/sh/C:/x\", \"//s/sh\")),\n\
            path.normalize(\"C:/a/../x\"),\n\
          ] }",
     );
@@ -170,6 +174,10 @@ fn f5_relative_paths_stay_relative() {
             "./C:/Windows",
             "./c:",
             "b",
+            "none",
+            "none",
+            "none",
+            "none",
             "C:/x"
         ]
     );
@@ -184,6 +192,7 @@ fn f6_file_hosts() {
            text.show(url.parse(\"file://u@h/x\")), text.show(url.host(\"file://localhost/x\")),\n\
            text.show(url.host(\"file://LOCALHOST/x\")), text.show(url.host(\"file://h/x\")),\n\
            text.show(url.host(\"foo://H.COM/\")), text.show(url.host(\"http://LocalHost/\")),\n\
+           text.show(url.parse(\"foo://H.COM/\")?.host), text.show(url.parse(\"HTTP://H.COM/\")?.host),\n\
          ] }",
     );
     let f = run(&p, "main", vec![Value::text("")]);
@@ -206,7 +215,9 @@ fn f6_file_hosts() {
             "none",
             "h",
             "h.com",
-            "localhost"
+            "localhost",
+            "H.COM",
+            "h.com"
         ]
     );
 }

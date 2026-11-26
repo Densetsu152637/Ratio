@@ -281,9 +281,7 @@ pub(super) fn relative_to(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError
         return Ok(none());
     }
     let rest = &pc[bc.len()..];
-    if rest.first() == Some(&"..")
-        || (pp.root.is_empty() && rest.first().is_some_and(|c| drive_like(c)))
-    {
+    if rest.first() == Some(&"..") || rest.first().is_some_and(|c| drive_like(c)) {
         // Only a relative `p` that climbs out of its start has `..` left: not under `base`.
         return Ok(none());
     }
