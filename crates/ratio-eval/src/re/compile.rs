@@ -40,6 +40,9 @@ pub(crate) struct Program {
     pub slots: u32,
     /// The weight (instructions, literal variants and set weights).
     pub weight: u64,
+    /// The compile steps counted: one per node compiled (every repeated copy walks its node
+    /// again), plus the weight emitted.
+    pub steps: u64,
     /// Whether every match must start at the start of the text (the pattern begins with `\A`).
     pub anchored: bool,
 }
@@ -48,17 +51,22 @@ struct Compiler {
     insts: Vec<Inst>,
     sets: Vec<Set>,
     weight: u64,
+    steps: u64,
 }
+
+/// The most compile steps a pattern may take (the program's size limit refuses most first).
+pub(crate) const MAX_COMPILE_STEPS: u64 = 8 * MAX_PROGRAM;
 
 type R<T> = Result<T, String>;
 
-/// Compiles a parsed pattern; a refusal comes with the weight compiled before it (the work
-/// it cost).
+/// Compiles a parsed pattern; a refusal comes with the compile steps taken before it (the
+/// work it cost).
 pub(crate) fn compile(parsed: &Parsed) -> Result<Program, (String, u64)> {
     let mut c = Compiler {
         insts: Vec::new(),
         sets: Vec::new(),
         weight: 0,
+        steps: 0,
     };
     let body = |c: &mut Compiler| -> R<()> {
         c.emit(Inst::Save(0), 1)?;
@@ -68,7 +76,7 @@ pub(crate) fn compile(parsed: &Parsed) -> Result<Program, (String, u64)> {
         Ok(())
     };
     if let Err(e) = body(&mut c) {
-        return Err((e, c.weight));
+        return Err((e, c.steps + c.weight));
     }
     Ok(Program {
         anchored: starts_anchored(&parsed.node),
@@ -76,6 +84,7 @@ pub(crate) fn compile(parsed: &Parsed) -> Result<Program, (String, u64)> {
         sets: c.sets,
         slots: 2 * (parsed.groups + 1),
         weight: c.weight,
+        steps: c.steps + c.weight,
     })
 }
 
@@ -128,6 +137,10 @@ impl Compiler {
     }
 
     fn node(&mut self, node: &Node) -> R<()> {
+        self.steps += 1;
+        if self.steps > MAX_COMPILE_STEPS {
+            return Err(too_large());
+        }
         match node {
             Node::Empty => {}
             Node::Chars(cs) => {

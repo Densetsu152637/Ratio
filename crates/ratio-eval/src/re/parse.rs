@@ -113,7 +113,10 @@ impl Frame {
     }
 }
 
+/// A concatenation, without its parts that match nothing (`(?:)`), so no repetition copy
+/// walks them again.
 fn concat(mut v: Vec<Node>) -> Node {
+    v.retain(|n| !is_nothing(n));
     match v.len() {
         0 => Node::Empty,
         1 => v.pop().unwrap_or(Node::Empty),

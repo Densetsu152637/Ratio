@@ -8,7 +8,8 @@
 //! **Charges** (`product`): before running, `(n + 1) · W · (1 + k) + c` work, where `n` is the
 //! text's characters, `W` the program's weight, `k` the slots the search tracks (0 for
 //! `is_match`, 2 for spans, every group's for `captures` and for a replacement that refers to
-//! groups) and `c` the compile work (four units per pattern character, and `W`), the text's characters
+//! groups) and `c` the compile work (sixteen units per pattern character, and the counted compile
+//! steps: one per node compiled, every repeated copy included, and the weight emitted), the text's characters
 //! and the replacement's; and the VM's working memory on the heap. The compile work is charged
 //! whether or not the pattern was already compiled, and a refused pattern is charged the work
 //! it took to refuse. A single search counts at most four times its charge. Iterating

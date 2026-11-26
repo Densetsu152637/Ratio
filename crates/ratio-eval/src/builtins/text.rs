@@ -598,17 +598,23 @@ pub(super) fn wrap(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let t = text(cx, arg(cx, args, 0)?)?;
     let width = usize::try_from(int_or(cx, args, 1, 80)?.max(1)).unwrap_or(usize::MAX);
     scan(cx, 2 * t.len());
-    let mut o = String::with_capacity(t.len());
-    let mut para: Vec<&str> = Vec::new();
-    let flush = |para: &mut Vec<&str>, o: &mut String| {
-        if para.is_empty() {
-            return;
+    // Streamed: each word is written as it is read, so nothing but the output is kept.
+    let mut o = String::new();
+    let mut in_para = false;
+    let mut col = 0;
+    for line in t.lines() {
+        if is_blank(line) {
+            in_para = false;
+            continue;
         }
-        if !o.is_empty() {
-            o.push_str("\n\n");
+        if !in_para {
+            if !o.is_empty() {
+                o.push_str("\n\n");
+            }
+            in_para = true;
+            col = 0;
         }
-        let mut col = 0;
-        for w in para.iter().flat_map(|l| l.split_whitespace()) {
+        for w in line.split_whitespace() {
             let wl = w.chars().count();
             if col > 0 && col + 1 + wl > width {
                 o.push('\n');
@@ -620,16 +626,7 @@ pub(super) fn wrap(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             o.push_str(w);
             col += wl;
         }
-        para.clear();
-    };
-    for line in t.lines() {
-        if is_blank(line) {
-            flush(&mut para, &mut o);
-        } else {
-            para.push(line);
-        }
     }
-    flush(&mut para, &mut o);
     out(cx, o, labels)
 }
 
@@ -765,7 +762,8 @@ pub(super) fn extract_json(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtErro
 /// The length of the bracketed span at the start of `b` (`{…}` or `[…]`), skipping brackets
 /// inside strings, or `None` when it does not close.
 fn balanced_end(b: &[u8], work: &mut u64) -> Option<usize> {
-    let mut stack: Vec<u8> = Vec::new();
+    // No deeper span would parse (JSON nesting is limited), so the stack is bounded too.
+    let mut stack: Vec<u8> = Vec::with_capacity(crate::json::MAX_JSON_DEPTH + 1);
     let mut in_str = false;
     let mut escaped = false;
     for (i, &c) in b.iter().enumerate() {
@@ -781,6 +779,7 @@ fn balanced_end(b: &[u8], work: &mut u64) -> Option<usize> {
         }
         match c {
             b'"' => in_str = true,
+            b'{' | b'[' if stack.len() > crate::json::MAX_JSON_DEPTH => return None,
             b'{' => stack.push(b'}'),
             b'[' => stack.push(b']'),
             b'}' | b']' => {

@@ -20,8 +20,12 @@ repository.
   empty `fill` leaves `pad_start` and `pad_end` text as it is (chapter 06).
 - `re.replace`'s `with` is a keyword, so it is passed by position only (chapter 06).
 - `text.pad_start` and `text.pad_end` are charged for their fill as input (chapter 06).
-- A pure built-in is offloaded by its charge before running as well as by its input size
-  (chapter 01).
+- A pure built-in is offloaded by its charge before running as well as by its input size, and a
+  built-in that debits as it goes (an iteration over matches) whenever the steps left exceed the
+  threshold (chapter 01).
+- A pattern's compile work is its counted compile steps (one per node compiled, every repeated
+  copy included), and parts that match nothing are dropped before compiling; the `product` row
+  points to the `re` charges, where later work and output are debited as they go (chapter 06).
 
 **Changes in draft 0.13** (kept for reference). Errata from stage 6, the IR and the core interpreter. No grammar
 change.

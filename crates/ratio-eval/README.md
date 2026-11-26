@@ -148,7 +148,8 @@ its compiled patterns (at most 32, keyed by site and pattern text, charged to th
 **Charges.** The `re` built-ins are charged as `product`: before running, the text's characters
 plus one, times the program's weight times one plus the slots the search tracks (0 for
 `is_match`, 2 for spans, every group's for `captures` and for a replacement that names groups),
-plus the compile work (four units per pattern character and the program's weight, charged on a
+plus the compile work (sixteen units per pattern character and the counted compile steps, one per
+node compiled with every repeated copy and parts that match nothing dropped first, charged on a
 cache hit as on a miss; a refused pattern is charged the work its refusal took) and the
 characters of the text and the replacement. The output is charged as it is built: one unit per
 element (a match record's three fields, a group, a named entry, a split part) and per character.
@@ -167,7 +168,8 @@ Chapter 06 lists `re` under `linear`; the difference is a proposed erratum.
 gets a `PoolSession` (`Evaluation::offload_to`). A pure built-in without callbacks whose input
 passes the thresholds (`OFFLOAD_TEXT_BYTES`, 64 KiB of one text argument;
 `OFFLOAD_ELEMENTS`, 16,384 elements of one container; or `OFFLOAD_STEPS`, a charge before
-running of more than ten checkpoints, as for a heavy pattern over a short text) runs on a worker while `Machine::run`
+running of more than ten checkpoints, as for a heavy pattern over a short text; and the
+iterating `re` built-ins, which debit as they go, whenever the steps left exceed that) runs on a worker while `Machine::run`
 returns `Suspend::Wait`; the `Evaluation` future registers its waker with the job and the
 cancellation token and returns `Pending`, so the thread serves other sessions. The steps and the
 working memory are charged before dispatch exactly as inline, so results, labels and charges

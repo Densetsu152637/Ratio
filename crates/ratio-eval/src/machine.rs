@@ -1068,7 +1068,7 @@ impl Machine {
         match builtin.imp {
             Imp::Pure(f) => {
                 let steps_left = self.limits.steps.saturating_sub(self.steps);
-                if let Some(session) = self.offload_for(builtin, args, pre) {
+                if let Some(session) = self.offload_for(builtin, args, pre, steps_left) {
                     let p = Arc::clone(&self.p);
                     let heap = self.heap.clone();
                     let cancel = self.cancel.clone();
@@ -1147,20 +1147,23 @@ impl Machine {
     }
 
     /// The session to run this call on, when there is a pool and the call is large: an
-    /// argument past the thresholds, or a charge before running of more than
-    /// [`crate::pool::OFFLOAD_STEPS`] (a heavy pattern over a short text).
+    /// argument past the thresholds, a charge before running of more than
+    /// [`crate::pool::OFFLOAD_STEPS`] (a heavy pattern over a short text), or a built-in that
+    /// debits as it goes (an iteration over matches) when the steps left could pay for more.
     fn offload_for(
         &self,
         builtin: Builtin,
         args: &[Option<Value>],
         pre: u64,
+        steps_left: u64,
     ) -> Option<PoolSession> {
         let session = self.offload.as_ref()?;
         if !builtin.offloadable() {
             return None;
         }
         let t = session.thresholds();
-        (pre > t.steps || args.iter().flatten().any(|v| large(v, t))).then(|| session.clone())
+        let heavy = pre > t.steps || (builtin.debits_as_it_goes() && steps_left > t.steps);
+        (heavy || args.iter().flatten().any(|v| large(v, t))).then(|| session.clone())
     }
 
     /// The compiled pattern of a `re` call (its first argument), from the call site's cache.

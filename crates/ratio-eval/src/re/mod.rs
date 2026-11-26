@@ -26,12 +26,12 @@ pub(crate) struct Regex {
     pub names: Vec<(String, u32)>,
     /// The capturing groups, the whole match (group 0) included.
     pub groups: u32,
-    /// The work compiling took: four units per pattern character and the program's weight.
+    /// The work compiling took: sixteen units per pattern character and the compile steps.
     pub compile_work: u64,
 }
 
-/// A refused pattern: why, and the work it took to find out (its characters and the program
-/// weight compiled before the refusal).
+/// A refused pattern: why, and the work it took to find out (its characters and the compile
+/// steps taken before the refusal).
 #[derive(Clone, Debug)]
 pub(crate) struct Refusal {
     pub message: String,
@@ -47,19 +47,19 @@ impl Regex {
                 work: 0,
             });
         }
-        // Parsing and compiling cost a few units per pattern character, and one per unit of
-        // program weight.
-        let chars = 4 * pattern.chars().count() as u64;
+        // Parsing costs a few units per pattern character; compiling, its counted steps (one
+        // per node compiled, every repeated copy included, and the weight emitted).
+        let chars = 16 * pattern.chars().count() as u64;
         let parsed = parse::parse(pattern).map_err(|message| Refusal {
             message,
             work: chars,
         })?;
-        let program = compile::compile(&parsed).map_err(|(message, weight)| Refusal {
+        let program = compile::compile(&parsed).map_err(|(message, steps)| Refusal {
             message,
-            work: chars + weight,
+            work: chars + steps,
         })?;
         Ok(Regex {
-            compile_work: chars + program.weight,
+            compile_work: chars + program.steps,
             program,
             names: parsed.names,
             groups: parsed.groups + 1,

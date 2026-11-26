@@ -163,6 +163,9 @@ pub(crate) struct Builtin {
 const OFFLOAD: u8 = 1;
 /// A `re` built-in: its first argument is a pattern, compiled before it is charged.
 const REGEX: u8 = 2 | OFFLOAD;
+/// A `re` built-in that iterates over matches, debiting its later work as it goes: with a
+/// pool, it is offloaded whenever the steps left could pay for a long run.
+const REGEX_ITER: u8 = 4 | REGEX;
 const NONE: u8 = 0;
 
 impl Builtin {
@@ -172,6 +175,11 @@ impl Builtin {
 
     pub(crate) fn regex(&self) -> bool {
         self.flags & REGEX == REGEX
+    }
+
+    /// Whether it debits work as it goes (beyond what was charged before running).
+    pub(crate) fn debits_as_it_goes(&self) -> bool {
+        self.flags & REGEX_ITER == REGEX_ITER
     }
 
     /// The sizes of a call with these arguments (and pattern, for `re`). A pattern that did
@@ -366,12 +374,12 @@ table! {
     "text.quote", Linear, A(s_two), OFFLOAD, Imp::Pure(t::quote);
     "re.is_match", Product, R(regex::s_is_match), REGEX, Imp::Pure(regex::is_match);
     "re.find", Product, R(regex::s_find), REGEX, Imp::Pure(regex::find);
-    "re.find_all", Product, R(regex::s_find), REGEX, Imp::Pure(regex::find_all);
+    "re.find_all", Product, R(regex::s_find), REGEX_ITER, Imp::Pure(regex::find_all);
     "re.captures", Product, R(regex::s_captures), REGEX, Imp::Pure(regex::captures);
-    "re.captures_all", Product, R(regex::s_captures), REGEX, Imp::Pure(regex::captures_all);
+    "re.captures_all", Product, R(regex::s_captures), REGEX_ITER, Imp::Pure(regex::captures_all);
     "re.replace", Product, R(regex::s_replace), REGEX, Imp::Pure(regex::replace);
-    "re.replace_all", Product, R(regex::s_replace), REGEX, Imp::Pure(regex::replace_all);
-    "re.split", Product, R(regex::s_find), REGEX, Imp::Pure(regex::split);
+    "re.replace_all", Product, R(regex::s_replace), REGEX_ITER, Imp::Pure(regex::replace_all);
+    "re.split", Product, R(regex::s_find), REGEX_ITER, Imp::Pure(regex::split);
     "re.escape", Linear, A(s_first), OFFLOAD, Imp::Pure(regex::escape);
     "map.get", Log, A(s_map_key), NONE, Imp::Pure(map_get);
     "map.set", Log, A(s_map_key), NONE, Imp::Pure(map_set);

@@ -243,13 +243,17 @@ fn main(s: Str) -> [Untrusted<Str>] {
         let (pooled, log) = run_on(&p, args.clone(), Limits::default(), Some(&session));
         assert_eq!(observed(&p, &inline), observed(&p, &pooled));
         if cfg!(debug_assertions) {
+            // `text.upper` goes to the pool for a large text only; the iterating `re`
+            // built-ins, which debit as they go, whenever the steps left are many.
             let big = args[0].as_text().unwrap().len() as u64 >= ratio_eval::OFFLOAD_TEXT_BYTES;
-            assert!(
-                log.iter()
-                    .filter(|w| w.name.starts_with("text.u") || w.name.starts_with("re."))
-                    .all(|w| w.offloaded == big),
-                "{log:?}"
-            );
+            for w in &log {
+                if w.name == "text.upper" {
+                    assert_eq!(w.offloaded, big, "{log:?}");
+                }
+                if w.name.starts_with("re.") {
+                    assert!(w.offloaded, "{log:?}");
+                }
+            }
         }
     }
 }
@@ -501,8 +505,8 @@ fn twice(p: Str) -> Int { fails(|| re.is_match(p, "")) + fails(|| re.is_match(p,
     for pattern in [format!("{})", "[a-z]".repeat(800)), "[a-z]".repeat(800)] {
         let one = support::run(&p, "once", vec![Value::text(&pattern)]).steps;
         let two = support::run(&p, "twice", vec![Value::text(&pattern)]).steps;
-        // Four units a character: at least 4 × 4,000 / 64 = 250 steps, on a hit as on a miss.
-        assert!(one > 250, "`{}…` charged {one} steps", &pattern[..10]);
+        // Sixteen units a character: at least 16 × 4,000 / 64 = 1,000 steps, on a hit as on a miss.
+        assert!(one > 1_000, "`{}…` charged {one} steps", &pattern[..10]);
         assert!(
             two >= 2 * one - 20,
             "a cached pattern was charged less: {one} then {two}"
@@ -527,4 +531,71 @@ fn match_lists_are_charged_for_their_output() {
     assert_eq!(v.as_int(), Some(i64::try_from(n).unwrap() + 1));
     // Four output units a match record, beyond the search's own charge.
     assert!(f.steps > 4 * n as u64 / 64, "charged {} steps", f.steps);
+}
+
+#[test]
+fn an_iteration_over_a_short_text_runs_on_the_pool_with_the_same_charges() {
+    // `.*z|a` rescans after every match: the pre-charge is small, but the call debits as it
+    // goes, so with a pool it never holds the evaluation's thread.
+    let p = support::prepared(
+        r#"fn main(s: Str) -> Int { re.find_all(".*z|a", s, limit: 1000000).len() }"#,
+    );
+    let args = || vec![secret(&"a".repeat(2_000))];
+    let pool = Pool::new(1);
+    let session = pool.session();
+    let (inline, _) = run_on(&p, args(), Limits::default(), None);
+    let (pooled, log) = run_on(&p, args(), Limits::default(), Some(&session));
+    assert_eq!(observed(&p, &inline), observed(&p, &pooled));
+    if cfg!(debug_assertions) {
+        assert!(
+            log.iter().any(|w| w.name == "re.find_all" && w.offloaded),
+            "{log:?}"
+        );
+    }
+    // With few steps left it stays inline, and still pays as it goes.
+    let few = Limits {
+        steps: 5_000,
+        ..Limits::default()
+    };
+    let (f, log) = run_on(&p, args(), few, Some(&session));
+    if cfg!(debug_assertions) {
+        assert!(log.iter().all(|w| !w.offloaded), "{log:?}");
+    }
+    assert!(matches!(f.outcome, Outcome::Raised(_)));
+}
+
+#[test]
+fn wrapping_streams_its_words() {
+    let p = support::prepared("fn wrap(s: Str) -> Int { text.len(text.wrap(s)) }");
+    let s = Value::text(&"a\n".repeat(2_000_000));
+    let f = support::run_with(&p, "wrap", vec![s], Limits::default());
+    let Outcome::Returned(v) = f.outcome else {
+        panic!("raised")
+    };
+    assert_eq!(v.as_int(), Some(3_999_999));
+    // The output and nothing proportional to the lines.
+    assert!(f.heap_peak < 5 * 1024 * 1024, "heap peak {}", f.heap_peak);
+}
+
+#[test]
+fn compiling_charges_every_node_it_walks() {
+    let p = support::prepared(r#"fn main(p: Str) -> Bool { re.is_match(p, "a") }"#);
+    let traversal = format!("(?:(?:{}a){{100}}){{100}}", "(?:)".repeat(990));
+    let started = Instant::now();
+    let f = support::run_with(&p, "main", vec![Value::text(&traversal)], Limits::default());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    // The empty groups are dropped; the 10,000 copies of `a` exceed the program's size.
+    let Outcome::Raised(e) = &f.outcome else {
+        panic!("compiled")
+    };
+    assert_eq!(e.kind(&p), "Invalid");
+    // A nested pattern that compiles is charged its copies, not only its characters.
+    let nested = "(?:(?:(?:a|b|c|d)x){20}){20}";
+    let f = support::run_with(&p, "main", vec![Value::text(nested)], Limits::default());
+    assert!(matches!(f.outcome, Outcome::Returned(_)));
+    assert!(f.steps > 20 * 20 * 12 / 64, "charged {} steps", f.steps);
 }

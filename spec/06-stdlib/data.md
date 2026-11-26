@@ -43,7 +43,7 @@ does.
 | `const` | 1 | `text.len`, `text.is_empty`, `list.len`, `list.is_empty`, `list.first`, `list.last`, `map.len`, `map.is_empty`, `json.type_of`; every `math` built-in on scalars (`abs`, `sign`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `trunc`, `to_float`, `sqrt`, `pow`, `exp`, `ln`, `log2`, `log10`, `is_nan`); `time.add`, `time.diff`, `time.date`, `time.duration`, `time.seconds`, `time.show` |
 | `log` | ⌈log2(n + 1)⌉; for a map built-in, times the key's size \|k\|, since every comparison walks the key (so are `m[k]`, `k in m` and `m[k] = v`) | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
 | `nlogn` | n · ⌈log2(n + 1)⌉; `list.sort_by` adds W · ⌈log2(n + 1)⌉ for keys of total weight W | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
-| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`; for a `re` built-in, the text's characters plus one and the compiled pattern's size, below) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff`, `re.is_match`, `re.find`, `re.find_all`, `re.captures`, `re.captures_all`, `re.replace`, `re.replace_all`, `re.split` |
+| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`; for a `re` built-in, the text's characters plus one and the compiled pattern's size, under [`re`](#re), where an iteration's later work and the output are debited as they are done) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff`, `re.is_match`, `re.find`, `re.find_all`, `re.captures`, `re.captures_all`, `re.replace`, `re.replace_all`, `re.split` |
 | `output` | m; for `text.pad_start` and `text.pad_end`, plus the fill's characters | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
 | `linear` | n + m | Every other pure built-in of this page (for example `list.map`, `list.filter`, `text.split`, `text.contains`, `text.replace`, `json.parse`, `hash.stable`, `template.render`) |
 
@@ -142,8 +142,9 @@ untrusted text are untrusted. `with` is a keyword, so it is passed by position o
 compiled program's size times one plus the capture slots the search tracks (none for
 `re.is_match`, the match's span for `find`, `find_all` and `split`, every group's for the
 `captures` built-ins and for a replacement that refers to groups); c is the compile work (a few
-units per pattern character and the program's size, charged whether or not the pattern was
-already compiled, and the work of the refusal for a pattern that does not compile) plus the
+units per pattern character and the counted compile steps, one per node compiled with every
+repeated copy walked again, charged whether or not the pattern was already compiled, and the
+steps taken before the refusal for a pattern that does not compile) plus the
 characters of the text and of `with`. Iterating (`find_all`, `captures_all`, `replace_all`,
 `split`) searches again from each match's end, which a pathological pattern can make quadratic,
 as in Rust's `regex`: work past a fixed multiple of the charge is debited as it is done, so the

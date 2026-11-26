@@ -287,20 +287,6 @@ fn builtins_txt_is_generated_from_chapter_06() {
     );
 }
 
-/// Built-ins whose implemented class differs from chapter 06, pending a proposed erratum: a
-/// regex search costs the text's length times the compiled program's size, so the
-/// implementation charges `re` as `product` (text × program), not `linear`.
-const CLASS_ERRATA: &[(&str, &str)] = &[
-    ("re.is_match", "product"),
-    ("re.find", "product"),
-    ("re.find_all", "product"),
-    ("re.captures", "product"),
-    ("re.captures_all", "product"),
-    ("re.replace", "product"),
-    ("re.replace_all", "product"),
-    ("re.split", "product"),
-];
-
 #[test]
 fn implemented_data_built_ins_have_their_chapter_06_class() {
     let generated = generate_builtins();
@@ -326,11 +312,7 @@ fn implemented_data_built_ins_have_their_chapter_06_class() {
         if !data(name) {
             continue;
         }
-        let want = CLASS_ERRATA
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or_else(|| spec.get(name).copied(), |(_, c)| Some(*c));
-        match want {
+        match spec.get(name).copied() {
             Some(c) if c == class.name() => {}
             Some(c) => problems.push(format!(
                 "{name}: implemented as {}, expected {c}",
