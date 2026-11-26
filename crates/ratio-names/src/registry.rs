@@ -8,14 +8,34 @@
 use std::collections::BTreeMap;
 
 use crate::path::RelPath;
-use crate::source::{PackageId, Source};
+use crate::source::{PackageId, PackageName, Source};
 
 /// A host's packages. Imperium's daemon registry implements it (chapter 10, stage 18).
 ///
-/// A package's **source root** is the folder its entry file was found in; every path the
-/// loader passes is relative to that root and already normalised ([`RelPath`]: no `..`, no
-/// absolute path, no `\` or `:`). The loader never asks this trait for `std`: built-in packages
-/// come from the library itself.
+/// A package's **source root** is the folder its entry file was found in. Every path the loader
+/// passes is relative to that package root and already normalised ([`RelPath`]: ASCII letters,
+/// digits, `_`, `-`, `.` and `/`; no `..`, no absolute path, no device name), and every name is
+/// a checked [`PackageName`]. The loader never asks this trait for `std`: built-in packages come
+/// from the library itself.
+///
+/// **What the host must guarantee.** The loader cannot see the file system, so these are the
+/// implementation's duties, and a registry that does less lets a package read outside its root:
+///
+/// - Open each path from an already-open handle on the package root, one component at a time,
+///   never following a link: a symbolic link, junction, mount point or other reparse point on
+///   any component, the package root and the source folders above it included, is
+///   [`RegistryError::Link`]. Check the file's attributes on the opened handle, not on the path
+///   (no check-then-open race).
+/// - Refuse hard links: a file with more than one link (`nlink > 1`) is [`RegistryError::Link`].
+/// - Match every component's name case-exactly against the name on disk, even on a
+///   case-insensitive file system, and treat a name that only matches case-insensitively as
+///   [`RegistryError::NotFound`].
+/// - Read at most `max_bytes`; the loader checks the length again and refuses a longer answer.
+///
+/// **Pinning is the host's.** The loader hands back every file's text
+/// ([`LoadedModule::source`](crate::LoadedModule::source)); the daemon pins a package by hashing
+/// those texts (the closure hash of chapter 07), and chooses which authored version `find`
+/// returns.
 pub trait Registry {
     /// The entry file of package `name` of `source`, relative to the package's root, or `None`
     /// when the source has no such package (or the source does not exist, such as a plugin that
@@ -24,12 +44,10 @@ pub trait Registry {
     /// # Errors
     ///
     /// The registry could not tell.
-    fn find(&self, source: &Source, name: &str) -> Result<Option<RelPath>, RegistryError>;
+    fn find(&self, source: &Source, name: &PackageName) -> Result<Option<RelPath>, RegistryError>;
 
-    /// The bytes of the file at `path` in `package`'s root. The registry must not follow links:
-    /// a symbolic link, junction or other reparse point anywhere on the path is
-    /// [`RegistryError::Link`]. A file longer than `max_bytes` is [`RegistryError::TooLarge`],
-    /// and the registry should not read more of it than that.
+    /// The bytes of the file at `path` in `package`'s root, opened as the trait's documentation
+    /// requires. A file longer than `max_bytes` is [`RegistryError::TooLarge`].
     ///
     /// # Errors
     ///
@@ -42,17 +60,19 @@ pub trait Registry {
     ) -> Result<Vec<u8>, RegistryError>;
 }
 
-/// Why a registry could not answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a registry could not answer. It carries no text: a host's error messages (which may name
+/// paths outside the package) never reach diagnostics or anything journalled; the host logs its
+/// own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistryError {
     /// No such file.
     NotFound,
-    /// The path is, or passes through, a symbolic link or another kind of link.
+    /// The path is, or passes through, a link (symbolic, hard, junction or reparse point).
     Link,
     /// The file is larger than the limit given.
     TooLarge,
-    /// Anything else (an I/O error), with a description for the diagnostic.
-    Other(String),
+    /// Anything else (an I/O error).
+    Other,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,8 +112,8 @@ impl MemoryRegistry {
 }
 
 impl Registry for MemoryRegistry {
-    fn find(&self, source: &Source, name: &str) -> Result<Option<RelPath>, RegistryError> {
-        let id = PackageId::new(source.clone(), name);
+    fn find(&self, source: &Source, name: &PackageName) -> Result<Option<RelPath>, RegistryError> {
+        let id = PackageId::new(source.clone(), name.clone());
         Ok(self.packages.get(&id).and_then(|p| p.entry.clone()))
     }
 

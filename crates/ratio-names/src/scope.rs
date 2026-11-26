@@ -243,6 +243,13 @@ impl Builder<'_> {
                 span,
             );
         }
+        if matches!(name, "trust" | "as_task" | "declassify") {
+            self.report(
+                Code::ShadowsTrustFunction,
+                format!("`{name}` shadows the prelude's `{name}`, so calls to it are not audited conversions"),
+                span,
+            );
+        }
     }
 
     fn report(&mut self, code: Code, message: String, span: Span) {

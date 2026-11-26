@@ -2,9 +2,11 @@
 //!
 //! An import path is relative to the importing file and must stay inside the root: `..` that
 //! leaves it and absolute paths are refused. The path is normalised here, before any registry
-//! sees it, and refused if it could mean something else on another platform (a `\`, a `:` for
-//! a drive or a stream, a trailing dot or space, a reserved device name such as `con`), so a
-//! registry is only ever asked for a plain relative path to a `.ratio` file.
+//! sees it. Its components hold only ASCII letters, digits, `_`, `-` and `.`: no `\`, no `:`
+//! (drives, streams), no `~` (8.3 short names), no space, control, invisible or look-alike
+//! character, and no name with two spellings under Unicode normalisation or case folding. A
+//! component may not end in a dot or be a device name such as `con`. A registry is therefore
+//! only ever asked for a plain relative path to a `.ratio` file.
 
 use std::fmt;
 
@@ -36,6 +38,12 @@ const DEVICES: [&str; 22] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
+
+/// Whether `word`, up to its first dot, is a Windows device name (in any letter case).
+pub(crate) fn is_device(word: &str) -> bool {
+    let stem = word.split('.').next().unwrap_or(word);
+    DEVICES.iter().any(|d| d.eq_ignore_ascii_case(stem))
+}
 
 /// The longest path accepted, in bytes.
 const MAX_PATH_BYTES: usize = 1024;
@@ -90,14 +98,11 @@ fn resolve(folder: &[&str], text: &str) -> Result<RelPath, PathError> {
     if text.starts_with('/') {
         return Err(PathError::Invalid("an absolute path"));
     }
-    if text.contains('\\') {
-        return Err(PathError::Invalid("a `\\` in a path (write `/`)"));
-    }
-    if text.contains(':') {
-        return Err(PathError::Invalid("a `:` in a path (a drive or a stream)"));
-    }
-    if text.chars().any(char::is_control) {
-        return Err(PathError::Invalid("a control character in a path"));
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/');
+    if !text.bytes().all(allowed) {
+        return Err(PathError::Invalid(
+            "a path may hold only ASCII letters, digits, `_`, `-`, `.` and `/`",
+        ));
     }
     let mut parts: Vec<&str> = folder.to_vec();
     for part in text.split('/') {
@@ -109,18 +114,13 @@ fn resolve(folder: &[&str], text: &str) -> Result<RelPath, PathError> {
                     return Err(PathError::Escapes);
                 }
             }
-            _ if part.ends_with('.') || part.ends_with(' ') => {
-                return Err(PathError::Invalid(
-                    "a path component ending in a dot or a space",
-                ));
+            _ if part.ends_with('.') => {
+                return Err(PathError::Invalid("a path component ending in a dot"));
             }
-            _ => {
-                let device = part.split('.').next().unwrap_or(part).trim_end();
-                if DEVICES.iter().any(|d| d.eq_ignore_ascii_case(device)) {
-                    return Err(PathError::Invalid("a reserved device name in a path"));
-                }
-                parts.push(part);
+            _ if is_device(part) => {
+                return Err(PathError::Invalid("a reserved device name in a path"));
             }
+            _ => parts.push(part),
         }
     }
     match parts.last() {
@@ -185,6 +185,14 @@ mod tests {
             "con.ratio",
             "lib/NUL.ratio",
             "Com1.x.ratio",
+            "CRITIC~1.ratio",
+            "lib/a b.ratio",
+            "\u{3c3}.ratio",        // σ
+            "\u{3c2}.ratio",        // ς, which folds to σ
+            "caf\u{e9}.ratio",      // é, NFC
+            "cafe\u{301}.ratio",    // é, NFD
+            "a\u{200b}.ratio",      // a zero-width space
+            "a\u{202e}oitar.ratio", // a right-to-left override
             ".ratio",
             "a.txt",
             "a\u{0}.ratio",

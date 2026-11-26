@@ -15,7 +15,7 @@ use crate::diag::{Code, Diagnostic};
 use crate::path::{PathError, RelPath};
 use crate::registry::{Registry, RegistryError};
 use crate::scope::{self, Scope};
-use crate::source::{Lookup, PackageId, QualifiedName, Source};
+use crate::source::{Lookup, PackageId, PackageName, QualifiedName, Source};
 use crate::version::Version;
 
 /// A loaded module: an index into [`Loaded::modules`].
@@ -35,8 +35,12 @@ pub struct Limits {
     pub max_modules: usize,
     /// Packages in one load (64).
     pub max_packages: usize,
-    /// The longest chain of imports from the entry (64).
+    /// The most modules in one chain of imports from the entry, the entry counted (64): the
+    /// entry may import a module that imports a module, and so on, 64 modules in all.
     pub max_import_depth: usize,
+    /// Calls to the registries (`find` and `read`) in one load (4096). Answers, failures
+    /// included, are remembered, so a name or path is asked about once.
+    pub max_registry_calls: usize,
 }
 
 impl Default for Limits {
@@ -48,6 +52,7 @@ impl Default for Limits {
             max_modules: 1024,
             max_packages: 64,
             max_import_depth: 64,
+            max_registry_calls: 4096,
         }
     }
 }
@@ -96,9 +101,10 @@ impl Loaded {
             && self.modules.iter().all(|m| m.syntax.is_empty())
     }
 
+    /// The module `id` names, or `None` for an id from another load.
     #[must_use]
-    pub fn module(&self, id: ModuleId) -> &LoadedModule {
-        &self.modules[id.0]
+    pub fn module(&self, id: ModuleId) -> Option<&LoadedModule> {
+        self.modules.get(id.0)
     }
 }
 
@@ -136,11 +142,14 @@ impl<'a> Loader<'a> {
             loader: self,
             modules: Vec::new(),
             by_path: HashMap::new(),
+            failed: HashMap::new(),
+            finds: HashMap::new(),
+            calls: 0,
             packages: BTreeMap::new(),
             diagnostics: Vec::new(),
         };
         let entry = match run
-            .find(name)
+            .find(name, None)
             .and_then(|(id, path)| run.open_package(&id, path, name))
         {
             Ok(entry) => Some(entry),
@@ -197,6 +206,11 @@ struct Run<'l, 'a> {
     loader: &'l Loader<'a>,
     modules: Vec<LoadedModule>,
     by_path: HashMap<(PackageId, RelPath), ModuleId>,
+    /// Opens that failed at the registry, so a path is asked about once.
+    failed: HashMap<(PackageId, RelPath), Failure>,
+    /// Every `find` answer, so a name is asked about once per source.
+    finds: HashMap<(Source, PackageName), Result<Option<RelPath>, RegistryError>>,
+    calls: usize,
     packages: BTreeMap<PackageId, PackageState>,
     diagnostics: Vec<Diagnostic>,
 }
@@ -210,16 +224,43 @@ impl Run<'_, '_> {
         }
     }
 
-    /// The first source, in trust order, that has the package.
-    fn find(&self, name: &QualifiedName) -> Result<(PackageId, RelPath), Failure> {
-        for source in name.candidates() {
-            match self.registry(&source).find(&source, &name.name) {
+    /// Counts one registry call, refusing it past the limit.
+    fn call(&mut self) -> Result<(), Failure> {
+        let max = self.loader.limits.max_registry_calls;
+        if self.calls >= max {
+            return Err((
+                Code::LimitExceeded,
+                format!("more than {max} registry calls in one load"),
+            ));
+        }
+        self.calls += 1;
+        Ok(())
+    }
+
+    /// The first source, in trust order, that has the package; `importer` is the importing
+    /// package's source (`None` for the entry).
+    fn find(
+        &mut self,
+        name: &QualifiedName,
+        importer: Option<&Source>,
+    ) -> Result<(PackageId, RelPath), Failure> {
+        for source in name.candidates(importer) {
+            let key = (source.clone(), name.name.clone());
+            let answer = if let Some(answer) = self.finds.get(&key) {
+                answer.clone()
+            } else {
+                self.call()?;
+                let answer = self.registry(&source).find(&source, &name.name);
+                self.finds.insert(key, answer.clone());
+                answer
+            };
+            match answer {
                 Ok(Some(entry)) => return Ok((PackageId::new(source, name.name.clone()), entry)),
                 Ok(None) => {}
                 Err(error) => {
                     return Err((
                         Code::Unreadable,
-                        format!("the registry could not look up `{name}`: {}", why(&error)),
+                        format!("the registry could not look up `{name}`: {}", why(error)),
                     ));
                 }
             }
@@ -276,6 +317,9 @@ impl Run<'_, '_> {
         if let Some(id) = self.by_path.get(&key) {
             return Ok(*id);
         }
+        if let Some(failure) = self.failed.get(&key) {
+            return Err(failure.clone());
+        }
         let (package, path) = key;
         let limits = self.loader.limits;
         if self.modules.len() >= limits.max_modules {
@@ -319,31 +363,33 @@ impl Run<'_, '_> {
             };
             (Code::TooLarge, message)
         };
-        let bytes = match self.registry(&package.source).read(&package, &path, max) {
-            Ok(bytes) if bytes.len() > max => return Err(too_large()),
-            Ok(bytes) => bytes,
-            Err(RegistryError::TooLarge) => return Err(too_large()),
+        self.call()?;
+        let read = match self.registry(&package.source).read(&package, &path, max) {
+            // The registry's answer is checked again: one that ignores `max_bytes` fails closed.
+            Ok(bytes) if bytes.len() > max => Err(too_large()),
+            Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+                let message = format!("`{path}` of {package} is not UTF-8");
+                (Code::Unreadable, message)
+            }),
+            Err(RegistryError::TooLarge) => Err(too_large()),
             Err(RegistryError::NotFound) => {
-                return Err((Code::FileNotFound, format!("no file `{path}` in {package}")));
+                Err((Code::FileNotFound, format!("no file `{path}` in {package}")))
             }
-            Err(RegistryError::Link) => {
-                return Err((
-                    Code::Link,
-                    format!("`{path}` of {package} is a link, and links are not followed"),
-                ));
-            }
-            Err(error @ RegistryError::Other(_)) => {
-                return Err((
-                    Code::Unreadable,
-                    format!("`{path}` of {package} could not be read: {}", why(&error)),
-                ));
-            }
-        };
-        let Ok(source) = String::from_utf8(bytes) else {
-            return Err((
+            Err(RegistryError::Link) => Err((
+                Code::Link,
+                format!("`{path}` of {package} is a link, and links are not followed"),
+            )),
+            Err(RegistryError::Other) => Err((
                 Code::Unreadable,
-                format!("`{path}` of {package} is not UTF-8"),
-            ));
+                format!("`{path}` of {package} could not be read"),
+            )),
+        };
+        let source = match read {
+            Ok(source) => source,
+            Err(failure) => {
+                self.failed.insert((package, path), failure.clone());
+                return Err(failure);
+            }
         };
         let state = self.packages.entry(package.clone()).or_default();
         state.bytes += source.len();
@@ -474,7 +520,7 @@ impl Run<'_, '_> {
         importer: &Source,
         name: &QualifiedName,
     ) -> Result<ModuleId, Failure> {
-        let (package, entry) = self.find(name)?;
+        let (package, entry) = self.find(name, Some(importer))?;
         if !importer.may_import(&package.source) {
             return Err((
                 Code::ImportRefused,
@@ -515,12 +561,14 @@ fn rule(importer: &Source) -> String {
     }
 }
 
-fn why(error: &RegistryError) -> String {
+/// A fixed description of a registry failure: the host's own error text never reaches a
+/// diagnostic.
+fn why(error: RegistryError) -> &'static str {
     match error {
-        RegistryError::NotFound => "not found".to_owned(),
-        RegistryError::Link => "a link".to_owned(),
-        RegistryError::TooLarge => "too large".to_owned(),
-        RegistryError::Other(why) => why.clone(),
+        RegistryError::NotFound => "not found",
+        RegistryError::Link => "a link",
+        RegistryError::TooLarge => "too large",
+        RegistryError::Other => "an I/O error",
     }
 }
 

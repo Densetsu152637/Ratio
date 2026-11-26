@@ -28,7 +28,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ratio_names::{
-    Area, Code, Loader, Lookup, MemoryRegistry, PackageId, QualifiedName, RelPath, Source,
+    Area, Code, Loader, Lookup, MemoryRegistry, PackageId, PackageName, QualifiedName, RelPath,
+    Source,
 };
 
 type Expected = (String, String, u32, u32);
@@ -160,7 +161,8 @@ fn run(world: &Path, failures: &mut Vec<String>) -> Vec<String> {
     for (source, root) in roots(world) {
         root_of.push((source.clone(), root.clone()));
         for package_dir in dirs(&world.join(&root)) {
-            let package = PackageId::new(source.clone(), name(&package_dir));
+            let package_name = PackageName::parse(&name(&package_dir)).unwrap();
+            let package = PackageId::new(source.clone(), package_name);
             let registry = if source == Source::Std {
                 &mut builtin
             } else {
@@ -210,7 +212,7 @@ fn run(world: &Path, failures: &mut Vec<String>) -> Vec<String> {
         .iter()
         .map(|d| match d.at {
             Some((module, span)) => {
-                let module = loaded.module(module);
+                let module = loaded.module(module).unwrap();
                 let root = &root_of
                     .iter()
                     .find(|(s, _)| *s == module.package.source)

@@ -1,0 +1,3 @@
+// expect: resolve-warning N0021 at 3:4
+
+fn trust() -> Int { 1 }

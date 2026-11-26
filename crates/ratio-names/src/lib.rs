@@ -31,7 +31,7 @@ pub use loader::{Limits, Loaded, LoadedModule, Loader, ModuleId};
 pub use path::{PathError, RelPath};
 pub use registry::{MemoryRegistry, Registry, RegistryError};
 pub use scope::{Binding, Resolution, Scope};
-pub use source::{Area, Lookup, PackageId, QualifiedName, Source};
+pub use source::{Area, Lookup, PackageId, PackageName, QualifiedName, Source};
 pub use version::{Op, Version, VersionReq};
 
 use ratio_syntax::ast::{StrPart, StringLit};

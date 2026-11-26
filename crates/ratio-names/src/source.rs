@@ -35,7 +35,8 @@ pub enum Source {
     Std,
     /// The user's `<config>/harnesses/`.
     User,
-    /// An approved plugin's `harnesses/`, named by the plugin.
+    /// An approved plugin's `harnesses/`, named by the plugin (one word of a package name; the
+    /// loader checks the names it reads, and a host making one checks its own).
     Plugin(String),
     /// A trusted project's `.imperium/harnesses/`.
     Project,
@@ -86,20 +87,56 @@ impl fmt::Display for Source {
     }
 }
 
-/// A registered package: its source and its name (`critics.strict`).
+/// A package name: dot-separated words (`critics.strict`). Each word is ASCII letters, digits,
+/// `_` and `-`, starts with a letter or `_`, and is not a Windows device name (`con`), so a
+/// name means one folder on every file system; [`Registry::find`](crate::Registry::find) only
+/// ever receives one of these.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackageName(String);
+
+/// The longest package or plugin name, in bytes.
+const MAX_NAME_BYTES: usize = 128;
+
+impl PackageName {
+    /// Checks a package name.
+    ///
+    /// # Errors
+    ///
+    /// A message saying what is wrong with the name.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if text.len() <= MAX_NAME_BYTES && text.split('.').all(is_word) {
+            Ok(PackageName(text.to_owned()))
+        } else {
+            Err(format!(
+                "`{text}` is not a package name (words of ASCII letters, digits, `_` and `-`, \
+                 joined by `.`; no device names)"
+            ))
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PackageName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A registered package: its source and its name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PackageId {
     pub source: Source,
-    pub name: String,
+    pub name: PackageName,
 }
 
 impl PackageId {
     #[must_use]
-    pub fn new(source: Source, name: impl Into<String>) -> Self {
-        PackageId {
-            source,
-            name: name.into(),
-        }
+    pub fn new(source: Source, name: PackageName) -> Self {
+        PackageId { source, name }
     }
 }
 
@@ -119,7 +156,8 @@ pub enum Lookup {
     /// A bare name (`debate`): `std`, then `user`. A package of a lower source is reached only by
     /// its qualified name, so it can neither shadow a higher one nor be picked up unasked.
     Bare,
-    /// `authored:<name>`: the session's area, then the environment's.
+    /// `authored:<name>`: in an authored package's import, its own area only; elsewhere the
+    /// session's area, then the environment's.
     Authored,
     /// One source (`std:debate`, `plugin:acme/review`, `authored:env/vote`).
     In(Source),
@@ -130,20 +168,23 @@ pub enum Lookup {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QualifiedName {
     pub lookup: Lookup,
-    /// The package name: dot-separated words.
-    pub name: String,
+    pub name: PackageName,
     /// The semver range after `@`, if any.
     pub range: Option<VersionReq>,
 }
 
 impl QualifiedName {
     /// The sources to look in, most trusted first; the first that has the name wins.
+    /// `importer` is the source of the importing package (`None` for the host's entry).
     #[must_use]
-    pub fn candidates(&self) -> Vec<Source> {
-        match &self.lookup {
-            Lookup::Bare => vec![Source::Std, Source::User],
-            Lookup::Authored => vec![Source::Authored(Area::Session), Source::Authored(Area::Env)],
-            Lookup::In(source) => vec![source.clone()],
+    pub fn candidates(&self, importer: Option<&Source>) -> Vec<Source> {
+        match (&self.lookup, importer) {
+            (Lookup::Bare, _) => vec![Source::Std, Source::User],
+            (Lookup::Authored, Some(Source::Authored(area))) => vec![Source::Authored(*area)],
+            (Lookup::Authored, _) => {
+                vec![Source::Authored(Area::Session), Source::Authored(Area::Env)]
+            }
+            (Lookup::In(source), _) => vec![source.clone()],
         }
     }
 
@@ -162,11 +203,6 @@ impl QualifiedName {
             None => (None, body),
         };
         let parts: Vec<&str> = path.split('/').collect();
-        for part in &parts {
-            if part.is_empty() || !part.split('.').all(is_word) {
-                return Err(format!("`{text}` is not a package name"));
-            }
-        }
         build(source, &parts, range)
     }
 
@@ -205,9 +241,11 @@ impl QualifiedName {
 impl fmt::Display for QualifiedName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.lookup {
-            Lookup::Bare => f.write_str(&self.name)?,
+            Lookup::Bare => write!(f, "{}", self.name)?,
             Lookup::Authored => write!(f, "authored:{}", self.name)?,
-            Lookup::In(source) => write!(f, "{}", PackageId::new(source.clone(), &*self.name))?,
+            Lookup::In(source) => {
+                write!(f, "{}", PackageId::new(source.clone(), self.name.clone()))?;
+            }
         }
         match &self.range {
             Some(range) => write!(f, "@{range}"),
@@ -216,12 +254,16 @@ impl fmt::Display for QualifiedName {
     }
 }
 
-/// A word of a package name: a letter or `_`, then letters, digits, `_` or `-` (the built-in
-/// packages' names have hyphens: `std:consul-escalation`).
+/// A word of a package or plugin name: an ASCII letter or `_`, then ASCII letters, digits, `_`
+/// or `-` (the built-in packages' names have hyphens: `std:consul-escalation`), and not a
+/// Windows device name.
 fn is_word(word: &str) -> bool {
-    let mut chars = word.chars();
-    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
-        && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    let mut bytes = word.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !crate::path::is_device(word)
 }
 
 fn build(
@@ -239,12 +281,15 @@ fn build(
             format!("`{text}` is not a version range (`^1.2`, `~1.2.3`, `=1.2.3`)")
         })?),
     };
-    let one = |lookup: Lookup| match parts {
-        [name] => Ok(QualifiedName {
+    let named = |lookup: Lookup, name: &str| {
+        Ok(QualifiedName {
             lookup,
-            name: (*name).to_owned(),
+            name: PackageName::parse(name)?,
             range,
-        }),
+        })
+    };
+    let one = |lookup: Lookup| match parts {
+        [name] => named(lookup, name),
         _ => Err(format!("`{written}` has a `/` its source does not take")),
     };
     match source {
@@ -253,13 +298,11 @@ fn build(
         Some("user") => one(Lookup::In(Source::User)),
         Some("project") => one(Lookup::In(Source::Project)),
         Some("plugin") => match parts {
-            [plugin, name] if !plugin.contains('.') => Ok(QualifiedName {
-                lookup: Lookup::In(Source::Plugin((*plugin).to_owned())),
-                name: (*name).to_owned(),
-                range,
-            }),
+            [plugin, name] if plugin.len() <= MAX_NAME_BYTES && is_word(plugin) => {
+                named(Lookup::In(Source::Plugin((*plugin).to_owned())), name)
+            }
             _ => Err(format!(
-                "`{written}` needs the form `plugin:<plugin>/<name>`"
+                "`{written}` needs the form `plugin:<plugin>/<name>`, the plugin one word"
             )),
         },
         Some("authored") => match parts {
@@ -274,11 +317,7 @@ fn build(
                         ));
                     }
                 };
-                Ok(QualifiedName {
-                    lookup: Lookup::In(Source::Authored(area)),
-                    name: (*name).to_owned(),
-                    range,
-                })
+                named(Lookup::In(Source::Authored(area)), name)
             }
             _ => Err(format!(
                 "`{written}` needs the form `authored:[<area>/]<name>`"

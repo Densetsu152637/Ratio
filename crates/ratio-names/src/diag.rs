@@ -66,13 +66,19 @@ codes! {
     PubImport => "N0019",
     /// A warning: a name that shadows a standard-library module.
     ShadowsStandardModule => "N0020",
+    /// A warning: a name that shadows `trust`, `as_task` or `declassify`, so a call that reads
+    /// as an audited conversion is not one.
+    ShadowsTrustFunction => "N0021",
 }
 
 impl Code {
     /// Whether the code is a warning; every other code is an error.
     #[must_use]
     pub const fn is_warning(self) -> bool {
-        matches!(self, Code::ShadowsStandardModule)
+        matches!(
+            self,
+            Code::ShadowsStandardModule | Code::ShadowsTrustFunction
+        )
     }
 
     /// The code spelled `text`, if there is one.
