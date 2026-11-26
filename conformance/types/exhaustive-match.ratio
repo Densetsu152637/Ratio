@@ -1,0 +1,65 @@
+// expect: check-ok
+
+enum Light { red, amber, green }
+
+fn next(l: Light) -> Light {
+  match l {
+    red => green,
+    amber => red,
+    green => amber,
+  }
+}
+
+fn bools(a: Bool, b: Bool) -> Int {
+  match (a, b) {
+    (true, true) => 3,
+    (true, false) => 2,
+    (false, _) => 1,
+  }
+}
+
+fn lists(xs: [Int]) -> Int {
+  match xs {
+    [] => 0,
+    [x] => x,
+    [x, y] => x + y,
+    [x, .., y] => x * y,
+  }
+}
+
+fn kinds(e: Error) -> Str {
+  match e.kind {
+    Denied { by: user } => "the user said no",
+    Denied { .. } => "denied",
+    Budget { which } if which == tokens => "out of tokens",
+    _ => "other",
+  }
+}
+
+fn or_patterns(l: Light) -> Bool {
+  match l {
+    red | amber => false,
+    green => true,
+  }
+}
+
+fn optional_enum(l: Light?) -> Int {
+  match l {
+    none => 0,
+    red => 1,
+    amber | green => 2,
+  }
+}
+
+fn records(p: { ok: Bool, n: Int }) -> Int {
+  match p {
+    { ok: true, n } => n,
+    { ok: false, .. } => 0,
+  }
+}
+
+fn nothing(n: Never) -> Int {
+  match n {
+    _ => 0,
+  }
+}

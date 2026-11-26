@@ -1,0 +1,23 @@
+// expect: check-error C0011 at 7:5
+// expect: check-error C0011 at 14:5
+// expect: check-error C0011 at 21:12
+
+fn f(x: Int) -> Int {
+  match x {
+    (a, b) => a,
+    _ => 0,
+  }
+}
+
+fn g(s: Str) -> Int {
+  match s {
+    1 => 1,
+    _ => 0,
+  }
+}
+
+fn h(x: Int?) -> Int {
+  match x {
+    none | n => 0,
+  }
+}

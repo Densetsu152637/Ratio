@@ -1,0 +1,12 @@
+// expect: check-error C0020 at 5:11
+// expect: check-error C0020 at 10:12
+
+fn f(c: Bool) -> Int {
+  let x = if c { 1 } else { "one" }
+  1
+}
+
+fn g() -> Int {
+  let xs = [1, "two"]
+  1
+}

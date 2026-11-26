@@ -1,0 +1,13 @@
+// expect: check-error C0010 at 5:7
+// expect: check-error C0010 at 10:7
+
+fn f(t: (Int, Int)) -> Int {
+  let (1, y) = t
+  y
+}
+
+fn g(xs: [Int?]) -> Int {
+  for none in xs {
+  }
+  0
+}

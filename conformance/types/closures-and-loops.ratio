@@ -1,0 +1,77 @@
+// expect: check-ok
+
+fn sums(xs: [Int]) -> Int {
+  var total = 0
+  for x in xs {
+    total += x
+  }
+  for i in 0..3 {
+    total = total + i
+  }
+  repeat 2 {
+    total *= 2
+  }
+  while total > 100 {
+    total -= 1
+  }
+  total
+}
+
+fn found(xs: [Int], target: Int) -> Bool {
+  var i = 0
+  loop {
+    if i >= list.len(xs) {
+      break false
+    }
+    if xs[i] == target {
+      break true
+    }
+    i += 1
+  }
+}
+
+fn pairs(m: Map<Str, Int>) -> Int {
+  var n = 0
+  for (k, v) in m {
+    n += v + text.len(k)
+  }
+  n
+}
+
+fn adders() -> [fn(Int) -> Int] {
+  let base = 10
+  let add = |x: Int| x + base
+  let twice = fn(x: Int) -> Int { add(add(x)) }
+  [add, twice]
+}
+
+fn early(xs: [Int]) -> Int {
+  for x in xs {
+    if x < 0 {
+      return x
+    }
+    continue
+  }
+  0
+}
+
+fn closure_return() -> [Int] {
+  [1, 2, 3].map(|x| {
+    if x > 1 {
+      return x * 10
+    }
+    x
+  })
+}
+
+fn pipes(words: [Str]) -> Int {
+  words |> list.take(2) |> list.len
+}
+
+fn par_and_race() -> (Int, Str) {
+  par { 1; "two" }
+}
+
+fn membership(xs: [Int]) -> Bool {
+  3 in xs and 2 in 0..5 and "a" in "abc"
+}

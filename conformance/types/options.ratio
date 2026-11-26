@@ -1,0 +1,39 @@
+// expect: check-ok
+
+type Entry = { key: Str, value?: Int }
+
+fn value_or_zero(e: Entry) -> Int {
+  e.value ?? 0
+}
+
+fn nested(x: Int??) -> Int? {
+  x
+}
+
+fn present(xs: [Int]) -> Int {
+  if let first = list.first(xs) {
+    first
+  } else {
+    0
+  }
+}
+
+fn split(entry: Str) -> Str {
+  if let (from, to) = text.split_once(entry, " -> ") {
+    from + to
+  } else {
+    entry
+  }
+}
+
+fn chained(e: Entry?) -> Int? {
+  e?.value ?? none
+}
+
+fn by_match(x: Int?) -> Int {
+  match x {
+    none => 0,
+    1 => 10,
+    n => n ?? 0,
+  }
+}

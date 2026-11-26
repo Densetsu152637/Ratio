@@ -1,0 +1,16 @@
+// expect: check-error C0015 at 6:3
+// expect: check-error C0015 at 10:3
+// expect: check-error C0015 at 15:3
+
+fn f(xs: [Int]) -> Int {
+  list.len::<Int, Str>(xs)
+}
+
+fn g() -> Int {
+  text.len::<Int>(1)
+}
+
+fn h(x: Int) -> Int {
+  let k = |y: Int| y
+  k::<Int>(x)
+}

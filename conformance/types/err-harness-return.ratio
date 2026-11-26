@@ -1,0 +1,5 @@
+// expect: check-error C0024 at 3:9
+
+harness h(x: Int) {
+  x
+}

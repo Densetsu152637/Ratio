@@ -1,0 +1,37 @@
+// expect: check-ok
+
+enum Verdict { pass, fail, Revise { notes: [Str], severity: Int } }
+enum Shape { Circle { r: Float }, Rect { w: Float, h: Float } }
+
+fn area(s: Shape) -> Float {
+  match s {
+    Circle { r } => 3.14 * r * r,
+    Rect { w, h } => w * h,
+  }
+}
+
+fn judge(score: Int) -> Verdict {
+  if score > 8 {
+    Verdict.pass
+  } else if score > 4 {
+    Revise { notes: ["tighten the proof"], severity: 2 }
+  } else {
+    fail
+  }
+}
+
+fn describe(v: Verdict) -> Str {
+  match v {
+    pass => "pass",
+    fail => "fail",
+    Verdict.Revise { notes, .. } => "revise: {list.len(notes)} notes",
+  }
+}
+
+fn is_pass(v: Verdict) -> Bool {
+  v is pass
+}
+
+fn results() -> [Result<Int>] {
+  [Ok { value: 1 }, Err { error: fail("tag", "went wrong") }]
+}

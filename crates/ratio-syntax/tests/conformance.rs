@@ -28,7 +28,8 @@
 //!
 //! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error`, `fixture` or, from
 //! stage 3, `resolve-ok`, `resolve-error` and `resolve-warning` (run by `ratio-names`'s own
-//! runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
+//! runner) and, from stage 4, `check-ok` and `check-warning` (with `check-error`, run by
+//! `ratio-check`'s runner) belong to later stages; the runner skips their checks, but each must still parse without a diagnostic
 //! (except `check-error` and `runtime-error` files that say otherwise with a parse expectation). The header ends at the first line that
 //! does not start with `// `; every header line must be one of these directives, so a misspelt
 //! one (`// token: …`) fails the file instead of being ignored.
@@ -102,8 +103,8 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
                     case.parse_errors.push(((*code).to_owned(), l, c));
                 }
                 [
-                    "ok" | "value" | "check-error" | "runtime-error" | "resolve-ok"
-                    | "resolve-error" | "resolve-warning",
+                    "ok" | "value" | "check-ok" | "check-error" | "check-warning" | "runtime-error"
+                    | "resolve-ok" | "resolve-error" | "resolve-warning",
                     ..,
                 ] => case.other_stage = true,
                 _ => {

@@ -1,0 +1,23 @@
+// expect: check-error C0007 at 10:11
+// expect: check-error C0007 at 14:10
+// expect: check-error C0007 at 14:12
+// expect: check-error C0007 at 18:3
+// expect: check-error C0007 at 22:3
+
+enum Verdict { pass, fail, Revise { notes: [Str] } }
+
+fn f() -> Verdict {
+  Verdict.maybe
+}
+
+fn g() -> Verdict {
+  Revise { note: ["x"] }
+}
+
+fn h() -> Verdict {
+  Verdict.Revise
+}
+
+fn j() -> Verdict {
+  Nope { x: 1 }
+}

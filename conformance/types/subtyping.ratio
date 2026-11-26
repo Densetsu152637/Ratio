@@ -1,0 +1,68 @@
+// expect: check-ok
+
+enum Verdict { pass, fail }
+
+fn as_str(u: UserText) -> Str {
+  u
+}
+
+fn as_brief(s: Str) -> Brief {
+  s
+}
+
+fn as_untrusted(b: Brief) -> Untrusted<Str> {
+  b
+}
+
+fn as_prompt(p: TrustedPrompt) -> Prompt {
+  p
+}
+
+fn as_option(x: Int) -> Int? {
+  x
+}
+
+fn never_fits(x: Int) -> Str {
+  if x > 0 {
+    "positive"
+  } else {
+    raise fail("negative", "x is not positive")
+  }
+}
+
+fn lists(xs: [UserText]) -> [Str] {
+  xs
+}
+
+fn records(r: { a: UserText, b: Int }) -> { a: Str, b: Int? } {
+  r
+}
+
+fn deep(v: Untrusted<{ pass: Bool, reasons: [Str] }>) -> Bool {
+  let reasons: [Untrusted<Str>] = v.reasons
+  v.pass and list.len(reasons) > 0
+}
+
+fn trusted_is_untrusted(v: Verdict) -> Untrusted<Verdict> {
+  v
+}
+
+fn functions(f: fn(Str) -> UserText) -> fn(UserText) -> Str {
+  f
+}
+
+harness h(x: Int) -> Int {
+  x
+}
+
+fn harness_is_fn() -> fn(Int) -> Int {
+  h
+}
+
+fn tuples(t: (UserText, Int)) -> (Str, Int?) {
+  t
+}
+
+fn maps(m: Map<Str, UserText>) -> Map<Str, Str> {
+  m
+}

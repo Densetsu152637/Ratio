@@ -1,0 +1,28 @@
+// expect: check-ok
+
+import "./shapes.ratio" as shapes
+import "./shapes.ratio" { Shape, area }
+
+fn total(xs: [Shape]) -> Float {
+  list.fold(xs, 0.0, |acc, s| acc + area(s))
+}
+
+fn one() -> shapes.Shape {
+  shapes.Shape.Square { side: 2.0 }
+}
+
+fn unit() -> shapes.Shape {
+  shapes.empty
+}
+
+fn kind(s: Shape) -> Int {
+  match s {
+    shapes.Shape.Square { .. } => 1,
+    Circle { .. } => 2,
+    None_ => 3,
+  }
+}
+
+fn origin() -> Float {
+  shapes.ORIGIN + shapes.area(one())
+}

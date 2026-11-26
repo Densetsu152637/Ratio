@@ -1,0 +1,17 @@
+// expect: check-error C0003 at 5:9
+// expect: check-error C0003 at 9:9
+// expect: check-error C0003 at 15:9
+
+fn f(m: Map<Str>) -> Int {
+  1
+}
+
+fn g(r: Result) -> Int {
+  1
+}
+
+type Pair<T> = (T, T)
+
+fn h(p: Pair<Int, Str>) -> Int {
+  1
+}

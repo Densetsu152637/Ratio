@@ -1,0 +1,12 @@
+// expect: check-error C0001 at 6:3
+// expect: check-error C0001 at 10:11
+// expect: check-error C0001 at 11:3
+
+fn f() -> Int {
+  missing + 1
+}
+
+fn g() -> Int {
+  let x = Str
+  list
+}

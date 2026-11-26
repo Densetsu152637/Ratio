@@ -1,0 +1,17 @@
+// expect: check-error C0005 at 8:5
+// expect: check-error C0005 at 12:5
+// expect: check-error C0005 at 16:6
+
+type Point = { x: Int, y: Int }
+
+fn f(p: Point) -> Int {
+  p.z
+}
+
+fn g(p: Point) -> Int {
+  p.nothing()
+}
+
+fn h(xs: [Int]) -> Int {
+  xs.len
+}

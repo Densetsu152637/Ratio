@@ -1,0 +1,14 @@
+// expect: check-error C0017 at 6:7
+// expect: check-error C0017 at 7:7
+// expect: check-error C0017 at 8:7
+// expect: check-error C0017 at 14:7
+
+const A = B + 1
+const B = A * 2
+const C: Int = loops()
+
+fn loops() -> Int {
+  C
+}
+
+const SELF: Int = SELF

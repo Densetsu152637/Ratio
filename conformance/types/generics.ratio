@@ -1,0 +1,39 @@
+// expect: check-ok
+
+type Pair<T> = (T, T)
+
+fn swap<T>(p: Pair<T>) -> Pair<T> {
+  let (a, b) = p
+  (b, a)
+}
+
+fn first<T>(xs: [T], fallback: T) -> T {
+  list.first(xs) ?? fallback
+}
+
+fn apply<A, B>(x: A, f: fn(A) -> B) -> B {
+  f(x)
+}
+
+fn lengths(words: [Str]) -> [Int] {
+  list.map(words, |w| text.len(w))
+}
+
+fn total(xs: [Int]) -> Int {
+  xs.fold(0, |acc, x| acc + x)
+}
+
+fn uses() -> Int {
+  let p = swap((1, 2))
+  let n = first([], 7)
+  let s = apply("abc", |s| text.len(s))
+  let doubled = [1, 2, 3].map(|x| x * 2)
+  let sorted = list.sort_by(["b", "a"], |w| w)
+  let joined = text.join(sorted, sep: ", ")
+  let (a, _) = p
+  a + n + s + total(doubled) + text.len(joined)
+}
+
+fn widen(a: UserText, b: Str) -> Str {
+  first([a], b)
+}

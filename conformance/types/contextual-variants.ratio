@@ -1,0 +1,40 @@
+// expect: check-ok
+
+enum Mode { fast, careful }
+
+fn pick(mode: Mode) -> Int {
+  match mode {
+    fast => 1,
+    careful => 2,
+  }
+}
+
+fn calls() -> Int {
+  pick(fast) + pick(Mode.careful)
+}
+
+fn efforts() -> [Effort] {
+  [low, high, max]
+}
+
+fn opts() -> GenOpts {
+  { effort: high, model: "consul", tool_choice: no_tools }
+}
+
+fn routed() -> ModelRef {
+  model.route(tier: frontier, location: local)
+}
+
+fn compare(e: Effort) -> Bool {
+  e == high
+}
+
+fn fail_variant() -> Verdict {
+  fail
+}
+
+enum Verdict { pass, fail }
+
+fn tools() -> HarnessConfig {
+  { tools: [read_file, grep, "mcp__github__*"], context: fresh }
+}

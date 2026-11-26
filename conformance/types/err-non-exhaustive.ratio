@@ -1,0 +1,52 @@
+// expect: check-error C0009 at 11:3
+// expect: check-error C0009 at 18:3
+// expect: check-error C0009 at 25:3
+// expect: check-error C0009 at 32:3
+// expect: check-error C0009 at 39:3
+// expect: check-error C0009 at 47:3
+
+enum Light { red, amber, green }
+
+fn f(l: Light) -> Int {
+  match l {
+    red => 1,
+    green => 2,
+  }
+}
+
+fn g(x: Int?) -> Int {
+  match x {
+    n if n == none => 0,
+    1 => 1,
+  }
+}
+
+fn h(a: Bool, b: Bool) -> Int {
+  match (a, b) {
+    (true, _) => 1,
+    (false, true) => 2,
+  }
+}
+
+fn i(n: Int) -> Int {
+  match n {
+    0 => 0,
+    1 => 1,
+  }
+}
+
+fn j(e: ErrorKind) -> Int {
+  match e {
+    Denied { by: user } => 1,
+    ToolFailed | ModelFailed | RateLimited | SchemaMismatch | Budget { .. } | Timeout => 2,
+    Cancelled | Assertion | NotFound | Invalid | Unsupported | Replay | Question { .. } | User { .. } => 3,
+  }
+}
+
+fn k(xs: [Int]) -> Int {
+  match xs {
+    [] => 0,
+    [x, ..] if x > 0 => 1,
+    [_, _] => 2,
+  }
+}

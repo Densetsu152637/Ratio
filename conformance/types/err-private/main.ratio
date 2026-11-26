@@ -1,0 +1,12 @@
+// expect: check-error C0029 at 7:7
+// expect: check-error C0029 at 10:13
+
+import "./lib.ratio" as lib
+
+fn f() -> Int {
+  lib.secret() + lib.open()
+}
+
+fn g(x: lib.Hidden) -> Int {
+  1
+}

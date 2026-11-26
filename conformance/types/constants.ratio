@@ -1,0 +1,30 @@
+// expect: check-ok
+
+const LIMIT = 40
+const CRITIC: ModelRef = model.route(tier: frontier)
+const NAMES = ["a", "b"]
+const DOUBLE = LIMIT * 2
+const WORDS = list.map(NAMES, |n| text.upper(n))
+const SQUARE = square(LIMIT)
+
+fn square(n: Int) -> Int {
+  n * n
+}
+
+fn count(n: Int) -> Int {
+  if n <= 0 { 0 } else { 1 + count(n - 1) }
+}
+
+const COUNTED = count(3)
+
+fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+  f(f(x))
+}
+
+const FOUR = twice(|x| x * 2, 1)
+
+state: { seen: Map<Str, Int>, last?: Str } = { seen: {}, }
+
+fn uses() -> Int {
+  LIMIT + DOUBLE + SQUARE + COUNTED + list.len(WORDS)
+}

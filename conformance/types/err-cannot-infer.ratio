@@ -1,0 +1,19 @@
+// expect: check-error C0014 at 6:11
+// expect: check-error C0014 at 11:13
+// expect: check-error C0014 at 17:11
+
+fn f(j: Json) -> Int {
+  let v = json.decode(j)
+  1
+}
+
+fn g() -> Int {
+  let id = |x| x
+  1
+}
+
+fn h() -> Int {
+  let r = Ok { value: none }
+  let e = Err { error: fail("a", "b") }
+  1
+}

@@ -1,0 +1,22 @@
+// expect: check-error C0030 at 7:16
+// expect: check-error C0030 at 9:20
+// expect: check-error C0030 at 11:14
+// expect: check-error C0030 at 15:9
+// expect: check-error C0030 at 20:11
+
+enum E { a, b, a }
+
+type R = { x: Int, x: Str }
+
+fn f(a: Int, a: Int) -> Int {
+  a
+}
+
+fn g<T, T>(x: T) -> T {
+  x
+}
+
+fn h(t: (Int, Int)) -> Int {
+  let (x, x) = t
+  x
+}

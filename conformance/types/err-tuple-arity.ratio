@@ -1,0 +1,11 @@
+// expect: check-error C0028 at 4:9
+// expect: check-error C0028 at 9:11
+
+fn f(t: (Int, Int, Int, Int, Int, Int, Int, Int, Int)) -> Int {
+  1
+}
+
+fn g() -> Int {
+  let t = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+  1
+}

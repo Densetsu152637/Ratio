@@ -1,0 +1,23 @@
+// expect: check-error C0006 at 9:3
+// expect: check-error C0006 at 13:17
+// expect: check-error C0006 at 17:11
+// expect: check-error C0006 at 21:7
+
+type Point = { x: Int, y: Int }
+
+fn missing() -> Point {
+  { x: 1 }
+}
+
+fn extra() -> Point {
+  { x: 1, y: 2, z: 3 }
+}
+
+fn twice() -> Point {
+  { x: 1, x: 2, y: 3 }
+}
+
+fn pattern(p: Point) -> Int {
+  let { x } = p
+  x
+}

@@ -1,0 +1,6 @@
+// expect: check-warning C0032 at 4:7
+
+fn f() -> Int {
+  let text = "abc"
+  1
+}

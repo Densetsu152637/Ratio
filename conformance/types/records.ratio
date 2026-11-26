@@ -1,0 +1,28 @@
+// expect: check-ok
+
+type Point = { x: Int, y: Int }
+type Note = { path: Str, summary: Str "Two sentences at most", tags?: [Str] }
+
+fn origin() -> Point {
+  { x: 0, y: 0 }
+}
+
+fn moved(p: Point, dx: Int) -> Point {
+  { ..p, x: p.x + dx }
+}
+
+fn tagged(n: Note) -> [Str] {
+  n.tags ?? []
+}
+
+fn notes() -> [Note] {
+  let a: Note = { path: "a.rs", summary: "fine" }
+  let b = { path: "b.rs", summary: "risky", tags: ["unsafe"] }
+  [a, b]
+}
+
+fn first_x(ps: [Point]) -> Int {
+  let total = 0
+  let { x, .. } = moved(origin(), 2)
+  x + total + list.len(ps)
+}

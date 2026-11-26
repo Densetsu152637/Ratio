@@ -1,0 +1,109 @@
+// The shared types of chapter 06 ("Shared types"), chapter 03 (errors) and chapter 04 (the
+// configuration record), as the checker knows them. They are in scope in every file behind
+// the file's own names. Shapes the specification does not spell out are marked provisional.
+
+// Turns and tasks (chapter 01)
+type Turn = {
+  message: UserText,
+  payloads: [Untrusted<Payload>],
+  attachments: [Untrusted<Attachment>],
+  index: Int,
+  resumed: Bool,
+}
+type Payload = { kind: PayloadKind, source: Str, text: Untrusted<Str> }
+enum PayloadKind { ci_log, pr_comment, issue, review, page, other }
+type Attachment = { name: Untrusted<Str>, kind: Str, text?: Untrusted<Str>, image?: Image, path?: Untrusted<Str>, bytes: Int }
+type Reply = { text: Untrusted<Str>, status: ReplyStatus }
+enum ReplyStatus { done, step_limit, question, stopped }
+type Task = { brief: Brief, title: Untrusted<Str>, access: Access, profile?: AgentProfile, follow_up: Bool }
+type Report = { text: Untrusted<Str>, ok: Bool, question?: Untrusted<Str> }
+enum Access { read, write }
+type AgentProfile = { name: Str, file_instructions?: TrustedPrompt, spawn_prompt?: Untrusted<Str>, workflow?: Str }
+
+// Models
+enum ModelRef { session, inherit, Named { id: Str }, Routed { tier?: Tier, location?: Location, tags: [Str] } }
+enum Tier { basic, standard, strong, frontier }
+enum Location { local, cloud, any }
+enum Effort { low, medium, high, max }
+type Thinking = { effort?: Effort, budget_tokens?: Int, off?: Bool }
+type Sampling = {
+  temperature?: Float, top_p?: Float, top_k?: Int, min_p?: Float,
+  seed?: Int, max_tokens?: Int, stop?: [Str],
+  presence_penalty?: Float, frequency_penalty?: Float, repetition_penalty?: Float,
+  logprobs?: Int, strict?: Bool,
+}
+enum ToolChoice { auto, no_tools, required, Named { name: Str } }
+type GenOpts = {
+  model?: ModelRef, effort?: Effort, thinking?: Thinking, sampling?: Sampling,
+  tool_choice?: ToolChoice, repairs?: Int, timeout?: Duration, title?: Str,
+}
+type Usage = {
+  prompt_tokens: Int, completion_tokens: Int, cached_tokens: Int,
+  reasoning_tokens?: Int, cost?: Money, model: Str, duration: Duration,
+}
+type Classified<E> = { label: E, confidence?: Float }
+
+// Prompts and conversations
+type Message = { role: Role, text: Untrusted<Str>, images: [Image], tool_calls: [ToolCall], tool_call_id?: Untrusted<Str> }
+enum Role { system, user, assistant, tool }
+type ToolCall = { id: Untrusted<Str>, name: Untrusted<Str>, arguments: Json }
+type ToolResult = { call_id: Untrusted<Str>, name: Untrusted<Str>, outcome: Outcome, text: Untrusted<Str> }
+enum Outcome { ok, failed, Denied { by: DeniedBy }, Blocked { hook: Str }, Refused { reason: Str } }
+enum DeniedBy { rule, mode, floor, user, hook, profile, attenuation, unattended, secrecy, sees }
+type ModelReply = { text: Untrusted<Str>, tool_calls: [ToolCall], usage: Usage, finish: Finish }
+enum Finish { stop, tool_calls, length, content_filter, cancelled }
+
+// Frames (chapter 04). PermissionRequest's fields are provisional (stage 10 owns frames), and
+// ContextMode lacks `none`, which cannot be declared because `none` is a keyword.
+type Sees = {
+  turn?: Bool, attachments?: Bool, plan?: Bool, memory_environment?: Bool,
+  memory_index?: Bool, agents?: Bool, system_default?: Bool, state?: Bool, secrets?: Bool,
+}
+enum PermissionMode { plan, ask, default, auto, accept_edits, full }
+type PermissionRequest = { mode?: PermissionMode, deny?: [Str], ask?: [Str], paths?: [Str], location?: Location }
+enum ContextMode { fresh, fork, main }
+type HarnessConfig = {
+  model?: ModelRef, effort?: Effort, thinking?: Thinking, sampling?: Sampling,
+  tools?: ToolSet, permissions?: PermissionRequest, budget?: Budget, limits?: Limits,
+  context?: ContextMode, sees?: Sees, system?: TrustedPrompt, title?: Str, attended?: Bool,
+}
+
+// Tools
+type FileText = {
+  path: Untrusted<Str>, text: Untrusted<Str>, first_line: Int, last_line: Int,
+  total_lines: Int, more: Bool, next_offset?: Int,
+}
+
+// Budgets and limits
+type Budget = { tokens?: Int, cost?: Money, wall?: Duration, steps?: Int, model_calls?: Int, tool_calls?: Int }
+type Limits = { depth?: Int, width?: Int, heap?: Int }
+type Spent = { tokens: Int, cost: Money, wall: Duration, steps: Int, model_calls: Int, tool_calls: Int }
+
+// Plans
+type Plan = { goal: Str, steps: [PlanStep], assumptions: [Str], open_questions: [Str] }
+type PlanStep = { title: Str, status: StepStatus, depends_on: [Str], owner?: Str, acceptance?: Str }
+enum StepStatus { pending, in_progress, done, blocked, skipped }
+
+// Results and errors (chapter 03). Site's fields are provisional.
+enum Result<T> { Ok { value: T }, Err { error: Error } }
+type Scored<T> = { value: T, score: Float, reasons?: Untrusted<Str> }
+type Error = { kind: ErrorKind, message: Untrusted<Str>, data: Json, site: Site }
+type Site = { file: Str, line: Int, column: Int, frame: [Str] }
+enum ErrorKind {
+  Denied { by: DeniedBy },
+  ToolFailed,
+  ModelFailed,
+  RateLimited,
+  SchemaMismatch,
+  Budget { which: BudgetKind },
+  Timeout,
+  Cancelled,
+  Assertion,
+  NotFound,
+  Invalid,
+  Unsupported,
+  Replay,
+  Question { question: Untrusted<Str>, options: [Untrusted<Str>] },
+  User { tag: Str },
+}
+enum BudgetKind { tokens, cost, steps, wall, model_calls, tool_calls, depth, call_depth, heap, width }

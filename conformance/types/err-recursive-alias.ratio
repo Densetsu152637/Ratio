@@ -1,0 +1,7 @@
+// expect: check-error C0018 at 4:11
+// expect: check-error C0018 at 7:10
+
+type A = [A]
+
+type B = { next: C }
+type C = B?

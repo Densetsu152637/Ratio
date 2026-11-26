@@ -1,0 +1,16 @@
+[package]
+name = "ratio-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Ratio's type checker (stage 4): records, enums, options, generics on functions, subtyping, exhaustiveness and constants"
+
+[dependencies]
+ratio-syntax.workspace = true
+ratio-names.workspace = true
+
+[lints]
+workspace = true
