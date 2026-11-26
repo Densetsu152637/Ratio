@@ -18,6 +18,7 @@
 //! a walk that visits more than a multiple of the charge raises `Budget { which: steps }`.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::error::{Kind, RtError, raise};
@@ -131,8 +132,11 @@ pub(super) struct Validator<'a, 'b> {
     /// The steps debited for pattern work (compiling, searching), which the product charge does
     /// not size: added to the call's `debit`, and never more than the steps left.
     paid: &'a AtomicU64,
-    /// The patterns compiled so far, with the heap each holds.
+    /// The patterns compiled so far, with the heap each holds, and where each is.
     patterns: Vec<(String, Regex, Charge)>,
+    pattern_index: HashMap<String, usize>,
+    /// The nodes the `$ref`s resolved to, by their text.
+    refs: HashMap<String, Value>,
     /// The labels of the instance and the schema: what a bad schema's error depends on.
     labels: Labels,
 }
@@ -142,7 +146,7 @@ pub(super) type Sink<'a> = dyn FnMut(&str, String) -> Result<(), RtError> + Send
 
 /// The nesting and `$ref` hops the walk takes on the caller's stack, and the violations it
 /// buffers there.
-const INLINE_NEST: u32 = 24;
+const INLINE_NEST: u32 = 12;
 const INLINE_HOPS: u32 = 8;
 const INLINE_BUFFER: usize = 256;
 
@@ -177,6 +181,7 @@ pub(super) fn validate(
     sink: &mut Sink<'_>,
 ) -> Result<(), RtError> {
     let labels = instance.quick() | schema.quick();
+    let counted_before = crate::work::total();
     let walk = |sink: &mut Sink<'_>, nest: u32, max_hops: u32, inline: bool| {
         let mut v = Validator {
             cx,
@@ -194,6 +199,8 @@ pub(super) fn validate(
             budget,
             paid,
             patterns: Vec::new(),
+            pattern_index: HashMap::new(),
+            refs: HashMap::new(),
             labels,
         };
         let r = v.check(instance, schema, 0, 0).map(|_| ());
@@ -201,6 +208,7 @@ pub(super) fn validate(
     };
     let (r, restart, buffered) = walk(&mut *sink, INLINE_NEST, INLINE_HOPS, true);
     if !restart {
+        guard(counted_before, budget, paid);
         for (pointer, message) in buffered {
             sink(&pointer, message)?;
         }
@@ -226,7 +234,28 @@ pub(super) fn validate(
         )
     });
     crate::work::add(units);
+    guard(counted_before, budget, paid);
     r
+}
+
+/// The most counted work units there may be per unit of the visit budget (and per unit of
+/// pattern work paid for): a general guard, so a loop that escapes the budget is found by the
+/// property test, not by a hang.
+const GUARD_FACTOR: u64 = 64;
+
+/// In debug builds: the work this walk counted stays within [`GUARD_FACTOR`] times its budget
+/// and what it paid for pattern work.
+fn guard(before: u64, budget: u64, paid: &AtomicU64) {
+    if crate::work::ENABLED {
+        let counted = crate::work::total().saturating_sub(before);
+        let allowed = GUARD_FACTOR
+            .saturating_mul(budget.saturating_add(64 * paid.load(AtomicOrdering::Relaxed)))
+            .saturating_add(4096);
+        debug_assert!(
+            counted <= allowed,
+            "json.validate counted {counted} units of work for a budget of {budget}"
+        );
+    }
 }
 
 impl Validator<'_, '_> {
@@ -370,9 +399,21 @@ impl Validator<'_, '_> {
             }
             return Err(self.bad("`$ref` refers to itself"));
         }
-        let toks = tokens(pointer).map_err(|f| self.cx.fault(f, self.labels))?;
-        let Some(sub) = crate::jsonedit::lookup(self.root, &toks) else {
-            return Err(self.bad(&format!("`$ref` `{target}` does not resolve")));
+        let sub = if let Some(sub) = self.refs.get(target).cloned() {
+            self.work(1)?;
+            sub
+        } else {
+            // Resolved once per walk: the pointer's length and the widths scanned are the
+            // work, and the node is kept.
+            self.work(1 + pointer.len() as u64)?;
+            let toks = tokens(pointer).map_err(|f| self.cx.fault(f, self.labels))?;
+            let (found, scanned) = crate::jsonedit::lookup_scanned(self.root, &toks);
+            self.work(scanned)?;
+            let Some(sub) = found else {
+                return Err(self.bad(&format!("`$ref` `{target}` does not resolve")));
+            };
+            self.refs.insert(target.to_owned(), sub.clone());
+            sub
         };
         // A hop is counted in `hops`, not in the nesting: a recursive schema reaches as deep as
         // the instance nests.
@@ -382,33 +423,49 @@ impl Validator<'_, '_> {
     fn shape(&mut self, inst: &Value, kw: &Kw<'_>) -> Check {
         let mut ok = true;
         if let Some(t) = kw.ty {
-            let names: Vec<String> = match (string_of(t), array(t)) {
-                (Some(s), _) => vec![s.to_owned()],
-                (_, Some(l)) => {
-                    let mut out = Vec::new();
-                    for x in l.to_vec() {
-                        match string_of(&x) {
-                            Some(s) => out.push(s.to_owned()),
-                            None => return Err(self.bad("`type` names types")),
-                        }
-                    }
-                    out
-                }
-                _ => return Err(self.bad("`type` is a string or an array of strings")),
-            };
             let mut known = true;
             let mut any = false;
-            for n in &names {
-                match type_matches(inst, n) {
-                    Some(m) => any |= m,
+            let mut count = 0u64;
+            match (string_of(t), array(t)) {
+                (Some(s), _) => match type_matches(inst, s) {
+                    Some(m) => any = m,
                     None => known = false,
+                },
+                (_, Some(l)) => {
+                    // Every name is looked at on every visit: paid for by the list's length.
+                    self.work(1 + l.len())?;
+                    let mut c = l.cursor();
+                    while let Some(x) = c.next() {
+                        let Some(s) = string_of(&x) else {
+                            return Err(self.bad("`type` names types"));
+                        };
+                        count += 1;
+                        match type_matches(inst, s) {
+                            Some(m) => any |= m,
+                            None => known = false,
+                        }
+                    }
                 }
+                _ => return Err(self.bad("`type` is a string or an array of strings")),
             }
             if !known {
                 return Err(self.bad("`type` names an unknown type"));
             }
             if !any {
-                ok &= self.fail(&format!("expected {}", names.join(" or ")))?;
+                let mut names: Vec<String> = Vec::new();
+                match (string_of(t), array(t)) {
+                    (Some(s), _) => names.push(s.to_owned()),
+                    // The message shows at most the first 8 names.
+                    (_, Some(l)) => {
+                        let mut c = l.cursor();
+                        while let (Some(x), true) = (c.next(), names.len() < 8) {
+                            names.push(string_of(&x).unwrap_or("").to_owned());
+                        }
+                    }
+                    _ => {}
+                }
+                let more = if count > 8 { " or …" } else { "" };
+                ok &= self.fail(&format!("expected {}{more}", names.join(" or ")))?;
             }
         }
         if let Some(e) = kw.enumeration {
@@ -538,7 +595,7 @@ impl Validator<'_, '_> {
     }
 
     fn compiled(&mut self, pattern: &str) -> Result<usize, RtError> {
-        if let Some(i) = self.patterns.iter().position(|(p, ..)| p == pattern) {
+        if let Some(&i) = self.pattern_index.get(pattern) {
             return Ok(i);
         }
         let translated = super::ecma::to_re(pattern)
@@ -559,6 +616,8 @@ impl Validator<'_, '_> {
             )
             .map_err(|_| heap_error(self.cx))?;
         self.patterns.push((pattern.to_owned(), re, charge));
+        self.pattern_index
+            .insert(pattern.to_owned(), self.patterns.len() - 1);
         Ok(self.patterns.len() - 1)
     }
 
@@ -755,6 +814,7 @@ impl Validator<'_, '_> {
         }
         for (k, v) in entries {
             let name = k.as_text().unwrap_or("");
+            self.work(1)?;
             let mut matched = false;
             if let Some(d) = declared {
                 self.work(1 + d.len() as u64)?;

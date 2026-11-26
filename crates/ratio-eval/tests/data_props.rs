@@ -457,3 +457,125 @@ fn json_set_then_get_gives_the_value_back() {
         }
     }
 }
+
+// ---- json.validate: the work stays within the charge ----
+
+fn random_schema(rng: &mut Rng, depth: u32, defs: u32) -> String {
+    let leaf = |rng: &mut Rng| match rng.below(12) {
+        0 => r#"{"type":"integer"}"#.to_owned(),
+        1 => r#"{"type":["string","null","array","object"]}"#.to_owned(),
+        2 => format!(
+            "{{\"enum\":[{}]}}",
+            (0..rng.below(30))
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        3 => r#"{"const":"s1"}"#.to_owned(),
+        4 => r#"{"uniqueItems":true}"#.to_owned(),
+        5 => r#"{"required":["k0","k1"],"minProperties":1}"#.to_owned(),
+        6 => r#"{"pattern":"^[a-z]*[0-9]?$"}"#.to_owned(),
+        7 => r#"{"dependentRequired":{"k0":["k1"]}}"#.to_owned(),
+        8 => r#"{"propertyNames":{"maxLength":3}}"#.to_owned(),
+        9 => r#"{"minItems":1,"maxItems":9,"contains":{"type":"integer"}}"#.to_owned(),
+        10 => "true".to_owned(),
+        _ => r#"{"minimum":0,"multipleOf":1}"#.to_owned(),
+    };
+    if depth == 0 {
+        return leaf(rng);
+    }
+    match rng.below(9) {
+        0 => format!(
+            "{{\"allOf\":[{},{}]}}",
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs)
+        ),
+        1 => format!(
+            "{{\"anyOf\":[{},{}]}}",
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs)
+        ),
+        2 => format!(
+            "{{\"oneOf\":[{},{}]}}",
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs)
+        ),
+        3 => format!("{{\"not\":{}}}", random_schema(rng, depth - 1, defs)),
+        4 => format!("{{\"items\":{}}}", random_schema(rng, depth - 1, defs)),
+        5 => format!(
+            "{{\"properties\":{{\"k0\":{},\"k1\":{}}},\"additionalProperties\":{}}}",
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs)
+        ),
+        6 if defs > 0 => format!("{{\"$ref\":\"#/$defs/d{}\"}}", rng.below(u64::from(defs))),
+        7 => format!(
+            "{{\"if\":{},\"then\":{},\"else\":{}}}",
+            leaf(rng),
+            random_schema(rng, depth - 1, defs),
+            random_schema(rng, depth - 1, defs)
+        ),
+        _ => leaf(rng),
+    }
+}
+
+/// A schema with `defs` shared definitions; definition `i` may refer only to later ones, and
+/// often does so twice (a chain of doublings).
+fn random_root(rng: &mut Rng) -> String {
+    let defs = u32::try_from(rng.below(10)).unwrap();
+    let mut out = Vec::new();
+    for i in 0..defs {
+        let next = format!("{{\"$ref\":\"#/$defs/d{}\"}}", i + 1);
+        let body = if i + 1 < defs && rng.below(3) != 0 {
+            format!("{{\"allOf\":[{next},{next}]}}")
+        } else {
+            random_schema(rng, 2, 0)
+        };
+        out.push(format!("\"d{i}\":{body}"));
+    }
+    let root = random_schema(rng, 3, defs);
+    if defs == 0 {
+        root
+    } else {
+        // The root applies the first definition and the random schema.
+        format!(
+            "{{\"allOf\":[{{\"$ref\":\"#/$defs/d0\"}},{root}],\"$defs\":{{{}}}}}",
+            out.join(",")
+        )
+    }
+}
+
+#[test]
+fn validate_work_stays_within_the_charge_for_random_schemas() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let mut rng = Rng(0x0DDB_1A5E_5BAD_5EED);
+    let mut worst = 0.0f64;
+    for _ in 0..200 {
+        let schema = random_root(&mut rng);
+        let instance = random_json(&mut rng, 3);
+        let (f, log) = support::run_logged(
+            &p,
+            "v",
+            vec![Value::text(&instance), Value::text(&schema)],
+            ratio_eval::Limits::default(),
+        );
+        if let Outcome::Raised(e) = &f.outcome {
+            let ok = e.budget(&p).as_deref() == Some("steps") || e.kind(&p) == "Invalid";
+            assert!(ok, "{} for {instance} against {schema}", e.kind(&p));
+        }
+        for w in log.iter().filter(|w| w.name == "json.validate") {
+            #[allow(clippy::cast_precision_loss, reason = "a ratio")]
+            let ratio = w.work as f64 / (64 * w.steps) as f64;
+            worst = worst.max(ratio);
+            assert!(
+                w.work <= 16 * 64 * w.steps,
+                "{} units of work for {} steps: {instance} against {schema}",
+                w.work,
+                w.steps
+            );
+        }
+    }
+    eprintln!("validate: the most work per charged unit {worst:.2}");
+}

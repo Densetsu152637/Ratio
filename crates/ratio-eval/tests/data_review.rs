@@ -455,3 +455,60 @@ fn stored(s: Int) -> Bool { (5, 0) in map.from([((s, 0), 1)]) }
         assert!(scan(&f).contains(SECRET), "{name} dropped the label");
     }
 }
+
+/// Loops inside one check (every key of an instance object, every name of a `type` list, the
+/// resolution of a `$ref`) are paid for when a shared sub-schema is reached over and over.
+#[test]
+fn every_loop_inside_a_check_is_paid_for() {
+    let p = prepared(
+        r"fn v(j: Str, s: Str) -> Int { json.validate(json.parse(j), json.parse(s)).len() }",
+    );
+    let keys: Vec<String> = (0..1000).map(|i| format!("\"k{i}\":{i}")).collect();
+    let object = format!("{{{}}}", keys.join(","));
+    let names: Vec<String> = (0..8000).map(|i| format!("\"t{i}\"")).collect();
+    // Not an unknown name, so the list is read in full on every visit: `type` lists of valid
+    // names are short; this one is refused as soon as it is read, which is the work to pay.
+    let types = format!("{{\"type\":[\"string\",\"integer\",{}]}}", names.join(","));
+    let cases = [
+        ("KO", object, doubling_chain(16, r#"{"minProperties":1}"#)),
+        ("TY", "1".to_owned(), doubling_chain(12, &types)),
+    ];
+    for (name, instance, schema) in cases {
+        let start = Instant::now();
+        let f = run(&p, "v", vec![Value::text(&instance), Value::text(&schema)]);
+        match &f.outcome {
+            Outcome::Raised(e) => assert!(
+                e.budget(&p).as_deref() == Some("steps") || e.kind(&p) == "Invalid",
+                "{name}: {}",
+                e.kind(&p)
+            ),
+            Outcome::Returned(_) => {}
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{name}: {:?}",
+            start.elapsed()
+        );
+    }
+    // DW: a wide `$defs` and many references into it, resolved once each.
+    let defs: Vec<String> = (0..16000).map(|i| format!("\"x{i}\":{{}}")).collect();
+    let refs: Vec<String> = (0..200)
+        .map(|_| r##"{"$ref":"#/$defs/x15999"}"##.to_owned())
+        .collect();
+    let schema = format!(
+        "{{\"allOf\":[{}],\"$defs\":{{{}}}}}",
+        refs.join(","),
+        defs.join(",")
+    );
+    let start = Instant::now();
+    let f = run(&p, "v", vec![Value::text("1"), Value::text(&schema)]);
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "DW: {:?}",
+        start.elapsed()
+    );
+    match f.outcome {
+        Outcome::Returned(_) => {}
+        Outcome::Raised(e) => assert_eq!(e.budget(&p).as_deref(), Some("steps")),
+    }
+}

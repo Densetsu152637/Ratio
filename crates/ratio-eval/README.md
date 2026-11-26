@@ -225,7 +225,7 @@ long loops check for cancellation every checkpoint's worth of work (`util::Pace`
 `json.parse`, JSON equality and order, `merge`, `set`, `patch`, `diff` and rendering keep their
 nesting on an explicit stack; the recursive walks that remain (`json.validate`'s, and the
 derivation of `json.schema`) are bounded (192 levels of nesting, `$ref` hops counted apart, at
-most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 24
+most 32 at a node; 256 levels of type) and run on the caller's stack while they stay within 12
 levels, and on the large-stack worker the preparation pass uses (its counted work added to the
 caller's) beyond that. `json.validate` also counts its visits of a schema node to an instance
 node and raises `Budget { which: steps }` past four times its charge (plus a floor), so shared

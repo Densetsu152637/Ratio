@@ -193,6 +193,23 @@ pub(crate) fn lookup(doc: &Value, toks: &[String]) -> Option<Value> {
     Some(cur)
 }
 
+/// As [`lookup`], and the work it took: the entries of every object it searched.
+pub(crate) fn lookup_scanned(doc: &Value, toks: &[String]) -> (Option<Value>, u64) {
+    let mut cur = doc.clone();
+    let mut scanned = 0u64;
+    for t in toks {
+        scanned = scanned.saturating_add(object(&cur).map_or(1, |e| e.len() as u64));
+        let Some(pos) = find(&cur, t) else {
+            return (None, scanned);
+        };
+        let Some(next) = child_at(&cur, pos) else {
+            return (None, scanned);
+        };
+        cur = next;
+    }
+    (Some(cur), scanned)
+}
+
 /// The node at `toks` with the labels of the path to it: every container's own labels and the
 /// labels of the keys searched in each object. A value taken from there (`copy`, `move`) must
 /// carry them, since where it was found depended on them.
