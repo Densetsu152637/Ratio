@@ -95,19 +95,18 @@ All three are **single-flight**:
   transitively, on the looker's branch) computes instead of waiting. A branch that looks up a key
   it is itself computing raises `Invalid`.
 - Every miss that starts a producer, every wait, every hit, every producer's success, failure or
-  cancellation, and every promotion is an event on the turn sequence (chapter 01), naming the
-  branch paths involved. In a headless tape, a labelled `cached` or `once` key, and a `memo`
-  argument hash derived from a labelled argument, is recorded only by the per-session redaction
-  digest, as labelled blobs are. Replay checks them against recorded events only: a recorded wait must
-  name a producer whose recorded miss for the same key comes earlier in the sequence and whose
-  recorded end does not; the recorded waits, taken in sequence order together with the
-  branch-ancestry edges of the recorded branch paths (a branch waits for its own descendants),
-  must never form a cycle, so a wait naming the waiter's own ancestor as producer is `Replay`; and
-  a recorded promotion must follow the previous producer's recorded failure or cancellation and
-  pick, among the recorded waits still open at that point, the first in branch-path order. In
-  replay a waiter takes its value from the recorded producer, whatever the replaying run's
-  progress: it stays parked until that producer finishes in the replaying run, or takes the stored
-  value at once if it already has.
+  cancellation, and every promotion is an event on the turn sequence (chapter 01), naming the branch
+  paths involved. In a headless tape, a labelled `cached` or `once` key, and a `memo` argument hash
+  derived from a labelled argument, is recorded only by the per-session redaction digest, as
+  labelled blobs are. Replay checks them against recorded events only: a recorded wait must name a
+  producer whose recorded miss for the same key comes earlier in the sequence and whose recorded end
+  does not; the recorded waits, taken in sequence order together with the branch-ancestry edges of
+  the recorded branch paths (a branch waits for its own descendants), must never form a cycle, so a
+  wait naming the waiter's own ancestor as producer is `Replay`; and a recorded promotion must
+  follow the previous producer's recorded failure or cancellation and pick, among the recorded waits
+  still open at that point, the first in branch-path order. In replay a waiter takes its value from
+  the recorded producer, whatever the replaying run's progress: it stays parked until that producer
+  finishes in the replaying run, or takes the stored value at once if it already has.
 - A hit, single-flight or not, that would deliver a labelled value to a frame whose `sees` lacks
   `secrets` raises `Denied { by: sees }` (chapter 04). A `ratio_cache` entry stores the labels of
   every leaf with the value and a hit restores them; the entry is redacted like `ratio_effect`

@@ -34,8 +34,8 @@ deferred). No grammar change.
   accounted before dispatch), uses
   `Send` values and a prepared form that is never hashed (chapters 01, 07).
 - Tapes: entries for input-bearing effects only, suppressed output effects and an end-of-turn
-  reply digest, a `full` recording mode, content-addressed blobs, chained conversation digests, zstd files,
-  and replayed labels that can only be added (chapters 01, 03, 08).
+  reply digest, a `full` recording mode, content-addressed blobs, chained conversation digests,
+  zstd files, and replayed labels that can only be added (chapters 01, 03, 08).
 - Per-branch random generators: `rand` draws need no tape entries (chapter 06 `data`).
 - `model.stream` gains `until` and returns `Streamed`; `think.self_consistency` and
   `think.best_of` gain `early_stop` (`best_of` refuses it without `good_enough`) (chapters 05,
