@@ -2,6 +2,11 @@
 //!
 //! Every literal is ASCII, so the scanner works on bytes. A scan always consumes the whole run of
 //! digits, separators and unit letters, so one bad literal gives one diagnostic.
+//!
+//! Leading zeros are allowed and mean nothing: `007` is the integer 7 (there are no octal
+//! literals). A `_` separator needs a digit on both sides, in decimal and hex digits alike and in
+//! the whole part, the fraction and the exponent. A duration is a whole number of its unit and
+//! is stored in microseconds, the unit of `Duration` (chapter 03), so its range is checked there.
 
 use crate::diag::Code;
 use crate::token::TokenKind;
@@ -205,10 +210,10 @@ fn scan_decimal(src: &str, start: usize) -> (usize, Result<TokenKind, NumError>)
             Code::NumberNotExact,
             "a duration is a whole number of its unit, such as `30s`",
         )),
-        "ms" => duration(&whole, 1),
-        "s" => duration(&whole, 1_000),
-        "m" => duration(&whole, 60_000),
-        "h" => duration(&whole, 3_600_000),
+        "ms" => duration(&whole, 1_000),
+        "s" => duration(&whole, 1_000_000),
+        "m" => duration(&whole, 60_000_000),
+        "h" => duration(&whole, 3_600_000_000),
         other => Err(bad_suffix(other)),
     };
     (end, result)
@@ -264,11 +269,11 @@ fn quantity(whole: &str, fraction: Option<&str>, scale: u128) -> Result<TokenKin
     }
 }
 
-fn duration(whole: &str, millis_per_unit: u128) -> Result<TokenKind, NumError> {
+fn duration(whole: &str, micros_per_unit: u128) -> Result<TokenKind, NumError> {
     whole
         .parse::<u128>()
         .ok()
-        .and_then(|n| n.checked_mul(millis_per_unit))
+        .and_then(|n| n.checked_mul(micros_per_unit))
         .and_then(|v| i64::try_from(v).ok())
         .map(TokenKind::Duration)
         .ok_or_else(|| out_of_range("the duration"))

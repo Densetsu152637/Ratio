@@ -1,12 +1,14 @@
-//! Property tests for the token reader: it never panics, it is deterministic, and its spans
-//! round-trip (see `support::check_invariants`). Inputs come from a fixed-seed generator, so a
+//! Property tests for the token reader: it never panics, it is deterministic, its spans
+//! round-trip (see `support::check_invariants`), and it inserts semicolons only where chapter 02
+//! allows (`support::check_insertions`). Inputs come from a fixed-seed generator, so a
 //! failure reproduces; the seed and case number are in the message.
 
 mod support;
 
 use std::fs;
+use std::time::{Duration, Instant};
 
-use ratio_syntax::{LexOptions, lex, lex_with};
+use ratio_syntax::{LexOptions, MAX_SOURCE_BYTES, lex, lex_with};
 
 struct Rng(u64);
 
@@ -167,6 +169,9 @@ fn check(src: &str, label: &str) {
     if let Err(problem) = support::check_invariants(src, &lexed) {
         panic!("{label}: {problem}\nsource: {src:?}");
     }
+    if let Err(problem) = support::check_insertions(&lexed) {
+        panic!("{label}: {problem}\nsource: {src:?}");
+    }
     assert_eq!(
         lexed,
         lex(src),
@@ -263,6 +268,11 @@ fn every_prefix_of_a_program_is_read_without_panicking() {
     check(src, "the whole program");
 }
 
+/// How long one hostile shape may take to read. Linear reading of 200 KB takes milliseconds even
+/// in a debug build; a quadratic path takes minutes, so this bound is generous and still catches
+/// one.
+const HOSTILE_TIME_BOUND: Duration = Duration::from_secs(20);
+
 #[test]
 fn hostile_shapes_stay_linear_and_balanced() {
     let big = 200_000;
@@ -280,7 +290,7 @@ fn hostile_shapes_stay_linear_and_balanced() {
         format!("a{}.b", "\n".repeat(big)),
         "\n".repeat(big) + "{",
         "{\n".repeat(big / 2),
-        "(\n".repeat(big / 2) + &"\n)".repeat(big / 4),
+        "(\n".repeat(big / 4) + &"\n)".repeat(big / 8),
         "\\".repeat(big),
         "\"\\u{".repeat(big / 4),
         "$".repeat(big),
@@ -289,16 +299,44 @@ fn hostile_shapes_stay_linear_and_balanced() {
         "1e".repeat(big / 2),
         "///".repeat(big / 3),
         "r\"".repeat(big / 2),
+        // A long identifier after `{`, and many `{` each followed by an identifier run.
+        format!("{{{}", "a".repeat(big)),
+        format!("{{ {} }}", "ab ".repeat(big / 4)),
+        "{abc".repeat(big / 4),
+        // Long documentation-comment runs, alone and between statements.
+        "///\n".repeat(big / 4),
+        "x\n/// d\n".repeat(big / 8),
+        // Enough `let` and `match` to fill the 256-entry hint caps, then code that consults them.
+        "let ".repeat(big / 8) + &"x = 1\n".repeat(big / 12),
+        "match ".repeat(big / 12) + &"{ a => b, }\n".repeat(big / 24),
+        // A long string whose every line is dedented.
+        format!("\"\"\"\n{}    \"\"\"", "    line {x}\n".repeat(big / 16)),
+        // Function types inside type arguments.
+        "let m: Map<Str, fn() -> T> = f()\n".repeat(big / 36),
+        "Map<Str, fn() -> T".repeat(big / 20),
     ];
     for (n, src) in cases.iter().enumerate() {
+        assert!(
+            src.len() <= MAX_SOURCE_BYTES,
+            "hostile case {n} is too large"
+        );
+        let start = Instant::now();
         let lexed = lex_with(
             src,
             &LexOptions {
-                max_source_bytes: usize::MAX,
+                max_source_bytes: MAX_SOURCE_BYTES,
                 ..LexOptions::default()
             },
         );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < HOSTILE_TIME_BOUND,
+            "hostile case {n} took {elapsed:?}"
+        );
         if let Err(problem) = support::check_invariants(src, &lexed) {
+            panic!("hostile case {n}: {problem}");
+        }
+        if let Err(problem) = support::check_insertions(&lexed) {
             panic!("hostile case {n}: {problem}");
         }
     }

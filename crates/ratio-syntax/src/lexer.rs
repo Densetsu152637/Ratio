@@ -8,8 +8,9 @@
 //!
 //! Semicolon insertion depends on what the innermost `{` opened, which the grammar decides with
 //! the parser's help (a block or a record). The reader approximates the parser with the keyword
-//! that led to the `{` and the disambiguation rule of chapter 02 (a record starts with `}`, `..`,
-//! or a name followed by `:` or `,`); each token's [`BraceKind`] records the decision.
+//! that led to the `{` and rule 1 of chapter 02's disambiguation rules (after `with` a record then
+//! a block; after a type name a variant or record literal; elsewhere a record starts with `}`,
+//! `..`, or a name followed by `:` or `,`); each token's [`BraceKind`] records the decision.
 
 use crate::diag::{Code, Diagnostic};
 use crate::number;
@@ -19,6 +20,10 @@ use crate::token::{BraceKind, Contextual, Keyword, Span, Token, TokenKind};
 pub const MAX_INTERPOLATION_DEPTH: usize = 8;
 /// The largest bracket, block and interpolation nesting a configuration may allow (chapter 07).
 pub const MAX_NESTING: usize = 256;
+/// The largest source a configuration may allow, in bytes (chapter 07: 256 KiB per file).
+pub const MAX_SOURCE_BYTES: usize = 256 * 1024;
+/// The most diagnostics a configuration may ask the reader to report before it stops.
+pub const MAX_DIAGNOSTICS: usize = 100;
 
 /// Open frames, pending hints and the like are bounded so that hostile input costs linear time.
 const HINT_CAP: usize = 256;
@@ -28,23 +33,26 @@ const CLOSE_SEARCH_DEPTH: usize = 64;
 /// The limits that apply while reading tokens (chapter 07's table).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LexOptions {
-    /// Package source per file: 256 KiB (an authored harness: 64 KiB, see [`LexOptions::authored`]).
+    /// Package source per file: 256 KiB, also the maximum [`MAX_SOURCE_BYTES`] (an authored
+    /// harness: 64 KiB, see [`LexOptions::authored`]).
     pub max_source_bytes: usize,
     /// Interpolation nesting inside strings: default 4, at most [`MAX_INTERPOLATION_DEPTH`].
     pub max_interpolation_depth: usize,
     /// Brackets, blocks and interpolations: default 128, at most [`MAX_NESTING`].
     pub max_nesting: usize,
-    /// Diagnostics reported before the reader stops.
+    /// Diagnostics reported before the reader stops: default 100, also the maximum
+    /// [`MAX_DIAGNOSTICS`]. When one more error is found, the reader adds a final
+    /// [`Code::TooManyErrors`] and stops, so a read reports at most this many plus that one.
     pub max_diagnostics: usize,
 }
 
 impl Default for LexOptions {
     fn default() -> Self {
         LexOptions {
-            max_source_bytes: 256 * 1024,
+            max_source_bytes: MAX_SOURCE_BYTES,
             max_interpolation_depth: 4,
             max_nesting: 128,
-            max_diagnostics: 100,
+            max_diagnostics: MAX_DIAGNOSTICS,
         }
     }
 }
@@ -87,6 +95,8 @@ pub fn lex_with(source: &str, options: &LexOptions) -> Lexed {
     let mut options = options.clone();
     options.max_interpolation_depth = options.max_interpolation_depth.min(MAX_INTERPOLATION_DEPTH);
     options.max_nesting = options.max_nesting.min(MAX_NESTING);
+    options.max_source_bytes = options.max_source_bytes.min(MAX_SOURCE_BYTES);
+    options.max_diagnostics = options.max_diagnostics.min(MAX_DIAGNOSTICS);
     Lexer::new(source, options).run()
 }
 
@@ -195,6 +205,18 @@ struct Pat {
     depth: usize,
 }
 
+/// Where the reader is in an attribute that starts a line (`@name` or `@name(…)`). While one is
+/// open, a line end never inserts a semicolon: the attribute belongs to the item below it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attr {
+    /// After the `@`.
+    At,
+    /// After the name, or after the closing `)` of the arguments.
+    Named,
+    /// Inside the arguments; the frame stack's depth outside their `(`.
+    Args(usize),
+}
+
 /// What the reader knew about the previous token when a word was read.
 #[derive(Clone, Copy)]
 #[allow(
@@ -232,11 +254,14 @@ struct Lexer<'a> {
     last_sig: Option<usize>,
     closed_prompt_body: bool,
     type_decl: bool,
+    attr: Option<Attr>,
+    /// The frame depths of the `<` read since the last statement end that no `>` has closed yet
+    /// (most recent last). A `,` while one is open at the current depth is in type position.
+    angles: Vec<usize>,
     halted: bool,
     interp_depth: usize,
     nesting: usize,
     short_open: usize,
-    nesting_reported: bool,
     /// The end of the blank and comment-only region the last continuation check scanned, and its
     /// answer (so a run of blank lines is scanned once).
     cont_cache: Option<(usize, bool)>,
@@ -251,6 +276,12 @@ fn is_ident_continue(c: char) -> bool {
 }
 
 /// Skips whitespace and `//` comments (a doc comment is skipped too).
+///
+/// This lookahead uses `trim_start`, which skips all Unicode whitespace (a no-break space, a lone
+/// carriage return), while code mode accepts only spaces, tabs and line ends. That is harmless:
+/// any other whitespace character is reported as an error when the reader reaches it, so the
+/// lookahead can differ from the reader only on a source that is refused anyway, where the guess
+/// it informs (a brace kind, a contextual keyword) no longer matters.
 fn skip_trivia(mut s: &str) -> &str {
     loop {
         s = s.trim_start();
@@ -294,6 +325,11 @@ fn looks_like_record(after_brace: &str) -> bool {
     let after = skip_trivia(s.get(len..).unwrap_or(""));
     let after = after.strip_prefix('?').unwrap_or(after);
     after.starts_with(',') || (after.starts_with(':') && !after.starts_with("::"))
+}
+
+/// A type name: an identifier spelled `UpperCamel` (the last part of `a.B` too).
+fn is_type_name(kind: &TokenKind) -> bool {
+    matches!(kind, TokenKind::Ident(name) if name.starts_with(|c: char| c.is_ascii_uppercase()))
 }
 
 /// Whether a token at the end of a line can end a statement (condition 2).
@@ -383,11 +419,12 @@ impl<'a> Lexer<'a> {
             last_sig: None,
             closed_prompt_body: false,
             type_decl: false,
+            attr: None,
+            angles: Vec::new(),
             halted: false,
             interp_depth: 0,
             nesting: 0,
             short_open: 0,
-            nesting_reported: false,
             cont_cache: None,
         }
     }
@@ -501,19 +538,25 @@ impl<'a> Lexer<'a> {
         if self.halted {
             return;
         }
-        self.diags.push(Diagnostic {
-            code,
-            message: message.into(),
-            span,
-        });
         if self.diags.len() >= self.opts.max_diagnostics {
+            // One error more than the cap: say so where it was found, and stop.
             self.halted = true;
-            let span = self.span_from(self.mark());
             self.diags.push(Diagnostic {
                 code: Code::TooManyErrors,
                 message: "too many errors; the reader stops here".to_owned(),
                 span,
             });
+            return;
+        }
+        self.diags.push(Diagnostic {
+            code,
+            message: message.into(),
+            span,
+        });
+        if code == Code::NestingTooDeep {
+            // Past the nesting limit nothing more is worth reading: every further token would be
+            // deeper still, and the parser refuses the file anyway.
+            self.halted = true;
         }
     }
 
@@ -524,6 +567,9 @@ impl<'a> Lexer<'a> {
 
     fn push_tok_span(&mut self, kind: TokenKind, span: Span) -> usize {
         let is_doc = matches!(kind, TokenKind::DocComment(_));
+        if !is_doc {
+            self.track_attr(&kind);
+        }
         self.out.push(Token { kind, span });
         let index = self.out.len() - 1;
         if !is_doc {
@@ -531,6 +577,20 @@ impl<'a> Lexer<'a> {
             self.closed_prompt_body = false;
         }
         index
+    }
+
+    /// Follows an attribute at the start of a line through its name and arguments; any other
+    /// token ends it. Called before `kind` becomes the previous token.
+    fn track_attr(&mut self, kind: &TokenKind) {
+        let depth = self.stack.len();
+        self.attr = match (self.attr, kind) {
+            (Some(Attr::At), TokenKind::Ident(_) | TokenKind::Keyword(_)) => Some(Attr::Named),
+            (Some(Attr::Named), TokenKind::LParen) => Some(Attr::Args(depth)),
+            (Some(Attr::Args(outer)), TokenKind::RParen) if depth == outer => Some(Attr::Named),
+            (Some(Attr::Args(outer)), _) => Some(Attr::Args(outer)),
+            (_, TokenKind::At) if self.at_stmt_start() => Some(Attr::At),
+            _ => None,
+        };
     }
 
     fn prev_kind(&self) -> Option<&TokenKind> {
@@ -546,8 +606,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn check_nesting(&mut self, at: Mark) {
-        if self.nesting > self.opts.max_nesting && !self.nesting_reported {
-            self.nesting_reported = true;
+        if self.nesting > self.opts.max_nesting {
             let span = Self::point_span(at);
             let message = format!(
                 "brackets, blocks and interpolations nest deeper than {}",
@@ -573,6 +632,9 @@ impl<'a> Lexer<'a> {
         }
         while self.pats.last().is_some_and(|p| p.depth > len) {
             self.pats.pop();
+        }
+        while self.angles.last().is_some_and(|d| *d > len) {
+            self.angles.pop();
         }
         Some(frame)
     }
@@ -621,11 +683,14 @@ impl<'a> Lexer<'a> {
         )
     }
 
+    /// Whether the next token starts a statement or item: after a `;`, a `{`, the start of the
+    /// file, or a complete attribute (`@turn` then `pub harness …`).
     fn at_stmt_start(&self) -> bool {
-        matches!(
-            self.prev_kind(),
-            None | Some(TokenKind::Semi { .. } | TokenKind::LBrace(_))
-        )
+        self.attr == Some(Attr::Named)
+            || matches!(
+                self.prev_kind(),
+                None | Some(TokenKind::Semi { .. } | TokenKind::LBrace(_))
+            )
     }
 
     // ---- code mode ----
@@ -666,9 +731,18 @@ impl<'a> Lexer<'a> {
 
     fn line_comment(&mut self) {
         let m = self.mark();
+        // `////…` is a documentation comment too: it starts with `///`.
         let doc = self.rest().starts_with("///");
         while !self.line_break_here() && self.peek().is_some() {
-            self.bump();
+            let at = self.mark();
+            if self.bump() == Some('\r') {
+                let span = self.span_from(at);
+                self.report(
+                    Code::BareCarriageReturn,
+                    "a carriage return must be followed by a line feed",
+                    span,
+                );
+            }
         }
         if doc {
             let text = self.src.get(m.off + 3..self.pos).unwrap_or("").to_owned();
@@ -705,6 +779,9 @@ impl<'a> Lexer<'a> {
     fn on_semi(&mut self) {
         let depth = self.stack.len();
         self.type_decl = false;
+        while self.angles.last().is_some_and(|d| *d >= depth) {
+            self.angles.pop();
+        }
         while self.pendings.last().is_some_and(|p| p.depth >= depth) {
             self.pendings.pop();
         }
@@ -722,7 +799,7 @@ impl<'a> Lexer<'a> {
                 ..
             })
         );
-        if !innermost_is_block || self.head_pending_here() {
+        if !innermost_is_block || self.head_pending_here() || self.attr.is_some() {
             return false;
         }
         let ends = self.prev_kind().is_some_and(ends_statement);
@@ -793,10 +870,12 @@ impl<'a> Lexer<'a> {
         );
         let ctx = WordCtx {
             prev_rparen: matches!(self.prev_kind(), Some(TokenKind::RParen)),
-            prev_type_position: matches!(
-                self.prev_kind(),
-                Some(TokenKind::Colon | TokenKind::Arrow | TokenKind::Lt)
-            ),
+            prev_type_position: match self.prev_kind() {
+                Some(TokenKind::Colon | TokenKind::Arrow | TokenKind::Lt) => true,
+                // `Map<Str, fn() -> T>`: a `,` inside an open `<…>` separates type arguments.
+                Some(TokenKind::Comma) => self.angles.last() == Some(&self.stack.len()),
+                _ => false,
+            },
             stmt_start: self.at_stmt_start(),
             after_prompt_body: self.closed_prompt_body,
         };
@@ -1024,7 +1103,9 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        if looks_like_record(self.rest()) {
+        // A `{` straight after a type name, with no head keyword waiting for a block, is a
+        // variant or record literal (`Denied { by }`, `Ok { value: v }`): rule 1 of chapter 02.
+        if self.prev_kind().is_some_and(is_type_name) || looks_like_record(self.rest()) {
             BraceKind::Record
         } else {
             BraceKind::Block
@@ -1096,6 +1177,16 @@ impl<'a> Lexer<'a> {
             TokenKind::Semi { .. } => self.on_semi(),
             TokenKind::Eq | TokenKind::Colon => self.clear_pats(PatEnd::Let),
             TokenKind::FatArrow => self.clear_pats(PatEnd::Arrow),
+            TokenKind::Lt => {
+                if self.angles.len() < HINT_CAP {
+                    self.angles.push(self.stack.len());
+                }
+            }
+            TokenKind::Gt => {
+                if self.angles.last() == Some(&self.stack.len()) {
+                    self.angles.pop();
+                }
+            }
             TokenKind::Comma
                 if matches!(
                     self.stack.last(),
@@ -1537,7 +1628,9 @@ impl<'a> Lexer<'a> {
 
     /// The end of the source ends the last line.
     fn should_insert_at_end(&self) -> bool {
-        !self.head_pending_here() && self.prev_kind().is_some_and(ends_statement)
+        !self.head_pending_here()
+            && self.attr.is_none()
+            && self.prev_kind().is_some_and(ends_statement)
     }
 }
 

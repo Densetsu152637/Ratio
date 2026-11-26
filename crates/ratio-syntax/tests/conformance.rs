@@ -12,7 +12,9 @@
 //! ```
 //!
 //! Files whose expectations are `ok`, `value`, `check-error`, `runtime-error` or `fixture` belong
-//! to later stages; the runner counts them and skips them.
+//! to later stages; the runner counts them and skips them. The header ends at the first line that
+//! does not start with `// `; every header line must be one of these directives, so a misspelt
+//! one (`// token: …`) fails the file instead of being ignored.
 
 mod support;
 
@@ -81,6 +83,7 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
         } else if rest.starts_with("fixture: ") {
             case.other_stage = true;
         } else if let Some(option) = rest.strip_prefix("option: ") {
+            let option = option.trim();
             let (name, value) = option
                 .split_once(' ')
                 .ok_or_else(|| format!("{}: bad option `{option}`", path.display()))?;
@@ -95,6 +98,11 @@ fn parse(path: &Path, text: &str) -> Result<Case, String> {
                 "max_diagnostics" => case.options.max_diagnostics = value,
                 _ => return Err(format!("{}: unknown option `{name}`", path.display())),
             }
+        } else {
+            return Err(format!(
+                "{}: unknown header directive `{line}` (expect:, tokens:, option: or fixture:)",
+                path.display()
+            ));
         }
     }
     if !token_lines.is_empty() {
@@ -147,6 +155,9 @@ fn the_lexer_conformance_files_pass() {
         let lexed = lex_with(&text, &case.options);
         if let Err(problem) = support::check_invariants(&text, &lexed) {
             failures.push(format!("{name}: invariant broken: {problem}"));
+        }
+        if let Err(problem) = support::check_insertions(&lexed) {
+            failures.push(format!("{name}: insertion property broken: {problem}"));
         }
         let got: Vec<(String, u32, u32)> = lexed
             .diagnostics

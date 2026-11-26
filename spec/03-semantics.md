@@ -5,7 +5,7 @@
 | Kind | Types | Notes |
 | --- | --- | --- |
 | Unit | `()` | The value of statements and of blocks ending in one |
-| Scalars | `Bool`, `Int`, `Float`, `Duration`, `Money` | `Int` is 64-bit signed, overflow raises `Invalid`; `Duration` is whole microseconds; `Money` is exact to 1e-6 USD |
+| Scalars | `Bool`, `Int`, `Float`, `Duration`, `Money` | `Int` is 64-bit signed, overflow raises `Invalid`; `Duration` is whole microseconds (a literal is a whole number of its unit, converted to microseconds and range-checked there, chapter 02); `Money` is exact to 1e-6 USD |
 | Text | `Str`, `UserText`, `Brief`, `Untrusted<Str>` | Unicode scalar values; indexes and lengths count characters, not bytes. `UserText` and `Brief` are text with a known origin (below) |
 | Images | `Image` | `{ mime, width, height }` plus bytes, opaque to programs; from attachments and `tools.browser_screenshot`; always untrusted |
 | Options | `T?` | `none` or a `T`; `T??` is `T?` |

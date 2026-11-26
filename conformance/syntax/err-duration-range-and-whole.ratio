@@ -1,0 +1,4 @@
+// expect: lex-error L0009 at 3:1
+// expect: lex-error L0010 at 4:1
+9223372036854776ms
+1.5s

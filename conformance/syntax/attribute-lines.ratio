@@ -1,0 +1,12 @@
+// expect: lex-ok
+// tokens: @ ident:task @ ident:allow ( ident:read_file , ident:grep ) kw:fn ident:f ( ) {block int:1 ;! } ;! @ ident:turn ctx:state : ident:Int = int:0 ;!
+@task
+@allow(
+  read_file,
+  grep
+)
+fn f() {
+  1
+}
+@turn
+state: Int = 0

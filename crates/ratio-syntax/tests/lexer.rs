@@ -6,9 +6,57 @@ mod support;
 use std::collections::BTreeSet;
 
 use ratio_syntax::{
-    Code, Contextual, Keyword, LexOptions, MAX_INTERPOLATION_DEPTH, MAX_NESTING, TokenKind, lex,
-    lex_with,
+    Code, Contextual, Keyword, LexOptions, MAX_DIAGNOSTICS, MAX_INTERPOLATION_DEPTH, MAX_NESTING,
+    MAX_SOURCE_BYTES, TokenKind, lex, lex_with,
 };
+
+#[test]
+fn a_configuration_cannot_raise_the_source_or_diagnostic_limits() {
+    let raised = LexOptions {
+        max_source_bytes: usize::MAX,
+        max_diagnostics: usize::MAX,
+        ..LexOptions::default()
+    };
+    assert_eq!(MAX_SOURCE_BYTES, 256 * 1024);
+    let over = "a".repeat(MAX_SOURCE_BYTES + 1);
+    assert_eq!(codes(&over, &raised), vec![Code::SourceTooLarge]);
+    assert_eq!(MAX_DIAGNOSTICS, 100);
+    let many = "~".repeat(500);
+    let got = codes(&many, &raised);
+    assert_eq!(got.len(), MAX_DIAGNOSTICS + 1);
+    assert_eq!(got.last(), Some(&Code::TooManyErrors));
+}
+
+#[test]
+fn the_diagnostic_cap_is_exact() {
+    // Exactly the cap: every error is reported and the reader does not claim there were more.
+    let at_cap = codes(&"~".repeat(MAX_DIAGNOSTICS), &LexOptions::default());
+    assert_eq!(at_cap, vec![Code::UnexpectedCharacter; MAX_DIAGNOSTICS]);
+    // One more: the cap's worth, then `L0015` where the next one was found.
+    let lexed = lex(&"~".repeat(MAX_DIAGNOSTICS + 1));
+    assert_eq!(lexed.diagnostics.len(), MAX_DIAGNOSTICS + 1);
+    let last = lexed.diagnostics.last().expect("a diagnostic");
+    assert_eq!(last.code, Code::TooManyErrors);
+    assert_eq!(last.span.col, u32::try_from(MAX_DIAGNOSTICS + 1).unwrap());
+}
+
+#[test]
+fn reading_stops_at_the_first_nesting_error() {
+    let src = format!("{}~~~", "(".repeat(129));
+    let lexed = lex(&src);
+    assert_eq!(
+        lexed.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(),
+        vec![Code::NestingTooDeep]
+    );
+    assert_eq!(lexed.tokens.last().map(|t| &t.kind), Some(&TokenKind::Eof));
+    assert!(support::check_invariants(&src, &lexed).is_ok());
+}
+
+#[test]
+fn leading_zeros_are_decimal_and_four_slashes_are_a_doc_comment() {
+    assert_eq!(support::render(&lex("007")), "int:7 ;!");
+    assert_eq!(support::render(&lex("//// x")), "doc:\"/ x\"");
+}
 
 fn nested_interpolations(depth: usize) -> String {
     let mut s = "x".to_owned();

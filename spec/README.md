@@ -1,9 +1,27 @@
 # The Ratio specification
 
-Version: draft 0.6 (2026-11-26). Status: design; stage 1 of the implementation (the token
+Version: draft 0.7 (2026-11-26). Status: design; stage 1 of the implementation (the token
 reader) is built in this repository.
 
-**Changes in draft 0.6.** The repository split: Ratio is built as a language in this repository,
+**Changes in draft 0.7.** Errata from the stage 1 review and the repository-split review.
+Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;
+insertion's condition 1 includes the top level of the file, condition 3's `.` includes `..` and
+`..=`, and a line holding only attributes never ends a statement; disambiguation rule 1 is
+ordered (head keywords, `with` and a record, variant literals after a type name such as
+`Denied { by }`, then records) and says the token reader approximates the parser with it; the
+number rules are written down (leading zeros, the `_` separator rule, durations as whole numbers
+of their unit in microseconds, so `1.5s` is a lexical error, and why `-9223372036854775808` is
+written `-9223372036854775807 - 1`); the long-string dedent algorithm is defined, the first
+`"""` ends a long string, a bare carriage return is an error everywhere and `\r\n` reads as `\n`
+in long strings; operators use maximal munch (`T??` is the token `??`, meaning `T?`; `> =` needs
+its space). Chapter 03 pins the `Duration` unit for literals. Chapter 07 adds T4b, an injected
+install. Chapter 10 lists the token reader's expectation lines and the `L0001` to `L0016`
+codes, adds attribute lines to the stage 1 corpus, makes `RatioHost::open_frame` check against
+Imperium's own record of the parent frame (never the `FrameCtx` passed in), adds a per-session
+notice when a pinned `user:` or `plugin:` package was selected with another `ratio-lang`
+version, and requires a GitHub release, not only a tag, in Imperium's source check.
+
+**Changes in draft 0.6** (kept for reference). The repository split: Ratio is built as a language in this repository,
 with its own Cargo workspace, CI and releases, and Imperium becomes a host that depends on a
 release tag (R15 revised). Chapter 10 assigns each of the 28 stages to a repository (stages 1 to
 12 here, the engine host, daemon, gates, clients and headless evaluation in Imperium, four stages

@@ -1,0 +1,15 @@
+// expect: lex-ok
+// tokens: kw:fn ident:f ( ident:a : ident:Int , ident:b : ident:Str ) -> ident:Map < ident:Str , kw:fn ( ) -> ident:Int > {block ident:a ;! } ;! kw:prompt ident:p ( ident:x : ident:Str ) {prompt ctx:task ident:x ;! } ;!
+fn f(
+  a: Int,
+  b: Str
+) -> Map<Str, fn() -> Int>
+{
+  a
+}
+prompt p(
+  x: Str
+)
+{
+  task x
+}

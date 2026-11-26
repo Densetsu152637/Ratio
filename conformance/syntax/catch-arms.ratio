@@ -1,0 +1,16 @@
+// expect: lex-ok
+// tokens: kw:fn ident:h ( ) {block kw:try {block ident:a ( ) ;! } kw:catch {match ident:Denied {record ident:by } => ident:b ( ident:by ) , ident:_ => ident:c ( ) } ;! kw:try {block ident:a ( ) ;! } kw:catch {match ident:e => ident:e , } ;! } ;!
+fn h() {
+  try {
+    a()
+  } catch {
+    Denied { by } => b(by),
+    _ => c()
+  }
+  try {
+    a()
+  }
+  catch {
+    e => e,
+  }
+}

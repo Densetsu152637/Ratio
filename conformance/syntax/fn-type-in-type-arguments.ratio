@@ -1,0 +1,6 @@
+// expect: lex-ok
+// tokens: kw:fn ident:g ( ) {block kw:let ident:m : ident:Map < ident:Str , kw:fn ( ) -> ident:T > = ident:make ( ) ;! ident:m ;! } ;!
+fn g() {
+  let m: Map<Str, fn() -> T> = make()
+  m
+}
