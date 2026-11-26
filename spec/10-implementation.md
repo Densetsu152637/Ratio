@@ -413,6 +413,7 @@ The parse diagnostic codes (chapter 02 defines the rules; the limit is chapter 0
 | `P0007` | More parse diagnostics than the limit (100); it marks where the next one was found, and parsing stops |
 | `P0008` | A block head whose `{` is on the next line (head split across lines) |
 | `P0009` | A positional argument after a named one |
+| `P0010` | Internal error: the parser could not run (no source triggers it; the module is empty) |
 
 A single test runner runs every file with the scripted host. In stages 1 and 2 it is the syntax
 crate's runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`,

@@ -260,7 +260,7 @@ examples on the eval suites (chapter 10, stage 24).
 | Tape per turn | 64 MiB | 1 GiB | Recording stops with a notice; the turn continues live |
 
 Parser nesting counts the depth of the syntax tree, not only brackets: a nested expression, type
-or pattern costs one level, a parenthesis one, a call two, a tuple pattern two, and every link of
+or pattern costs one level, a `defer` block and a prompt `if` or `for` section one each, a parenthesis one, a call two, a tuple pattern two, and every link of
 a left-associative chain costs one (`a + b + c` and `x |> f |> g`, a `.` chain, a postfix chain),
 so a chain of 128 or more terms exceeds the default limit; split it with `let` bindings.
 

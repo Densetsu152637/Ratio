@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratio_syntax::ast::ItemKind;
-use ratio_syntax::{Code, LexOptions, MAX_SOURCE_BYTES, dump, parse, parse_with, print};
+use ratio_syntax::{Code, LexOptions, MAX_SOURCE_BYTES, dump, fallback, parse, parse_with, print};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -268,21 +268,163 @@ fn the_deepest_allowed_source_parses_on_a_small_stack() {
     handle.join().expect("no stack overflow, no panic");
 }
 
-/// The deepest source of a block shape that parses cleanly at `max_nesting` 256.
-fn deepest(open: &str, close: &str, inner: &str) -> String {
-    let make = |n: usize| {
+/// A block shape: `prefix`, `n` times `open`, `inner`, `n` times `close`, `suffix`.
+struct Blocks {
+    name: &'static str,
+    prefix: &'static str,
+    open: &'static str,
+    close: &'static str,
+    inner: &'static str,
+    suffix: &'static str,
+}
+
+impl Blocks {
+    fn make(&self, n: usize) -> String {
         format!(
-            "fn f() {{ {}{inner}{} }}\n",
-            open.repeat(n),
-            close.repeat(n)
+            "{}{}{}{}{}\n",
+            self.prefix,
+            self.open.repeat(n),
+            self.inner,
+            self.close.repeat(n),
+            self.suffix
         )
-    };
-    let n = (1..=256)
-        .rev()
-        .find(|n| parse_with(&make(*n), &options(256)).is_clean())
-        .expect("some depth parses");
-    assert!(n >= 60, "only {n} levels of `{open}` parse");
-    make(n)
+    }
+
+    /// The deepest source of the shape that parses cleanly at `max_nesting` 256.
+    fn deepest(&self) -> String {
+        let n = (1..=256)
+            .rev()
+            .find(|n| parse_with(&self.make(*n), &options(256)).is_clean())
+            .expect("some depth parses");
+        assert!(n >= 60, "only {n} levels of `{}` parse", self.name);
+        self.make(n)
+    }
+}
+
+const BLOCK_SHAPES: &[Blocks] = &[
+    Blocks {
+        name: "ifs",
+        prefix: "fn f() { ",
+        open: "if a { ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "fors",
+        prefix: "fn f() { ",
+        open: "for x in xs { ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "tries",
+        prefix: "fn f() { ",
+        open: "try { ",
+        close: " } catch e { 1 }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "matches",
+        prefix: "fn f() { ",
+        open: "match a { _ => ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "pars",
+        prefix: "fn f() { ",
+        open: "par { ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "let blocks",
+        prefix: "fn f() { ",
+        open: "let b = { ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "parens",
+        prefix: "fn f() { ",
+        open: "f(",
+        close: ")",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "closures",
+        prefix: "fn f() { ",
+        open: "g(|x| ",
+        close: ")",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "defers",
+        prefix: "fn f() { ",
+        open: "defer { ",
+        close: " }",
+        inner: "1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "prompt ifs",
+        prefix: "prompt p() { ",
+        open: "if a { ",
+        close: " }",
+        inner: "note 1",
+        suffix: " }",
+    },
+    Blocks {
+        name: "prompt fors",
+        prefix: "prompt p() { ",
+        open: "for x in xs { ",
+        close: " }",
+        inner: "note 1",
+        suffix: " }",
+    },
+];
+
+#[test]
+fn defer_blocks_and_prompt_sections_count_one_level_each() {
+    // Three negations and the literal add four levels of tree depth the reader does not count, so
+    // the parser is the first to refuse: `n` levels are accepted exactly when `n + 4 <= max`.
+    for max in [16, 128, 256] {
+        for shape in BLOCK_SHAPES
+            .iter()
+            .filter(|b| matches!(b.name, "defers" | "prompt ifs" | "prompt fors"))
+        {
+            let shape = Blocks {
+                inner: if shape.inner == "1" {
+                    "---1"
+                } else {
+                    "note ---1"
+                },
+                ..*shape
+            };
+            let clean = max - 4;
+            assert_eq!(
+                codes(&shape.make(clean), &options(max)),
+                Vec::<&str>::new(),
+                "{}: {clean} levels with max_nesting {max}",
+                shape.name
+            );
+            assert_eq!(
+                codes(&shape.make(clean + 1), &options(max)),
+                ["P0002"],
+                "{}: {} levels with max_nesting {max}",
+                shape.name,
+                clean + 1
+            );
+        }
+    }
 }
 
 #[test]
@@ -293,17 +435,8 @@ fn printing_and_dumping_the_deepest_trees_work_on_a_small_stack() {
         .into_iter()
         .map(|(name, per_level, make)| (name.to_owned(), make(last_clean(per_level, 256))))
         .collect();
-    for (name, open, close, inner) in [
-        ("ifs", "if a { ", " }", "1"),
-        ("fors", "for x in xs { ", " }", "1"),
-        ("tries", "try { ", " } catch e { 1 }", "1"),
-        ("matches", "match a { _ => ", " }", "1"),
-        ("pars", "par { ", " }", "1"),
-        ("let blocks", "let b = { ", " }", "1"),
-        ("parens", "f(", ")", "1"),
-        ("closures", "g(|x| ", ")", "1"),
-    ] {
-        sources.push((name.to_owned(), deepest(open, close, inner)));
+    for shape in BLOCK_SHAPES {
+        sources.push((shape.name.to_owned(), shape.deepest()));
     }
     let handle = std::thread::Builder::new()
         .stack_size(512 * 1024)
@@ -318,6 +451,68 @@ fn printing_and_dumping_the_deepest_trees_work_on_a_small_stack() {
         })
         .expect("a thread");
     handle.join().expect("no stack overflow, no panic");
+}
+
+#[test]
+fn the_fallback_passes_stay_on_a_small_stack_and_refuse_depth() {
+    // With no big-stack thread the passes run on the caller's stack at a depth of at most 12.
+    // Every shape, at the depth where parentheses or `if` blocks overflowed 512 KiB before the
+    // clamp and far past it, must neither overflow nor panic.
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for shape in BLOCK_SHAPES {
+        for n in [4, 11, 24, 100, 255] {
+            sources.push((format!("{} x{n}", shape.name), shape.make(n)));
+        }
+    }
+    for (name, _, make) in shapes() {
+        for n in [4, 24, 100, 250] {
+            sources.push((format!("{name} x{n}"), make(n)));
+        }
+    }
+    // A deep tree built on the big stack, printed and dumped in fallback mode.
+    let deep: Vec<_> = BLOCK_SHAPES
+        .iter()
+        .map(|b| (b.name, parse_with(&b.deepest(), &options(256)).module))
+        .collect();
+    let handle = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            for (name, source) in sources {
+                let parsed = fallback::parse_with(&source, &options(256));
+                let refused = parsed
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.code, Code::ParseNestingTooDeep | Code::NestingTooDeep));
+                let _ = (
+                    fallback::print(&parsed.module),
+                    fallback::dump(&parsed.module),
+                );
+                if refused {
+                    assert!(
+                        parsed.diagnostics.len() <= 2,
+                        "{name}: {:?}",
+                        parsed.diagnostics
+                    );
+                } else {
+                    assert!(parsed.is_clean(), "{name}: {:?}", parsed.diagnostics);
+                }
+            }
+            for (name, module) in &deep {
+                assert!(fallback::print(module).contains("<too deep>"), "{name}");
+                assert!(fallback::dump(module).contains("(too-deep)"), "{name}");
+            }
+        })
+        .expect("a thread");
+    handle.join().expect("no stack overflow, no panic");
+    // A shallow source is read, printed and dumped in full.
+    let shallow = fallback::parse_with(
+        "fn f() { if a { (1) } }
+",
+        &options(256),
+    );
+    assert!(shallow.is_clean());
+    assert!(!fallback::print(&shallow.module).contains("<too deep>"));
+    assert!(!fallback::dump(&shallow.module).contains("(too-deep)"));
 }
 
 #[test]

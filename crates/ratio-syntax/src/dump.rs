@@ -87,7 +87,12 @@ use crate::ast::{
 /// The span-free S-expression of `module` (the notation is described in the module documentation).
 #[must_use]
 pub fn dump(module: &Module) -> String {
-    stack::run(|big| {
+    stack::run(|big| dump_on(module, big)).unwrap_or_else(|| "(internal-error)".to_owned())
+}
+
+/// [`dump`] on the current thread; `big` says it has the big stack (see [`crate::stack`]).
+pub(crate) fn dump_on(module: &Module, big: bool) -> String {
+    {
         let mut d = Dump {
             out: String::new(),
             depth: 0,
@@ -95,8 +100,7 @@ pub fn dump(module: &Module) -> String {
         };
         d.module(module);
         d.out
-    })
-    .unwrap_or_else(|| "(internal-error)".to_owned())
+    }
 }
 
 struct Dump {
@@ -422,7 +426,12 @@ impl Dump {
                 d.expr(target);
                 d.expr(value);
             }),
-            StmtKind::Defer(block) => self.node("defer", |d| d.block(block)),
+            StmtKind::Defer(block) => self.node("defer", |d| {
+                if d.enter() {
+                    d.block(block);
+                    d.depth -= 1;
+                }
+            }),
             StmtKind::Expr(expr) => self.node("expr", |d| d.expr(expr)),
         }
     }
@@ -708,6 +717,13 @@ impl Dump {
     // ---- prompts ----
 
     fn prompt_body(&mut self, body: &PromptBody) {
+        if self.enter() {
+            self.prompt_body_inner(body);
+            self.depth -= 1;
+        }
+    }
+
+    fn prompt_body_inner(&mut self, body: &PromptBody) {
         self.node("prompt-body", |d| d.seq(&body.sections, Self::section));
     }
 

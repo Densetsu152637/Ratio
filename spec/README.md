@@ -12,8 +12,9 @@ does not fit); `record_pattern` becomes `"{" [ ( field_pattern {"," field_patter
 allows one, jumps are not operands, `()` is not an expression); parser nesting counts tree depth,
 one level per nested expression, type or pattern, per prefix operator and per link of a chain,
 limited by `max_nesting` (`P0002`). Chapter 10 adds the parse diagnostic series `P0001` to
-`P0009` (unexpected token, nesting too deep, wrong brace, not a place, chained comparison or
-range, misplaced modifier, too many errors, head split across lines, positional after named),
+`P0010` (unexpected token, nesting too deep, wrong brace, not a place, chained comparison or
+range, misplaced modifier, too many errors, head split across lines, positional after named,
+internal error),
 the expectation kinds `parse-ok`, `parse-error CODE at L:C` and `tree:`, says that
 `RatioHost::open_frame` looks up the parent by frame path, and says that only the release
 workflow creates a release, given the tag ruleset. Also in 0.8: in a type declaration or a
@@ -26,9 +27,10 @@ its result type, and a closure's parameter commas do not end a `match` arm; and 
 form (a new subsection): the printer's explicit `;` after a statement ending in `>`, `??` or a
 `fn` or `harness` type, no trailing comma in an `import` list, `{ x, }` for a one-field
 shorthand record, canonical quantity, duration and money units, ranges without spaces, long and
-raw long string layout. Chapter 10 says what a `tree:` line is. The round trip is stated for printed text within the
+raw long string layout. A `defer` block and a prompt `if` or `for` section each count one level of nesting (chapter 02,
+chapter 07). Chapter 10 says what a `tree:` line is. The round trip is stated for printed text within the
 source limit, and `print`, the tree dump and the parser run on a large stack, clamping depth to
-32 if no thread can be started (chapter 02, "Canonical form").
+12 if no thread can be started (chapter 02, "Canonical form").
 
 **Changes in draft 0.7** (kept for reference). Errata from the stage 1 review and the repository-split review.
 Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;

@@ -16,9 +16,10 @@ use std::sync::Mutex;
 /// The stack of the thread the passes run on.
 pub(crate) const BIG_STACK_BYTES: usize = 64 * 1024 * 1024;
 
-/// The depth a pass allows when it runs on the caller's stack: small enough for the smallest
-/// stacks in use (512 KiB) in a debug build.
-pub(crate) const FALLBACK_DEPTH: usize = 32;
+/// The depth a pass allows when it runs on the caller's stack: small enough for a 512 KiB
+/// stack (the smallest in use) in a debug build, where nested parentheses or `if` blocks
+/// overflowed it from 24 levels. `tests/parser.rs` runs every pass in this mode on such a stack.
+pub(crate) const FALLBACK_DEPTH: usize = 12;
 
 /// Runs `work` on a thread with [`BIG_STACK_BYTES`] of stack, passing `true`; if no thread can be
 /// started, runs it on this thread, passing `false`. A panic in `work` (a bug) is passed on to the

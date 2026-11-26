@@ -6,7 +6,7 @@
 //! level of nesting is counted against the limit of chapter 07 (`LexOptions::max_nesting`), so the
 //! parser's stack and the depth of the tree it builds are bounded whatever the input. Past the
 //! limit it reports `P0002` and stops. The parser runs on a thread with a large stack; if none can
-//! be started it runs on the caller's stack with the limit clamped to 32.
+//! be started it runs on the caller's stack with the limit clamped to 12 (the reader's too).
 //!
 //! What a `{` opens is decided once, by the token reader, with rule 1 of chapter 02's
 //! disambiguation rules; the reader records it on the token ([`BraceKind`]) and the parser takes
@@ -59,6 +59,40 @@ pub fn parse(source: &str) -> Parsed {
 /// returned; otherwise the parser reads whatever tokens there are and recovers from errors.
 #[must_use]
 pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
+    stack::run(|big| parse_on(source, options, big)).unwrap_or_else(|| lost(source))
+}
+
+/// What the parse of `source` is when the parser could not run at all.
+fn lost(source: &str) -> Parsed {
+    let whole = whole_span(source, None);
+    Parsed {
+        module: Module {
+            meta: None,
+            items: Vec::new(),
+            span: whole,
+        },
+        diagnostics: vec![Diagnostic {
+            code: Code::Internal,
+            message: "internal error: the parser could not run".to_owned(),
+            span: Span {
+                end: whole.start,
+                end_line: whole.line,
+                end_col: whole.col,
+                ..whole
+            },
+        }],
+    }
+}
+
+/// [`parse_with`] on the current thread. `big` says the thread has the big stack of
+/// [`crate::stack`]; without it the nesting limit (the token reader's and the parser's) is
+/// clamped to [`FALLBACK_DEPTH`].
+pub(crate) fn parse_on(source: &str, options: &LexOptions, big: bool) -> Parsed {
+    let mut options = options.clone();
+    if !big {
+        options.max_nesting = options.max_nesting.min(FALLBACK_DEPTH);
+    }
+    let options = &options;
     let lexed = lex_with(source, options);
     let max_depth = options.max_nesting.min(MAX_NESTING);
     let max_diagnostics = options.max_diagnostics.min(MAX_DIAGNOSTICS);
@@ -81,8 +115,9 @@ pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
         };
     }
     let budget = max_diagnostics.saturating_sub(lexed.diagnostics.len());
-    let (mut module, parser_diagnostics) =
-        run_parser(Parser::new(lexed.tokens, max_depth, budget), whole);
+    let mut parser = Parser::new(lexed.tokens, max_depth, budget);
+    let mut module = parser.module();
+    let parser_diagnostics = parser.diags;
     module.span = whole;
     let mut diagnostics = lexed.diagnostics;
     // One diagnostic per problem: the token reader already complained about a token it flagged
@@ -102,41 +137,6 @@ pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
         module,
         diagnostics,
     }
-}
-
-/// Reads the module on the big stack of [`crate::stack`]. If no thread could be started the
-/// parser runs on the caller's stack with its nesting limit clamped to
-/// [`FALLBACK_DEPTH`] (deeper sources get `P0002`). If the parser was lost, the module is empty
-/// and an internal diagnostic says so, so a failure is never silent.
-fn run_parser(parser: Parser, whole: Span) -> (Module, Vec<Diagnostic>) {
-    let done = stack::run(move |big| {
-        let mut parser = parser;
-        if !big {
-            parser.max_depth = parser.max_depth.min(FALLBACK_DEPTH);
-        }
-        let module = parser.module();
-        (module, parser.diags)
-    });
-    done.unwrap_or_else(|| {
-        let at = Span {
-            end: whole.start,
-            end_line: whole.line,
-            end_col: whole.col,
-            ..whole
-        };
-        (
-            Module {
-                meta: None,
-                items: Vec::new(),
-                span: whole,
-            },
-            vec![Diagnostic {
-                code: Code::UnexpectedToken,
-                message: "internal error: the parser could not run".to_owned(),
-                span: at,
-            }],
-        )
-    })
 }
 
 fn whole_span(source: &str, eof: Option<Span>) -> Span {
@@ -1383,7 +1383,18 @@ impl Parser {
             }
             TokenKind::Keyword(Keyword::Defer) => {
                 self.bump();
-                StmtKind::Defer(self.block())
+                // A `defer` block is a level of nesting, like an expression.
+                if self.enter() {
+                    let block = self.block();
+                    self.leave();
+                    StmtKind::Defer(block)
+                } else {
+                    self.leave();
+                    StmtKind::Defer(Block {
+                        stmts: Vec::new(),
+                        span: point(self.span()),
+                    })
+                }
             }
             _ => {
                 let target = self.expr();
@@ -2505,25 +2516,35 @@ impl Parser {
                 | Contextual::Race
                 | Contextual::Timeout => return None,
             }
-        } else if self.eat_kw(Keyword::If) {
-            let cond = self.expr();
-            let then = self.prompt_body();
-            let else_ = if self.eat_kw(Keyword::Else) {
-                Some(self.prompt_body())
-            } else {
-                None
-            };
-            SectionKind::If { cond, then, else_ }
-        } else if self.eat_kw(Keyword::For) {
-            let pattern = self.pattern();
-            self.expect(&TokenKind::Keyword(Keyword::In), "`in`");
-            let iter = self.expr();
-            let body = self.prompt_body();
-            SectionKind::For {
-                pattern,
-                iter,
-                body,
+        } else if self.at_kw(Keyword::If) || self.at_kw(Keyword::For) {
+            // A prompt `if` or `for` section is a level of nesting, like an expression.
+            if !self.enter() {
+                self.leave();
+                return None;
             }
+            let kind = if self.eat_kw(Keyword::If) {
+                let cond = self.expr();
+                let then = self.prompt_body();
+                let else_ = if self.eat_kw(Keyword::Else) {
+                    Some(self.prompt_body())
+                } else {
+                    None
+                };
+                SectionKind::If { cond, then, else_ }
+            } else {
+                self.bump();
+                let pattern = self.pattern();
+                self.expect(&TokenKind::Keyword(Keyword::In), "`in`");
+                let iter = self.expr();
+                let body = self.prompt_body();
+                SectionKind::For {
+                    pattern,
+                    iter,
+                    body,
+                }
+            };
+            self.leave();
+            kind
         } else {
             self.expected(SECTION_WORDS);
             return None;

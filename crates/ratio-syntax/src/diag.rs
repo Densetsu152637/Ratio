@@ -61,11 +61,13 @@ pub enum Code {
     HeadSplitAcrossLines,
     /// A positional argument after a named one.
     PositionalAfterNamed,
+    /// The parser could not run (a bug or an exhausted host); nothing could be read.
+    Internal,
 }
 
 impl Code {
     /// Every code, in numeric order (the `L` codes, then the `P` codes).
-    pub const ALL: [Code; 25] = [
+    pub const ALL: [Code; 26] = [
         Code::UnexpectedCharacter,
         Code::UnterminatedString,
         Code::InvalidEscape,
@@ -91,6 +93,7 @@ impl Code {
         Code::ParseTooManyErrors,
         Code::HeadSplitAcrossLines,
         Code::PositionalAfterNamed,
+        Code::Internal,
     ];
 
     /// The code as written in diagnostics and conformance files (`L0001`, `P0001`).
@@ -122,6 +125,7 @@ impl Code {
             Code::ParseTooManyErrors => "P0007",
             Code::HeadSplitAcrossLines => "P0008",
             Code::PositionalAfterNamed => "P0009",
+            Code::Internal => "P0010",
         }
     }
 

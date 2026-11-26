@@ -304,6 +304,10 @@ fn the_conformance_files_pass() {
 
     // Every lexical code has a lex-error file and every parser code a parse-error file.
     for code in Code::ALL {
+        // `P0010` is the parser's internal error (it could not run): no source triggers it.
+        if code == Code::Internal {
+            continue;
+        }
         assert!(
             codes_seen.contains(code.as_str()),
             "no conformance file expects {code}"

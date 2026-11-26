@@ -217,8 +217,10 @@ may be a statement, an argument or an arm body, but it is not an operand: `1 + r
 Parser nesting is the depth of the syntax tree: each nested expression, type or pattern counts
 one level, and so does each prefix operator (`not`, `-`) and each link of a postfix, binary or
 `|>` chain, so `a.b.c.d` is deeper than `a`. The limit is `max_nesting` (default 128, chapter
-07); exceeding it is `P0002` and parsing stops. (If the host cannot start the thread with a
-large stack that the parser runs on, the limit is clamped to 32; see "Canonical form".)
+07); exceeding it is `P0002` and parsing stops. A `defer` block and a
+prompt `if` or `for` section each count one level too. (If no thread with a large stack can be
+started for the parser, the limit, the token reader's included, is clamped to 12; see "Canonical
+form".)
 
 ```ebnf
 module          = [ meta_decl ] , { item } , EOF ;
@@ -458,8 +460,8 @@ shorten it. Its choices are:
   at column 0, and it reads back dedented.
 
 `print` and the tree dump run on a thread with a large stack, like the parser. If no such thread
-can be started, they run on the caller's stack and refuse trees deeper than 32 levels (the printer
-writes `<too deep>` and the dump `(too-deep)` there), and the parser clamps `max_nesting` to 32,
+can be started, they run on the caller's stack and refuse trees deeper than 12 levels (the printer
+writes `<too deep>` and the dump `(too-deep)` there), and the parser clamps `max_nesting` (the token reader's too) to 12,
 so a deeper source gets `P0002`.
 
 ## A complete small program

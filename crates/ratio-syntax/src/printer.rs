@@ -8,7 +8,9 @@
 //! nested `if a {` print to about 264,000 bytes) and the text is then refused with `L0013`.
 //!
 //! The printer runs on a thread with a large stack; if none can be started it runs on the
-//! caller's stack and writes `<too deep>` for anything nested deeper than 32 levels. The printer keeps what the
+//! caller's stack and writes `<too deep>` for anything nested deeper than 12 levels.
+//!
+//! The printer keeps what the
 //! tree keeps (parentheses, `T??` as two options, long and raw strings) and drops what it does
 //! not: comments other than `///` documentation, blank lines, and the original spacing.
 //!
@@ -76,7 +78,12 @@ use crate::ast::{
 /// The canonical source text of `module` (the notation is described in the module documentation).
 #[must_use]
 pub fn print(module: &Module) -> String {
-    stack::run(|big| {
+    stack::run(|big| print_on(module, big)).unwrap_or_else(|| "<internal error>".to_owned())
+}
+
+/// [`print`] on the current thread; `big` says it has the big stack (see [`crate::stack`]).
+pub(crate) fn print_on(module: &Module, big: bool) -> String {
+    {
         let mut p = Printer {
             out: String::new(),
             indent: 0,
@@ -89,8 +96,7 @@ pub fn print(module: &Module) -> String {
         };
         p.module(module);
         p.out
-    })
-    .unwrap_or_else(|| "<internal error>".to_owned())
+    }
 }
 
 struct Printer {
@@ -682,7 +688,10 @@ impl Printer {
             }
             StmtKind::Defer(block) => {
                 self.w("defer ");
-                self.block(block);
+                if self.enter() {
+                    self.block(block);
+                    self.depth -= 1;
+                }
             }
             StmtKind::Expr(expr) => self.expr(expr),
         }
@@ -1264,6 +1273,13 @@ impl Printer {
     // ---- prompts ----
 
     fn prompt_body(&mut self, body: &PromptBody) {
+        if self.enter() {
+            self.prompt_body_inner(body);
+            self.depth -= 1;
+        }
+    }
+
+    fn prompt_body_inner(&mut self, body: &PromptBody) {
         self.stmt_seq(&body.sections, Self::section);
     }
 
