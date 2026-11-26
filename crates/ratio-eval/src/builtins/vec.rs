@@ -17,7 +17,9 @@
 
 use std::cmp::Ordering;
 
-use super::data3::{charged, float_val, raise_invalid};
+use super::data3::{
+    CHUNK, Ticker, charged, float_val, map_polled, poll, raise_invalid, sort_polled,
+};
 use super::{Args, Sizes, arg, int, list, new_list, opt, s_weight_first, weight};
 use crate::error::RtError;
 use crate::heap::{Charge, cost};
@@ -49,10 +51,15 @@ fn floats(cx: &Cx<'_>, x: &Value) -> Result<Floats, RtError> {
     let charge = charged(cx, cost::SLOT.saturating_mul(l.len()))?;
     let mut v = Vec::with_capacity(usize::try_from(l.len()).unwrap_or(0));
     let mut bad = false;
-    l.for_each(&mut |e| match e.repr {
-        Repr::Float(f) => v.push(f),
-        _ => bad = true,
-    });
+    let mut cur = l.cursor();
+    let mut ticker = Ticker::default();
+    while let Some(e) = cur.next() {
+        match e.repr {
+            Repr::Float(f) => v.push(f),
+            _ => bad = true,
+        }
+        ticker.tick(cx, 1)?;
+    }
     work::add(l.len());
     if bad {
         return Err(raise_invalid(cx, "a Vector holds Floats", x.quick()));
@@ -78,51 +85,60 @@ fn pair(cx: &Cx<'_>, a: &Value, b: &Value) -> Result<(Floats, Floats), RtError> 
 /// component and `s` the length of the vector scaled by `1/m`, so a vector of 1e200s has the
 /// length it should and one of 1e-200s is not taken for the zero vector. The zero vector is
 /// `(0, 0)`.
-fn scaled(v: &[f64]) -> (f64, f64) {
+fn scaled(cx: &Cx<'_>, v: &[f64]) -> Result<(f64, f64), RtError> {
     let mut ss = 0.0f64;
-    for x in v {
-        ss += x * x;
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        for x in chunk {
+            ss += x * x;
+        }
     }
     if ss.is_finite() && ss >= 1e-290 {
-        return (1.0, ss.sqrt());
+        return Ok((1.0, ss.sqrt()));
     }
     let mut m = 0.0f64;
-    for x in v {
-        let a = x.abs();
-        if a.is_nan() {
-            return (f64::NAN, f64::NAN);
-        }
-        if a > m {
-            m = a;
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        for x in chunk {
+            let a = x.abs();
+            if a.is_nan() {
+                return Ok((f64::NAN, f64::NAN));
+            }
+            if a > m {
+                m = a;
+            }
         }
     }
     if m == 0.0 {
-        return (0.0, 0.0);
+        return Ok((0.0, 0.0));
     }
     let mut ss = 0.0f64;
-    for x in v {
-        let y = x / m;
-        ss += y * y;
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        for x in chunk {
+            let y = x / m;
+            ss += y * y;
+        }
     }
-    (m, ss.sqrt())
+    Ok((m, ss.sqrt()))
 }
 
 fn make(cx: &Cx<'_>, v: &[f64], labels: Labels) -> Result<Value, RtError> {
     // The list of values is built from a buffer of one slot per component.
     let _items = charged(cx, cost::SLOT.saturating_mul(v.len() as u64))?;
-    new_list(
-        cx,
-        v.iter().map(|x| float_val(*x, Labels::NONE)).collect(),
-        labels,
-    )
+    let items = map_polled(cx, v, |x| float_val(*x, Labels::NONE))?;
+    new_list(cx, items, labels)
 }
 
 pub(super) fn dot(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let (x, y) = pair(cx, a, b)?;
     let mut sum = 0.0f64;
-    for (p, q) in x.v.iter().zip(&y.v) {
-        sum += p * q;
+    for (cx_, cy_) in x.v.chunks(CHUNK).zip(y.v.chunks(CHUNK)) {
+        poll(cx)?;
+        for (p, q) in cx_.iter().zip(cy_) {
+            sum += p * q;
+        }
     }
     Ok(float_val(sum, a.quick() | b.quick()))
 }
@@ -130,7 +146,7 @@ pub(super) fn dot(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 pub(super) fn norm(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let a = arg(cx, args, 0)?;
     let x = floats(cx, a)?;
-    let (m, s) = scaled(&x.v);
+    let (m, s) = scaled(cx, &x.v)?;
     work::add(2 * x.v.len() as u64);
     Ok(float_val(m * s, a.quick()))
 }
@@ -138,7 +154,7 @@ pub(super) fn norm(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 pub(super) fn normalize(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let a = arg(cx, args, 0)?;
     let x = floats(cx, a)?;
-    let (m, s) = scaled(&x.v);
+    let (m, s) = scaled(cx, &x.v)?;
     let labels = a.quick();
     if m == 0.0 {
         return Err(raise_invalid(
@@ -150,7 +166,7 @@ pub(super) fn normalize(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
     work::add(2 * x.v.len() as u64);
     // x / (m · s) written as (x / m) / s: no overflow when m · s would.
     let out = charged(cx, cost::SLOT.saturating_mul(x.v.len() as u64))?;
-    let v: Vec<f64> = x.v.iter().map(|c| (c / m) / s).collect();
+    let v: Vec<f64> = map_polled(cx, &x.v, |c| (c / m) / s)?;
     let r = make(cx, &v, labels);
     drop(out);
     r
@@ -161,42 +177,49 @@ pub(super) fn cosine(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (x, y) = pair(cx, a, b)?;
     let labels = a.quick() | b.quick();
     work::add(6 * x.v.len() as u64);
-    Ok(float_val(cosine_of(&x.v, &y.v), labels))
+    Ok(float_val(cosine_of(cx, &x.v, &y.v)?, labels))
 }
 
 /// The cosine of the angle between two vectors of one dimension, in `[-1, 1]`: `dot / sqrt(|x|² ·
 /// |y|²)` when those are neither too large nor too small to be written, else computed on the
 /// scaled vectors; 0.0 when either is the zero vector, `NaN` for a `NaN` component.
-fn cosine_of(x: &[f64], y: &[f64]) -> f64 {
+fn cosine_of(cx: &Cx<'_>, x: &[f64], y: &[f64]) -> Result<f64, RtError> {
     let (mut dot, mut xx, mut yy) = (0.0f64, 0.0f64, 0.0f64);
-    for (p, q) in x.iter().zip(y) {
-        dot += p * q;
-        xx += p * p;
-        yy += q * q;
+    for (cx_, cy_) in x.chunks(CHUNK).zip(y.chunks(CHUNK)) {
+        poll(cx)?;
+        for (p, q) in cx_.iter().zip(cy_) {
+            dot += p * q;
+            xx += p * p;
+            yy += q * q;
+        }
     }
     let both = xx * yy;
     if dot.is_finite() && both.is_finite() && both >= 1e-290 {
-        return (dot / both.sqrt()).clamp(-1.0, 1.0);
+        return Ok((dot / both.sqrt()).clamp(-1.0, 1.0));
     }
-    let ((ma, sa), (mb, sb)) = (scaled(x), scaled(y));
+    let ((ma, sa), (mb, sb)) = (scaled(cx, x)?, scaled(cx, y)?);
     if ma.is_nan() || mb.is_nan() {
-        return f64::NAN;
+        return Ok(f64::NAN);
     }
     if ma == 0.0 || mb == 0.0 {
-        return 0.0;
+        return Ok(0.0);
     }
     let mut sum = 0.0f64;
-    for (p, q) in x.iter().zip(y) {
-        sum += (p / ma) * (q / mb);
+    for (cx_, cy_) in x.chunks(CHUNK).zip(y.chunks(CHUNK)) {
+        poll(cx)?;
+        for (p, q) in cx_.iter().zip(cy_) {
+            sum += (p / ma) * (q / mb);
+        }
     }
-    (sum / (sa * sb)).clamp(-1.0, 1.0)
+    Ok((sum / (sa * sb)).clamp(-1.0, 1.0))
 }
 
 pub(super) fn add(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let (x, y) = pair(cx, a, b)?;
     let out = charged(cx, cost::SLOT.saturating_mul(x.v.len() as u64))?;
-    let v: Vec<f64> = x.v.iter().zip(&y.v).map(|(p, q)| p + q).collect();
+    let pairs: Vec<(f64, f64)> = x.v.iter().copied().zip(y.v.iter().copied()).collect();
+    let v: Vec<f64> = map_polled(cx, &pairs, |(p, q)| p + q)?;
     let r = make(cx, &v, a.quick() | b.quick());
     drop(out);
     r
@@ -216,19 +239,23 @@ pub(super) fn mean(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let _acc_charge = charged(cx, cost::SLOT.saturating_mul(dims))?;
     let mut acc = vec![0.0f64; usize::try_from(dims).unwrap_or(0)];
     let mut bad = None;
+    let mut ticker = Ticker::default();
     let mut cur = l.cursor();
     while let Some(v) = cur.next() {
         match &v.repr {
             Repr::List(inner) if inner.len() == dims => {
-                let mut i = 0;
                 let mut ok = true;
-                inner.for_each(&mut |e| {
+                let mut inner_cur = inner.cursor();
+                let mut i = 0;
+                while let Some(e) = inner_cur.next() {
                     match e.repr {
                         Repr::Float(f) => acc[i] += f,
                         _ => ok = false,
                     }
                     i += 1;
-                });
+                    ticker.tick(cx, 1)?;
+                }
+                poll(cx)?;
                 work::add(dims);
                 if !ok {
                     bad = Some("a Vector holds Floats");
@@ -250,8 +277,11 @@ pub(super) fn mean(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     }
     #[allow(clippy::cast_precision_loss, reason = "a count of vectors")]
     let count = n as f64;
-    for x in &mut acc {
-        *x /= count;
+    for chunk in acc.chunks_mut(CHUNK) {
+        poll(cx)?;
+        for x in chunk {
+            *x /= count;
+        }
     }
     make(cx, &acc, labels)
 }
@@ -290,6 +320,7 @@ pub(super) fn top_k(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut cur = l.cursor();
     let mut index = 0u32;
     while let Some(v) = cur.next() {
+        poll(cx)?;
         let Repr::List(inner) = &v.repr else {
             return Err(raise_invalid(cx, "expected a list of vectors", labels));
         };
@@ -306,13 +337,13 @@ pub(super) fn top_k(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         }
         let x = floats(cx, &v)?;
         work::add(6 * x.v.len() as u64);
-        scores.push((cosine_of(&q.v, &x.v), index));
+        scores.push((cosine_of(cx, &q.v, &x.v)?, index));
         index = index.saturating_add(1);
     }
     work::add(
         (scores.len() as u64).saturating_mul(crate::ops::log_work(scores.len() as u64).max(1)),
     );
-    scores.sort_unstable_by(rank);
+    sort_polled(cx, &mut scores, rank)?;
     let take = usize::try_from(want)
         .unwrap_or(usize::MAX)
         .min(scores.len());

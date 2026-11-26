@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use crate::error::{Kind, RtError, raise};
-use crate::heap::Charge;
+use crate::heap::{Charge, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
 use crate::value::{Fault, Layout, MAX_STR_BYTES, Value};
@@ -187,4 +187,115 @@ pub(super) fn too_long(cx: &Cx<'_>, labels: Labels) -> RtError {
 pub(super) fn text_of(cx: &Cx<'_>, s: &str, labels: Labels) -> Result<Value, RtError> {
     let _copy = charged(cx, s.len() as u64)?;
     super::new_text(cx, s.to_owned(), labels)
+}
+
+// ---- cancellation ----
+
+/// Units of work between two looks at the cancellation flag (as stages 7 and 8 do).
+pub(super) const CHUNK: usize = 64_000;
+
+/// `Cancelled` if the evaluation was cancelled.
+pub(super) fn poll(cx: &Cx<'_>) -> Result<(), RtError> {
+    if cx.cancel.is_cancelled() {
+        Err(cancelled(cx))
+    } else {
+        Ok(())
+    }
+}
+
+/// Counts work and looks at the cancellation flag every [`CHUNK`] units.
+#[derive(Default)]
+pub(super) struct Ticker(usize);
+
+impl Ticker {
+    pub(super) fn tick(&mut self, cx: &Cx<'_>, units: usize) -> Result<(), RtError> {
+        self.0 = self.0.saturating_add(units);
+        if self.0 >= CHUNK {
+            self.0 = 0;
+            poll(cx)?;
+        }
+        Ok(())
+    }
+}
+
+/// `v` mapped by `f`, looking at the cancellation flag between chunks.
+pub(super) fn map_polled<T, U>(
+    cx: &Cx<'_>,
+    v: &[T],
+    f: impl Fn(&T) -> U,
+) -> Result<Vec<U>, RtError> {
+    let mut out = Vec::with_capacity(v.len());
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        out.extend(chunk.iter().map(&f));
+    }
+    Ok(out)
+}
+
+/// A stable merge sort that looks at the cancellation flag every [`CHUNK`] elements: runs of
+/// 256 are sorted in place, then merged pairwise through a scratch copy (charged to the heap
+/// first), so no single step is long.
+pub(super) fn sort_polled<T: Copy>(
+    cx: &Cx<'_>,
+    v: &mut [T],
+    cmp: impl Fn(&T, &T) -> std::cmp::Ordering,
+) -> Result<(), RtError> {
+    const RUN: usize = 256;
+    let n = v.len();
+    let mut ticker = Ticker::default();
+    for run in v.chunks_mut(RUN) {
+        run.sort_by(&cmp);
+        work::add(run.len() as u64 * 8);
+        ticker.tick(cx, run.len() * 8)?;
+    }
+    if n <= RUN {
+        return Ok(());
+    }
+    let _scratch = charged(cx, cost::SLOT.saturating_mul(n as u64))?;
+    let mut other: Vec<T> = v.to_vec();
+    let mut in_v = true;
+    let mut width = RUN;
+    while width < n {
+        let (from, to): (&[T], &mut [T]) = if in_v {
+            (&*v, other.as_mut_slice())
+        } else {
+            (other.as_slice(), &mut *v)
+        };
+        let mut start = 0;
+        while start < n {
+            let mid = (start + width).min(n);
+            let end = (start + 2 * width).min(n);
+            let (mut i, mut j, mut k) = (start, mid, start);
+            while i < mid && j < end {
+                if cmp(&from[j], &from[i]).is_lt() {
+                    to[k] = from[j];
+                    j += 1;
+                } else {
+                    to[k] = from[i];
+                    i += 1;
+                }
+                k += 1;
+                ticker.tick(cx, 1)?;
+            }
+            while i < mid {
+                to[k] = from[i];
+                i += 1;
+                k += 1;
+            }
+            while j < end {
+                to[k] = from[j];
+                j += 1;
+                k += 1;
+            }
+            ticker.tick(cx, end - start)?;
+            work::add((end - start) as u64);
+            start = end;
+        }
+        in_v = !in_v;
+        width *= 2;
+    }
+    if !in_v {
+        v.copy_from_slice(&other);
+    }
+    Ok(())
 }

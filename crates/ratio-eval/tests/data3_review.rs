@@ -2,6 +2,7 @@
 
 #![allow(
     clippy::too_many_lines,
+    clippy::cast_precision_loss,
     clippy::many_single_char_names,
     reason = "each test is one probe, written out"
 )]
@@ -251,4 +252,53 @@ fn p9_user_names_that_shadow_the_prelude() {
     let e = v.elements().unwrap();
     assert!(e[0].as_text().unwrap().contains("\"op\":\"delete\""));
     assert!(e[1].as_text().unwrap().contains("\"added\""));
+}
+
+/// LV-7: the `vec` and `math` aggregates look at the cancellation flag as they work, so a
+/// token cancelled before the call stops it within a chunk of work, not after the whole input.
+#[test]
+fn lv7_aggregates_stop_when_cancelled() {
+    let p = prepared(
+        "fn top(q: [Float], vs: [[Float]]) -> Int { list.len(vec.top_k(q, vs, 10)) }\n\
+         fn median(xs: [Float]) -> Int { text.show(math.median(xs)).len() }\n\
+         fn mode(xs: [Int]) -> Int { text.show(math.mode(xs)).len() }\n\
+         fn norm(xs: [Float]) -> Int { text.show(vec.norm(xs)).len() }\n\
+         fn softmax(xs: [Float]) -> Int { list.len(math.softmax(xs)) }",
+    );
+    let floats = |n: usize| {
+        Value::list(
+            (0..n)
+                .map(|i| Value::float(((i * 7919) % 1000) as f64))
+                .collect(),
+        )
+        .unwrap()
+    };
+    let vectors = Value::list((0..2000).map(|_| floats(500)).collect()).unwrap();
+    let cases: Vec<(&str, Vec<Value>)> = vec![
+        ("top", vec![floats(500), vectors]),
+        ("median", vec![floats(1_000_000)]),
+        ("mode", vec![ints(1_000_000)]),
+        ("norm", vec![floats(1_000_000)]),
+        ("softmax", vec![floats(1_000_000)]),
+    ];
+    for (name, args) in cases {
+        let cancel = ratio_eval::CancelToken::new();
+        cancel.cancel();
+        let entry = p.find("main.ratio", name).unwrap();
+        let eval =
+            ratio_eval::evaluate(std::sync::Arc::clone(&p), entry, args, big(), cancel).unwrap();
+        work::reset();
+        let f = ratio_eval::block_on(eval);
+        let Outcome::Raised(e) = f.outcome else {
+            panic!("{name} returned")
+        };
+        assert_eq!(e.kind(&p), "Cancelled", "{name}");
+        if work::ENABLED {
+            assert!(
+                work::total() < 400_000,
+                "{name} did {} units of work after cancellation",
+                work::total()
+            );
+        }
+    }
 }

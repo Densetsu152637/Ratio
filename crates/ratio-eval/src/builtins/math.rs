@@ -24,14 +24,17 @@
     reason = "numeric code converts between Int and Float on purpose; Float equality is exact"
 )]
 
-use super::data3::{canon, charged, float_arg, float_val, raise_invalid};
+use super::data3::{
+    CHUNK, Ticker, canon, charged, float_arg, float_val, map_polled, poll, raise_invalid,
+    sort_polled,
+};
 use super::fmath;
 use super::{Args, Sizes, arg, int, list, new_list, opt, s_weight_first};
 use crate::error::RtError;
 use crate::heap::{Charge, cost};
 use crate::labels::Labels;
 use crate::machine::Cx;
-use crate::ops::{cmp_natural, log_work};
+use crate::ops::cmp_natural;
 use crate::value::{Repr, Value};
 use crate::work;
 
@@ -255,10 +258,15 @@ fn gather(cx: &Cx<'_>, xs: &Value) -> Result<Nums, RtError> {
     let charge = charged(cx, cost::SLOT.saturating_mul(l.len()))?;
     let mut v = Vec::with_capacity(usize::try_from(l.len()).unwrap_or(0));
     let mut bad = false;
-    l.for_each(&mut |e| match num_f64(e) {
-        Some(f) => v.push(f),
-        None => bad = true,
-    });
+    let mut cur = l.cursor();
+    let mut ticker = Ticker::default();
+    while let Some(e) = cur.next() {
+        match num_f64(&e) {
+            Some(f) => v.push(f),
+            None => bad = true,
+        }
+        ticker.tick(cx, 1)?;
+    }
     work::add(l.len());
     if bad {
         return Err(raise_invalid(cx, "expected a list of numbers", xs.quick()));
@@ -269,34 +277,41 @@ fn gather(cx: &Cx<'_>, xs: &Value) -> Result<Nums, RtError> {
 /// Neumaier's compensated sum, in order: deterministic and robust to cancellation. A sum that
 /// overflows is the plain sum (`inf`, or `NaN` for `inf - inf`): the compensation term of an
 /// infinite partial sum is meaningless.
-fn sum(v: &[f64]) -> f64 {
+fn sum(cx: &Cx<'_>, v: &[f64]) -> Result<f64, RtError> {
     let (mut s, mut c) = (0.0f64, 0.0f64);
-    for &x in v {
-        let t = s + x;
-        if !t.is_finite() {
-            return v.iter().fold(0.0, |a, b| a + b);
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        for &x in chunk {
+            let t = s + x;
+            if !t.is_finite() {
+                return Ok(v.iter().fold(0.0, |a, b| a + b));
+            }
+            c += if s.abs() >= x.abs() {
+                (s - t) + x
+            } else {
+                (x - t) + s
+            };
+            s = t;
         }
-        c += if s.abs() >= x.abs() {
-            (s - t) + x
-        } else {
-            (x - t) + s
-        };
-        s = t;
     }
-    s + c
+    Ok(s + c)
 }
 
 /// The mean of `v` (not empty): the sum over the count, or, when the sum overflows although
 /// every element is finite, the sum of the elements each over the count.
-fn mean_of(v: &[f64]) -> f64 {
+fn mean_of(cx: &Cx<'_>, v: &[f64]) -> Result<f64, RtError> {
     #[allow(clippy::cast_precision_loss, reason = "a count of elements")]
     let n = v.len() as f64;
-    let s = sum(v);
-    if s.is_finite() || !v.iter().all(|x| x.is_finite()) {
-        s / n
+    let s = sum(cx, v)?;
+    let mut finite = true;
+    for chunk in v.chunks(CHUNK) {
+        poll(cx)?;
+        finite &= chunk.iter().all(|x| x.is_finite());
+    }
+    if s.is_finite() || !finite {
+        Ok(s / n)
     } else {
-        let scaled: Vec<f64> = v.iter().map(|x| x / n).collect();
-        sum(&scaled)
+        sum(cx, &map_polled(cx, v, |x| x / n)?)
     }
 }
 
@@ -307,18 +322,18 @@ pub(super) fn mean(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     if nums.v.is_empty() {
         return Ok(Value::none().with_labels(labels));
     }
-    Ok(float_val(mean_of(&nums.v), labels))
+    Ok(float_val(mean_of(cx, &nums.v)?, labels))
 }
 
-fn variance_of(v: &[f64], sample: bool) -> Option<f64> {
+fn variance_of(cx: &Cx<'_>, v: &[f64], sample: bool) -> Result<Option<f64>, RtError> {
     let n = v.len();
     if n == 0 || (sample && n < 2) {
-        return None;
+        return Ok(None);
     }
-    let m = mean_of(v);
-    let squares: Vec<f64> = v.iter().map(|x| (x - m) * (x - m)).collect();
+    let m = mean_of(cx, v)?;
+    let squares = map_polled(cx, v, |x| (x - m) * (x - m))?;
     let denominator = if sample { n - 1 } else { n } as f64;
-    Some(sum(&squares) / denominator)
+    Ok(Some(sum(cx, &squares)? / denominator))
 }
 
 fn spread(cx: &Cx<'_>, args: &Args, root: bool) -> Result<Value, RtError> {
@@ -330,7 +345,7 @@ fn spread(cx: &Cx<'_>, args: &Args, root: bool) -> Result<Value, RtError> {
     // The squares are a second buffer of the same size.
     let _charge = charged(cx, cost::SLOT.saturating_mul(nums.v.len() as u64))?;
     work::add(nums.v.len() as u64);
-    Ok(match variance_of(&nums.v, sample) {
+    Ok(match variance_of(cx, &nums.v, sample)? {
         Some(var) => float_val(if root { var.sqrt() } else { var }, labels),
         None => Value::none().with_labels(labels),
     })
@@ -346,16 +361,14 @@ pub(super) fn stdev(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 /// Sorts floats with `NaN` last and `-0.0` before `0.0`: a total order, so an unstable sort
 /// gives one result everywhere.
-fn sort_floats(v: &mut [f64]) {
-    for x in v.iter_mut() {
-        *x = canon(*x);
+fn sort_floats(cx: &Cx<'_>, v: &mut [f64]) -> Result<(), RtError> {
+    for chunk in v.chunks_mut(CHUNK) {
+        poll(cx)?;
+        for x in chunk.iter_mut() {
+            *x = canon(*x);
+        }
     }
-    v.sort_unstable_by(f64::total_cmp);
-}
-
-/// The work of sorting `n` elements.
-fn sort_work(n: u64) -> u64 {
-    n.saturating_mul(log_work(n).max(1))
+    sort_polled(cx, v, f64::total_cmp)
 }
 
 pub(super) fn median(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
@@ -366,8 +379,7 @@ pub(super) fn median(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     if n == 0 {
         return Ok(Value::none().with_labels(labels));
     }
-    work::add(sort_work(n as u64));
-    sort_floats(&mut nums.v);
+    sort_floats(cx, &mut nums.v)?;
     let m = if n % 2 == 1 {
         nums.v[n / 2]
     } else {
@@ -392,8 +404,7 @@ pub(super) fn percentile(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError>
     if n == 0 {
         return Ok(Value::none().with_labels(labels));
     }
-    work::add(sort_work(n as u64));
-    sort_floats(&mut nums.v);
+    sort_floats(cx, &mut nums.v)?;
     let rank = pv * (n - 1) as f64 / 100.0;
     let lo = rank.floor();
     let frac = rank - lo;
@@ -420,11 +431,11 @@ pub(super) fn mode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let _charge = charged(cx, cost::SLOT.saturating_mul(n).saturating_mul(2))?;
     let items = l.to_vec();
     let mut order: Vec<u32> = (0..u32::try_from(items.len()).unwrap_or(u32::MAX)).collect();
-    work::add(sort_work(n).saturating_mul(2));
-    order.sort_unstable_by(|&a, &b| {
+    sort_polled(cx, &mut order, |&a, &b| {
         work::add(items[a as usize].weight().min(items[b as usize].weight()));
         cmp_natural(&items[a as usize], &items[b as usize]).then(a.cmp(&b))
-    });
+    })?;
+    let mut ticker = Ticker::default();
     // Runs of equal values; the best run has the most members, then the earliest first member.
     let (mut best_count, mut best_first) = (0u64, u32::MAX);
     let mut start = 0;
@@ -435,6 +446,7 @@ pub(super) fn mode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
         {
             end += 1;
         }
+        ticker.tick(cx, end - start)?;
         let count = (end - start) as u64;
         let first = order[start]; // the sort is by index within a run
         if count > best_count || (count == best_count && first < best_first) {
@@ -463,23 +475,25 @@ pub(super) fn softmax(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let nums = gather(cx, xs)?;
     let _charge = charged(cx, cost::SLOT.saturating_mul(nums.v.len() as u64))?;
     // Stable: subtract the largest value before exponentiating.
-    let max = nums
-        .v
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, |m, x| if x > m { x } else { m });
-    let mut e: Vec<f64> = nums
-        .v
-        .iter()
-        .map(|x| fmath::exp((x - max) / temperature))
-        .collect();
-    let total = sum(&e);
-    for x in &mut e {
-        *x /= total;
+    let mut max = f64::NEG_INFINITY;
+    for chunk in nums.v.chunks(CHUNK) {
+        poll(cx)?;
+        max = chunk
+            .iter()
+            .copied()
+            .fold(max, |m, x| if x > m { x } else { m });
+    }
+    let mut e: Vec<f64> = map_polled(cx, &nums.v, |x| fmath::exp((x - max) / temperature))?;
+    let total = sum(cx, &e)?;
+    for chunk in e.chunks_mut(CHUNK) {
+        poll(cx)?;
+        for x in chunk {
+            *x /= total;
+        }
     }
     work::add(2 * e.len() as u64);
     let _items_charge = charged(cx, cost::SLOT.saturating_mul(e.len() as u64))?;
-    let items = e.into_iter().map(|x| float_val(x, Labels::NONE)).collect();
+    let items = map_polled(cx, &e, |x| float_val(*x, Labels::NONE))?;
     new_list(cx, items, labels)
 }
 
@@ -491,12 +505,14 @@ fn arg_extreme(cx: &Cx<'_>, args: &Args, largest: bool) -> Result<Value, RtError
     let mut best: Option<(u64, Value)> = None;
     let mut i = 0u64;
     let mut bad = false;
-    l.for_each(&mut |v| {
+    let mut cur = l.cursor();
+    let mut ticker = Ticker::default();
+    while let Some(v) = cur.next() {
         match &v.repr {
             Repr::Float(f) if f.is_nan() => {}
             Repr::Int(_) | Repr::Float(_) | Repr::Duration(_) | Repr::Money(_) => {
                 let better = best.as_ref().is_none_or(|(_, b)| {
-                    let o = cmp_natural(v, b);
+                    let o = cmp_natural(&v, b);
                     if largest { o.is_gt() } else { o.is_lt() }
                 });
                 if better {
@@ -506,7 +522,8 @@ fn arg_extreme(cx: &Cx<'_>, args: &Args, largest: bool) -> Result<Value, RtError
             _ => bad = true,
         }
         i += 1;
-    });
+        ticker.tick(cx, 1)?;
+    }
     work::add(l.len());
     if bad {
         return Err(raise_invalid(cx, "expected a list of numbers", labels));
@@ -529,29 +546,30 @@ pub(super) fn entropy(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let ps = arg(cx, args, 0)?;
     let labels = ps.quick();
     let nums = gather(cx, ps)?;
-    if nums.v.iter().any(|p| *p < 0.0) {
+    let mut negative = false;
+    for chunk in nums.v.chunks(CHUNK) {
+        poll(cx)?;
+        negative |= chunk.iter().any(|p| *p < 0.0);
+    }
+    if negative {
         return Err(raise_invalid(
             cx,
             "`math.entropy` needs probabilities that are not negative",
             labels,
         ));
     }
-    let total = sum(&nums.v);
+    let total = sum(cx, &nums.v)?;
     work::add(2 * nums.v.len() as u64);
     if nums.v.is_empty() || total == 0.0 {
         return Ok(float_val(0.0, labels));
     }
     let _terms_charge = charged(cx, cost::SLOT.saturating_mul(nums.v.len() as u64))?;
-    let terms: Vec<f64> = nums
-        .v
-        .iter()
-        .map(|p| {
-            let q = p / total;
-            if q > 0.0 { q * fmath::log2(q) } else { 0.0 }
-        })
-        .collect();
+    let terms: Vec<f64> = map_polled(cx, &nums.v, |p| {
+        let q = p / total;
+        if q > 0.0 { q * fmath::log2(q) } else { 0.0 }
+    })?;
     // `-0.0` would print as -0: entropy is never negative.
-    let h = -sum(&terms);
+    let h = -sum(cx, &terms)?;
     Ok(float_val(if h == 0.0 { 0.0 } else { h }, labels))
 }
 
