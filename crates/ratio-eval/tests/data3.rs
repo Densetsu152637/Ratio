@@ -315,7 +315,11 @@ fn run_file(path: &Path, failures: &mut Vec<String>) {
                     v.elements()
                         .unwrap_or_default()
                         .iter()
-                        .map(|e| if e.scan().is_empty() { "none" } else { "secret" })
+                        .map(|e| if e.scan().is_empty() {
+                            "none"
+                        } else {
+                            "secret"
+                        })
                         .collect::<Vec<_>>()
                         .join(" ")
                 );

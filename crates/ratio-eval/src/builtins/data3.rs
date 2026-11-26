@@ -21,9 +21,11 @@ use crate::value::{Fault, Layout, MAX_STR_BYTES, Value};
 use crate::work;
 
 /// The canonical quiet `NaN`: the hardware's choice of sign and payload differs, so every
-/// `Float` a stage 9 built-in returns has this one.
+/// `Float` a stage 9 built-in returns has this one. Decided on the bits, not with a float
+/// comparison: the optimiser may treat every `NaN` as the same and drop a float-level test.
 pub(super) fn canon(f: f64) -> f64 {
-    if f.is_nan() {
+    let bits = f.to_bits();
+    if bits & 0x7ff0_0000_0000_0000 == 0x7ff0_0000_0000_0000 && bits & 0x000f_ffff_ffff_ffff != 0 {
         f64::from_bits(0x7ff8_0000_0000_0000)
     } else {
         f

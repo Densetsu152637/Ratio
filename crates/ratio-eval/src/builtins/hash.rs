@@ -27,8 +27,8 @@ use std::fmt::Write as _;
 
 use super::blake3;
 use super::data3::{TextBuf, charged, raise_invalid, text_value};
-use super::{Args, arg, int, opt, text};
-use crate::error::RtError;
+use super::{Args, Resume, Task, TaskStep, arg, int, opt, text, weight};
+use crate::error::{Kind, RtError, raise};
 use crate::heap::Charge;
 use crate::heap::cost;
 use crate::labels::Labels;
@@ -59,6 +59,7 @@ pub(super) fn blake3(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 // ---- the canonical JSON ----
 
 /// What is being written: an open container and how far it has got.
+#[derive(Debug)]
 enum Frame {
     /// A tuple's parts.
     Items {
@@ -306,21 +307,43 @@ fn open(
     }
 }
 
-/// The canonical JSON of `v`.
-fn canonical(cx: &mut Cx<'_>, v: &Value, labels: Labels) -> Result<TextBuf, RtError> {
-    let mut out = TextBuf::new(labels);
-    let mut stack: Vec<Frame> = Vec::new();
-    open(cx, &mut out, &mut stack, v, labels)?;
-    while !stack.is_empty() {
-        if stack.len() > MAX_DEPTH as usize + 2 {
+/// The canonical JSON of a value, written a step at a time: each [`Canon::step`] writes one
+/// scalar or one container's opening or closing, so a caller can pay for the work as it goes.
+#[derive(Debug)]
+struct Canon {
+    root: Option<Value>,
+    stack: Vec<Frame>,
+    out: TextBuf,
+    labels: Labels,
+}
+
+impl Canon {
+    fn new(v: &Value) -> Canon {
+        let labels = v.quick();
+        Canon {
+            root: Some(v.clone()),
+            stack: Vec::new(),
+            out: TextBuf::new(labels),
+            labels,
+        }
+    }
+
+    /// Writes the next piece; `true` when the whole value is written.
+    fn step(&mut self, cx: &mut Cx<'_>) -> Result<bool, RtError> {
+        let labels = self.labels;
+        if let Some(root) = self.root.take() {
+            open(cx, &mut self.out, &mut self.stack, &root, labels)?;
+            return Ok(self.stack.is_empty());
+        }
+        if self.stack.len() > MAX_DEPTH as usize + 2 {
             return Err(raise_invalid(
                 cx,
                 "values nested more than 256 deep",
                 labels,
             ));
         }
-        let Some(top) = stack.last_mut() else {
-            break;
+        let Some(top) = self.stack.last_mut() else {
+            return Ok(true);
         };
         // The next thing to write inside the top frame, with the separator it needs.
         let step = match top {
@@ -332,58 +355,126 @@ fn canonical(cx: &mut Cx<'_>, v: &Value, labels: Labels) -> Result<TextBuf, RtEr
         };
         if let Some((was_first, key, x)) = step {
             if !was_first {
-                out.push(cx, ',')?;
+                self.out.push(cx, ',')?;
             }
             if let Some(k) = key {
-                quote(cx, &mut out, &k)?;
-                out.push(cx, ':')?;
+                quote(cx, &mut self.out, &k)?;
+                self.out.push(cx, ':')?;
             }
             // Reading an element out of a container adds the container's own labels, which
             // the digest carries already.
-            open(cx, &mut out, &mut stack, &x, labels)?;
+            open(cx, &mut self.out, &mut self.stack, &x, labels)?;
         } else {
-            let closer = if matches!(stack.pop(), Some(Frame::Entries { .. })) {
+            let closer = if matches!(self.stack.pop(), Some(Frame::Entries { .. })) {
                 '}'
             } else {
                 ']'
             };
-            out.push(cx, closer)?;
+            self.out.push(cx, closer)?;
         }
+        Ok(self.stack.is_empty())
     }
-    Ok(out)
 }
 
-/// `"sha256:" + hex` of the canonical JSON of the value in argument 0.
-fn stable_digest(cx: &mut Cx<'_>, v: &Value) -> Result<(String, Labels), RtError> {
-    let labels = v.quick();
-    let buf = canonical(cx, v, labels)?;
-    let text = buf.finish(cx)?;
-    let bytes = text.as_text().unwrap_or("");
-    work::add(bytes.len() as u64);
-    Ok((
-        ratio_check::hex(&ratio_check::sha256(bytes.as_bytes())),
-        labels,
-    ))
+/// Work between two looks at the cancellation flag.
+const CHECK_UNITS: u64 = 64 * 1000;
+
+/// The units of work the charge covers beyond `n`.
+const SLACK: u64 = 4096;
+
+/// `stable` and `short`: the digest of the canonical JSON.
+///
+/// The class says `linear` in the value's weight, but a number weighs 1 and writes up to 24
+/// bytes, and the bytes are the work. So the walk pays for what it writes, as `text.show`
+/// does: when the work done (a unit for each value visited and for each byte written) passes
+/// what the charge covers (`n` plus 4,096), it asks the evaluator to debit as many units again
+/// as are covered so far (a step per 64), in doubling instalments, before going on. A value
+/// of text and small structure never pays more than the class says.
+#[derive(Debug)]
+struct Stable {
+    canon: Canon,
+    n_pre: u64,
+    work: u64,
+    extra: u64,
+    since_check: u64,
+    /// `short`: the number of hex digits wanted, and the labels of the count.
+    short: Option<(usize, Labels)>,
 }
 
-pub(super) fn stable(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+impl Task for Stable {
+    fn resume(&mut self, cx: &mut Cx<'_>, _input: Resume) -> Result<TaskStep, RtError> {
+        loop {
+            let covered = self.n_pre.saturating_add(SLACK).saturating_add(self.extra);
+            if self.work > covered {
+                let steps = covered.max(64 * 1024).div_ceil(64);
+                self.extra = self.extra.saturating_add(steps.saturating_mul(64));
+                return Ok(TaskStep::Charge(steps));
+            }
+            if self.since_check >= CHECK_UNITS {
+                self.since_check = 0;
+                if cx.cancel.is_cancelled() {
+                    return Err(raise(
+                        cx.p,
+                        Kind::Cancelled,
+                        "the evaluation was cancelled",
+                        Labels::NONE,
+                        cx.loc,
+                    ));
+                }
+            }
+            let before = self.canon.out.len();
+            let done = self.canon.step(cx)?;
+            let units = 1 + (self.canon.out.len() - before) as u64;
+            self.work += units;
+            self.since_check += units;
+            if done {
+                break;
+            }
+        }
+        let labels = self.canon.labels;
+        let out = std::mem::replace(&mut self.canon.out, TextBuf::new(Labels::NONE));
+        let text = out.finish(cx)?;
+        let bytes = text.as_text().unwrap_or("");
+        work::add(bytes.len() as u64);
+        let hex = ratio_check::hex(&ratio_check::sha256(bytes.as_bytes()));
+        let result = match self.short {
+            None => format!("sha256:{hex}"),
+            Some((take, _)) => hex[..take].to_owned(),
+        };
+        let labels = labels | self.short.map_or(Labels::NONE, |(_, l)| l);
+        Ok(TaskStep::Done(text_value(cx, result, labels)?))
+    }
+}
+
+pub(super) fn stable(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     let v = arg(cx, args, 0)?;
-    let (hex, labels) = stable_digest(cx, v)?;
-    text_value(cx, format!("sha256:{hex}"), labels)
+    Ok(Box::new(Stable {
+        canon: Canon::new(v),
+        n_pre: weight(args, 0),
+        work: 0,
+        extra: 0,
+        since_check: 0,
+        short: None,
+    }))
 }
 
-pub(super) fn short(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
+pub(super) fn short(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtError> {
     let v = arg(cx, args, 0)?;
     let n = opt(args, 1);
     let want = match n {
         Some(n) => int(cx, n)?,
         None => 8,
     };
-    let (hex, labels) = stable_digest(cx, v)?;
-    let labels = labels | n.map_or(Labels::NONE, |n| n.labels);
     // 0 to 64 hex digits: a count outside that is clamped.
     let take = usize::try_from(want.clamp(0, 64)).unwrap_or(0);
-    text_value(cx, hex[..take].to_owned(), labels)
+    Ok(Box::new(Stable {
+        canon: Canon::new(v),
+        n_pre: weight(args, 0),
+        work: 0,
+        extra: 0,
+        since_check: 0,
+        short: Some((take, n.map_or(Labels::NONE, |n| n.labels))),
+    }))
 }
 
 #[cfg(test)]

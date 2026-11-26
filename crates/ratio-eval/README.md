@@ -100,6 +100,91 @@ or a result over 16 MiB is refused before anything is built, with checked arithm
 `text.similarity` (`product`: two rows over the shorter text, charged to the heap, checking
 cancellation every checkpoint's worth of cells).
 
+## Stage 9: `math`, `hash`, `diff`, `template`, `vec`, `path`, `url`, `codec`
+
+The data III built-ins of chapter 06 (`data`), 64 of them, in `src/builtins/<module>.rs` with the
+shared helpers in `builtins/data3.rs` (argument reading, refusals, heap-charged buffers and the
+16 MiB text builder). Every one is pure, raises `Invalid` for what chapter 06 says it refuses (a
+refusal is made before anything proportional to the input is allocated), and gives its result
+the labels of everything that decided it: the arguments (a list's elements, a map's keys and
+values count), what a lookup consulted, and for a failure's message the data it describes.
+
+| Module | Built-ins and their classes |
+| --- | --- |
+| `math` | `const`: `abs sign min max clamp floor ceil round trunc to_float sqrt pow exp ln log2 log10 is_nan`. `linear`: `mean variance stdev softmax argmax argmin entropy`. `nlogn`: `median percentile mode` |
+| `hash` | `linear`: `sha256 blake3 stable short` |
+| `diff` | `product`: `lines words unified`. `linear`: `apply stats` |
+| `template` | `linear`: `render names` |
+| `vec` | `linear`: `dot norm normalize cosine add mean`. `nlogn`: `top_k` |
+| `path` | `linear`: all eight, on the characters read |
+| `url` | `linear`: `parse host with_query encode decode` |
+| `codec` | `linear`: `base64_encode base64_decode hex_encode hex_decode csv_parse csv_write` |
+
+**Floats are deterministic.** `+ - * /`, `sqrt`, `floor`, `ceil` and conversions are exactly
+specified by IEEE 754; `exp`, `ln`, `log2`, `log10` and `pow` are not (a C library or a CPU
+rounds the last bit its own way), so `builtins/fmath.rs` carries them from fdlibm, written with
+only the exactly specified operations and bit manipulation (no `f64::exp` and friends, no fused
+multiply-add). They are accurate to under one unit in the last place (within one of the platform's
+library in the tests, exact where the answer is exactly representable: `pow(2, 10)`,
+`log2(8)`, `log10(1000)`), O(1), and their results are pinned by bit pattern (a handful of values
+and a checksum over 20,000 inputs per function) in debug and release builds, so a platform whose
+compiler or library changes one bit fails CI. A `NaN` result is the canonical quiet `NaN`
+(`0x7ff8000000000000`: the hardware's choice of sign differs), decided on the bits because the
+optimiser may treat every `NaN` as one. `math.round(x, digits)` rounds half away from zero on the
+**exact** binary value (`round(2.675, 2)` is 2.67, `round(0.125, 2)` is 0.13), by an exact
+two-product scaling. Statistics use a compensated sum in list order; those of `Duration` and
+`Money` are in seconds and whole units. `vec` computes lengths and cosines on the vector scaled by
+its largest component when the plain sum of squares would overflow or underflow.
+
+**Hashes.** `hash.sha256` is `ratio_check::sha256`; `hash.blake3` is written in-crate
+(`builtins/blake3.rs`) and checked against the reference implementation's digests of the
+standard inputs at the lengths that cross every boundary of its tree. `hash.stable` hashes the
+value's canonical JSON: keys sorted, no spaces, `Float` in its shortest round-trip form,
+`none` fields left out (so an absent optional field and one set to `none`, which are equal values,
+hash alike), written by an iterative walk with an explicit stack. It is a task that **pays for
+what it writes**: a number weighs 1 but writes up to 24 bytes, so when the work passes what the
+class covers it asks the evaluator for more steps first, in doubling instalments (like
+`text.show`'s charge for what it wrote).
+
+**Diffs.** `diff.lines`, `words` and `unified` are charged `n₁ · n₂ + c₁ + c₂` before they run, so
+two 20,000-line files raise `Budget { which: steps }` without a line being read past the
+counting. The algorithm is a shortest edit script by Hirschberg's linear-space dynamic program
+(an explicit stack, two rows of `m + 1` counters, at most `2 · n · m` cell updates, cancellation
+checked every checkpoint's worth), after trimming the common prefix and suffix. Chapter 06 says
+"(Myers)"; Myers' greedy algorithm is `O((n + m) · d)` and exceeds the product class on two very
+unequal inputs, so it cannot be the bound; the script has Myers' length. `apply` is exact (no
+fuzz, no offset) and refuses a patch for more than one file; the line splitting is `text.lines`'.
+
+**Templates.** `template.render` is a task: the template is parsed into a flat node list and
+walked with an explicit stack, so a template can reach nothing but its two arguments and no
+nesting reaches the Rust stack. Outer scopes are searched for a name, which can make the walk do
+more than `n + m` work (a section that writes nothing, over two lists, one inside the other); the
+walk pays for that in doubling instalments *before* doing it, so a budget that cannot pay stops it
+early, and a template whose tags all write something is charged exactly the class's formula.
+
+**URLs** follow the WHATWG standard for what `url.parse` accepts and answer `none` for everything
+else it is not certain to read the way that parser does (the module's documentation lists what is
+refused: whitespace and backslashes, non-ASCII hosts, a second `@`, a port over 65,535, a URL over
+8 KiB). Hosts that end in a number are IPv4 addresses in any spelling and are written in dotted
+decimal; IPv6 is written compressed in brackets; default ports are dropped; `.` and `..` segments
+resolve; the query map takes the last of repeated keys. **Paths** are lexical: `normalize` keeps a
+leading `..` of a relative path and drops it at a root, and `relative_to` never returns a path that
+leaves its base.
+
+**Limits.** Output built piece by piece (`TextBuf`) stops at 16 MiB and pays for what it wrote;
+every buffer proportional to an input (a vector copied, a token table, a component list, a sorted
+copy) is charged to the heap before it is allocated; an encoder knows its output size from its
+argument and refuses over 16 MiB before allocating. Nothing recurses over a value's depth.
+
+**Tests** for this stage: `tests/data3.rs` runs `conformance/data/<module>-<built-in>.ratio`, one
+file per built-in with the values, failures and label propagation of its chapter 06 row (the
+directives are stage 7's); `tests/data3_labels.rs` labels every argument of every call, at each
+level a label can sit, and checks the result carries it (and a failure's message the labels of
+what decided it); `tests/data3_limits.rs` pins the charge formulas, the refusal of large diffs
+before they run, the heap and size refusals, the work counters (debug builds count the work each
+built-in does and the test holds it to 16 units per unit of charge, 64 to a step), the
+shortest-script property of the diffs and the float bit patterns.
+
 ## Tests
 
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`

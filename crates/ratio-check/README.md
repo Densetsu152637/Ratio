@@ -240,7 +240,7 @@ the checker drops. The type-parameter names `S`
 
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
 (`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
-`meta`, `agents`), a few dozen of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
+`meta`, `agents`, and stage 9's `hash`, `diff`, `template`, `vec`, `path`, `url` and `codec`, with all of `math`), a few hundred of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. Stage 9 also declares the shapes `diff`, `url` and `vec` return in `std/prelude.ratio` (`DiffOp`, `DiffLine<T>`, `Diff<T>`, `DiffStats`, `Url<T>`, `Vector`); they are provisional, chapter 06 names them without declaring them, and generic in the text type (`Str` or `Untrusted<Str>`) so that what comes out of untrusted text is untrusted. A standard name it lacks is
 reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
 that does not exist (`C0001`).
 

@@ -314,8 +314,8 @@ table! {
     // ---- stage 9, continued: hash, diff, template, vec, path, url and codec ----
     "hash.sha256", Linear, s_first, Imp::Pure(hash::sha256);
     "hash.blake3", Linear, s_first, Imp::Pure(hash::blake3);
-    "hash.stable", Linear, s_weight_first, Imp::Pure(hash::stable);
-    "hash.short", Linear, s_weight_first, Imp::Pure(hash::short);
+    "hash.stable", Linear, s_weight_first, Imp::Task(hash::stable);
+    "hash.short", Linear, s_weight_first, Imp::Task(hash::short);
     "diff.lines", Product, s_lines, Imp::Pure(diff::lines);
     "diff.words", Product, s_words, Imp::Pure(diff::words);
     "diff.unified", Product, s_lines, Imp::Pure(diff::unified);
