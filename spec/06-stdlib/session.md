@@ -39,7 +39,7 @@ while tool gating already lets an entry withhold them from every callee.
 | `session.checkpoint` | `(label: Str? = none) -> Checkpoint` | Records a git checkpoint of the session's files now, as the engine does before turns that change files (`docs/03-agent-engine.md#persistence`), linked to the journal's length; for harnesses that want a restore point before a risky step | `Unsupported` (no git, remote environment), `Denied` | `tool:`*`session_checkpoint`* |
 | `session.rewind_files` | `(cp: Checkpoint) -> ()` | Puts the session's files back to a checkpoint. Discards work, so it **always asks**, every time, like the safety floor; unattended frames are refused | `Denied`, `NotFound` | `user`, `tool:`*`session_rewind_files`* |
 | `session.branch` | `(at_turn: Int? = none, title: Str? = none) -> SessionRef` | Branches the session at the end of an earlier turn (default the last completed one) into a new session, as `session.branch`; this session is unchanged | `Invalid` (point compacted away), `Denied` | `tool:`*`session_branch`* |
-| `session.start` | `(prompt: Str, environment: Str? = none, harness: Str? = none, model: ModelRef? = none) -> SessionRef` | Starts a new session, as the `start_session` tool (refused in plan mode, since the new session would not be). `harness` selects its package (chapter 08) | `Denied`, `NotFound` | `tool:start_session` |
+| `session.start` | `(prompt: Str, environment: Str? = none, package: Str? = none, model: ModelRef? = none) -> SessionRef` | Starts a new session, as the `start_session` tool (refused in plan mode, since the new session would not be). `package` selects its harness package (chapter 08) | `Denied`, `NotFound` | `tool:start_session` |
 
 ## About the session
 

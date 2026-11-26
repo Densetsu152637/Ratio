@@ -187,10 +187,11 @@ crate rather than a second one because its rules change which programs type (the
   models" with the reason). `harnesses_check(&registry, &builtin, &name)` loads and checks
   through a registry and follows literal `meta.harness` names to list the sites of everything
   the package can load, at most `MAX_LOADED_PACKAGES` packages. A name is a package name, `.`
-  and the harness, and package names hold dots, so it follows the run-time rule: the longest
-  prefix that names a registered package wins (`package_readings` lists the candidates). A
-  computed name, a name no reading resolves, or one that two readings resolve makes it
-  `complete: false`. `test` blocks against a scripted host need the interpreter.
+  and the harness, and package names hold dots, so it follows the run-time rule: the source
+  first (the one written, or `std` then `user` for a bare name), then the longest prefix that
+  names a registered package in it (`package_readings` lists the candidates in that order). A
+  computed name, a name no reading resolves, or one that two readings in the chosen source
+  resolve makes it `complete: false`. `test` blocks against a scripted host need the interpreter.
 
 What stage 6 must carry at run time: the trust sites (kind, reason, site) to emit `ratio_trust`
 events with the value's digest; secrecy labels on every value, since the checker's static

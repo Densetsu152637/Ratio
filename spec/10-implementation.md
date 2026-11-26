@@ -526,7 +526,7 @@ the limits; `C0031`, `C0032` and `C0039` are warnings):
 | `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
 | `C0034` | A standard built-in the checker has no signature for yet (its module's stage adds it) |
 | `C0035` | Untrusted text, a `Brief` or an untrusted prompt where trusted text is required: an instruction position, a `task` section (a `Brief` only), any trusted type (a value that would fit but for its trust labels) |
-| `C0036` | `trust`, `as_task` or `declassify` at a type that is or holds a type parameter, or a built-in that may only be called used as a function value |
+| `C0036` | `trust`, `as_task` or `declassify` at a type that is or holds a type parameter, or a built-in that may only be called, used as a function value |
 | `C0037` | A statically secret value (`Secret<T>`) where an unlabelled value is required, at a secrecy sink, or reaching a generic function that may reach a secrecy sink |
 | `C0038` | A type that must be schema-able and is not, or a schema attribute that does not fit its field (including a `@pattern` outside the common regular-expression syntax) |
 | `C0039` | Warning: a condition derived from model or tool output is the only guard on an effect that writes, runs a command, delegates, reaches the network or runs a model-chosen tool (lint `model_guard`) |

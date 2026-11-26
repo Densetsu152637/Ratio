@@ -542,6 +542,12 @@ fn a_dotted_load_name_takes_the_longest_package_and_ambiguity_is_incomplete() {
         readings,
         vec!["user:a.b@^1".to_owned(), "user:a@^1".to_owned()]
     );
+    // A bare name: the source first (`std`, then `user`), then the longest prefix.
+    let readings: Vec<String> = ratio_check::package_readings("a.b.c")
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(readings, vec!["std:a.b", "std:a", "user:a.b", "user:a"]);
     let main = r#"
 pub harness run(x: Untrusted<Str>) -> Untrusted<Str> {
   let h = meta.harness::<harness(Untrusted<Str>) -> Untrusted<Str>>("user:a.b.c")

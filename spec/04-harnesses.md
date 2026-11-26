@@ -298,10 +298,13 @@ unattended frame. Both fields are untrusted text.
 A harness is identified by its package's source-qualified name and version
 (`meta { version: "1.4.0" }`, semver) and by its IR hash. Imports by name may pin a range;
 `meta.harness::<H>("std:debate@^1")` resolves by name at run time against the registry, under the
-same trust rules as imports (chapter 03). A name is a package name, `.` and the harness's name;
-package names may hold dots, so the longest prefix that names a registered package wins and the
-rest is the harness (`user:critics.strict.judge` is harness `judge` of `critics.strict` when that
-package exists, else harness `strict.judge` of `critics`). A package's public harness signatures are its API: the
+same trust rules as imports (chapter 03). A name is a package name, `.` and the harness's name.
+The source is chosen first (the one written, or for a bare name `std`, then `user`); package names
+may hold dots, so within that source the longest prefix that names a registered package wins and
+the rest is the harness (`user:critics.strict.judge` is harness `judge` of `critics.strict` when
+that package exists, else harness `strict.judge` of `critics`). When more than one prefix names a
+package in the chosen source, the name is ambiguous, and `harnesses.check` reports its listing of
+what the package can load as incomplete. A package's public harness signatures are its API: the
 registry warns when a newer version of a package changes a public signature without a major
 version bump. A package selected as a session or agent harness is **pinned by IR hash** at
 selection (chapter 08): editing its files changes nothing until the user selects it again.

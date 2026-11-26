@@ -101,17 +101,23 @@ literals, on a number, kept as the decimal literals written), `@pattern(r"…")`
 `re` read: alternation, groups and `(?:…)`, classes, the quantifiers `*`, `+`, `?` and `{m,n}`,
 anchors, and `\`-escapes of punctuation and `d`, `w`, `s`, `D`, `W`, `S`, `b`, `B`, `n`, `r`,
 `t`; look-around, back-references and named groups are refused. The derived schema is written as
-canonical JSON (fixed key order, no whitespace) and is part of the IR hash.
+canonical JSON and is part of the IR hash: no whitespace; a schema object's keys in the fixed
+order `$ref`, `type`, `const`, `enum`, `anyOf`, `oneOf`, `properties`, `required`,
+`additionalProperties`, `propertyNames`, `prefixItems`, `items`, `pattern`, then a field's
+`description`, `minItems`, `maxItems`, `minimum`, `maximum`, `pattern`, `examples`, and `$defs`
+last at the root; `properties` and `required` in field-name order (by UTF-8 bytes); `enum`
+values, `oneOf` cases and `$defs` in declaration and first-met order.
 
 **Type digests.** Every schema-able type also has a **type digest**: `sha256` over its canonical
 form *including* trust and secrecy labels (`Str` and `Untrusted<Str>` digest differently). Digests
 key persisted state and caches (below), so they key the **structure** of values: the canonical
 form leaves out field descriptions and refinements, which change the schema but not which values
 the type has. The canonical form is `ratio-type-1;` followed by the type's form, then the
-definition of each enum met, numbered in the order first met (depth first, left to right):
+definition of each enum met, numbered from 0 in the order first met (depth first, left to
+right):
 `bool`, `int`, `float`, `duration`, `money`, `str`, `user_text`, `brief`, `json`, `unit`,
 `untrusted(T)`, `secret(T)`, `opt(T)`, `list(T)`, `map(K,V)`, `tuple(A,B,…)`,
-`record("a":A,"b"?:B)` (fields in name order, names as JSON strings), and `#n` for the n-th enum
+`record("a":A,"b"?:B)` (fields in name order by UTF-8 bytes, names as JSON strings), and `#n` for the n-th enum
 (with its type arguments substituted), defined as `;#n="Name"{"v1","v2":record(…),…}` with the
 variants in declaration order.
 
@@ -222,9 +228,10 @@ approves by default), `state` fields, and harness arguments whose parameter type
 from untrusted text is untrusted. They do not track **implicit flows** through control flow:
 `if model_says_yes { tools.write_file(p, "fixed") }` writes trusted text chosen by an untrusted
 branch. That is inherent in letting programs branch on model output, which is their purpose. The
-checker's **guarded-effect lint** warns when a condition derived from an untrusted value (a
-model-derived scalar) is the only guard on an effect that writes, runs a command, delegates or
-reaches the network, so a reviewer sees each such decision; the lint is silenced with
+checker's **guarded-effect lint** (`C0039`) warns when a condition derived from an untrusted
+value (a model-derived scalar) is the only guard on an effect that writes, runs a command,
+delegates, reaches the network or runs a tool a model chose (`tools.call_tool`,
+`tools.dispatch`, `model.loop`), so a reviewer sees each such decision; the lint is silenced with
 `@allow(model_guard)` on the enclosing item (statements take no attributes, chapter 02).
 
 Rejected: dynamic taint tracking at run time only. It finds the mistake after a turn has spent
@@ -245,8 +252,12 @@ set by sources and propagated by every operation. The interpreter passes values 
 `Labelled<T>`, and the host and the engine's dispatch enforce the sinks below from the labels, so
 the enforcement does not depend on the checker. The static type `Secret<T>` is used only where the
 label is known at check time (a `session.ask` question declared `secret: true`, the argument of
-`declassify`); there, and only there, the checker also refuses a sink at load time. Everywhere
-else a sink violation is a run-time `Denied { by: secrecy }`.
+`declassify`); there, and only there, the checker also refuses a sink at load time. It also
+refuses (`C0037`) instantiating a generic function at a type holding a `Secret` when the callee
+may reach a secrecy sink (any effect not kept on the machine), whether it is called, named as a
+function value or given by a turbofish: inside the callee the type parameter carries no label,
+so the sink there could not be refused. Everywhere else a sink violation is a run-time
+`Denied { by: secrecy }`.
 
 **Opt-in sources.** Nothing is secret by default: `ratio.secrets.enabled` is `false` and
 `ratio.secret_paths` is empty. When enabled, labels come from `tools.read_file`, `tools.grep` and

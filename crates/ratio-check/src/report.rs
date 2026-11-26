@@ -248,14 +248,27 @@ pub struct PackageCheck {
 /// The packages a `meta.harness` name may mean, longest first: a name is a package name
 /// followed by `.` and the harness, and a package name may itself hold dots
 /// (`user:critics.strict.judge` is package `critics.strict` and harness `judge`, or package
-/// `critics` and harness `strict.judge`). The runtime rule is that the longest prefix that
-/// names a registered package wins; the rest is the harness.
+/// `critics` and harness `strict.judge`). The runtime rule (chapter 04) chooses the source
+/// first, the one written or, for a bare name, `std` then `user`, and then the longest prefix
+/// that names a registered package in it; the rest is the harness. The readings are listed in
+/// that order: by source, then longest prefix first.
 #[must_use]
 pub fn package_readings(name: &str) -> Vec<QualifiedName> {
     let (body, range) = match name.split_once('@') {
         Some((b, r)) => (b, Some(r)),
         None => (name, None),
     };
+    if !body.contains(':') {
+        let mut out = Vec::new();
+        for source in ["std", "user"] {
+            let qualified = match range {
+                Some(r) => format!("{source}:{body}@{r}"),
+                None => format!("{source}:{body}"),
+            };
+            out.extend(package_readings(&qualified));
+        }
+        return out;
+    }
     // Only the last `/`-separated part may hold the harness (after any `source:`).
     let tail = body
         .rfind('/')
@@ -308,8 +321,9 @@ pub fn harnesses_check(
             complete = false;
             break;
         }
-        // The longest reading that names a package wins, as at run time; a second reading
-        // that also names one makes the name ambiguous, so the list may miss what it loads.
+        // The first source with a reading that names a package, and in it the longest such
+        // reading, wins, as at run time; a second reading in that source that also names one
+        // makes the name ambiguous, so the list may miss what it loads.
         let mut found: Vec<(QualifiedName, Loaded)> = Vec::new();
         for reading in package_readings(&load) {
             let other = loader.load(&reading);
@@ -317,11 +331,13 @@ pub fn harnesses_check(
                 found.push((reading, other));
             }
         }
-        if found.len() != 1 {
+        let Some((first, _)) = found.first() else {
             complete = false;
-        }
-        if found.is_empty() {
             continue;
+        };
+        let source = first.lookup.clone();
+        if found.iter().skip(1).any(|(q, _)| q.lookup == source) {
+            complete = false;
         }
         let (target, other) = found.swap_remove(0);
         let key = target.to_string();

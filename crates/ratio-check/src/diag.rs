@@ -107,8 +107,10 @@ codes! {
     /// required: an instruction position, a `task` section (which takes a `Brief`), or any
     /// position whose type is trusted (chapter 03, "Sinks").
     Untrusted => "C0035",
-    /// `trust`, `as_task` or `declassify` at a type that is or contains a type parameter, or
-    /// one of them used other than by calling it directly (chapter 03, "Conversion").
+    /// `trust`, `as_task` or `declassify` at a type that is or contains a type parameter, or a
+    /// built-in that may only be called (`trust`, `as_task`, `declassify`, `session.ask`,
+    /// `meta.harness`) used as a function value (chapter 03, "Conversion"; chapter 06,
+    /// conventions).
     NotMonomorphic => "C0036",
     /// A value whose secrecy label is known statically (`Secret<T>`) where an unlabelled value
     /// is required, including the arguments of the secrecy sinks (chapter 03, "Secrecy").
@@ -117,8 +119,8 @@ codes! {
     /// field (chapter 03, "Types are schemas").
     NotSchemaable => "C0038",
     /// A warning: a condition derived from an untrusted value is the only guard on an effect
-    /// that writes, runs a command, delegates or reaches the network (lint `model_guard`,
-    /// chapter 03, "What the guarantee covers").
+    /// that writes, runs a command, delegates, reaches the network or runs a tool a model chose
+    /// (lint `model_guard`, chapter 03, "What the guarantee covers").
     ModelGuard => "C0039",
 }
 

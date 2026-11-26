@@ -168,11 +168,18 @@ particular, a `ToolCall`'s name and id are what the model wrote, and a plan's te
   and grant rules (`docs/05-tools-and-isolation.md#isolation-tiers`); Ratio never resolves a path
   against the file system itself.
 - Every built-in that makes model calls says how many in its row, as `model ×n`.
+- A parameter whose name is a reserved keyword (`prompt`, `type`, …) can be passed only by
+  position, since a named argument is an identifier (chapter 02): `session.start`'s `prompt`,
+  `memory.search`'s `type`, `tools.media_image`'s `prompt`. A parameter added later is not given
+  a keyword's name.
 - Every rule a built-in imposes on its arguments also holds when it is used as a function value.
-  The built-ins whose rules hold only where they are called, `trust`, `as_task`, `declassify`
-  (audited trust sites), `session.ask` (answers labelled from the questions written at the call)
-  and `meta.harness` (each load listed by its name), may only be called, never used as values;
-  the checker refuses naming one otherwise.
+  A built-in whose rule can be checked only where it is called may only be called, never used as
+  a value (the checker refuses naming one otherwise, `C0036`): every **trust site** (its type and
+  reason are fixed at the call), every **sink for secrets or harness names** whose rule depends
+  on the call's written arguments, and every **generic secrecy sink** (a secret type argument is
+  visible only at the call). Today these are `trust`, `as_task` and `declassify` (trust sites),
+  `session.ask` (its answers are labelled from the questions written at the call) and
+  `meta.harness` (each load is listed by the name it is called with).
 
 ## Built-in prompts
 

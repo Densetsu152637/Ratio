@@ -30,6 +30,19 @@ in this repository.
 - A `meta.harness` name is the longest prefix that names a registered package, then the harness
   (chapters 04, 06).
 - Chapter 10 adds the codes `C0035` to `C0039` and the `conformance/taint/` directory.
+- `session.start` names the package by `package:` too, and a parameter whose name is a reserved
+  keyword (`prompt`, `type`) is passed only by position (chapter 06).
+- The guarded-effect lint (`C0039`) also covers running a tool a model chose (chapter 03).
+- The checker refuses instantiating a generic function that may reach a secrecy sink at a type
+  holding a `Secret` (`C0037`, chapter 03).
+- The call-only rule states its criterion (trust sites, sinks whose rule depends on the call's
+  written arguments, generic secrecy sinks); the five built-ins are its current members
+  (chapter 06).
+- Canonical JSON's key order is given (fixed order for schema keywords, field names by UTF-8
+  bytes), and digest enums are numbered from 0 (chapter 03).
+- A `meta.harness` name's source is chosen before its longest package prefix; an ambiguous name
+  makes the `harnesses.check` listing incomplete (chapters 04, 06).
+- Wording: chapter 10's `C0036` row.
 
 **Changes in draft 0.11** (kept for reference). Errata from stage 4, the type checker. One grammar change.
 
