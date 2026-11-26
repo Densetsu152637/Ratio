@@ -1396,8 +1396,12 @@ impl Checker<'_> {
 
     /// A section of text that must fit `want` (`Str`, or `Brief` for `task`); whether the
     /// prompt stays trusted (a `Brief` task makes it a `Prompt`).
+    ///
+    /// The expression is checked expecting `Str` even for `task`: an expected `Brief` would
+    /// instantiate a generic call at `Brief` (`apply(|s| s, trusted)`) and make the prompt
+    /// untrusted needlessly; whether it fits is then decided against `want`.
     fn text_section(&mut self, b: &mut Body, e: &Expr, want: TypeId, position: &str) -> bool {
-        let t = self.expr(b, e, Some(want));
+        let t = self.expr(b, e, Some(TypeId::STR));
         let fits = self.mismatch_at(b, e.span, t, want, Some(position));
         let t = self.types.resolve(t);
         fits && !self.types.tainted(t)

@@ -1155,7 +1155,11 @@ impl Checker<'_> {
             }
         }
         for closures in [false, true] {
+            // An audited conversion's type comes from its argument (or turbofish), never
+            // from what is expected of it: relating its result to an expected inference
+            // variable now would bind that variable to the argument's untrusted type.
             if closures
+                && sig.traits.audited.is_none()
                 && let Some(want) = expected
                 && self.types.has_vars(ret)
             {

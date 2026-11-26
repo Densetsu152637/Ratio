@@ -13,6 +13,7 @@
 //! package, a superset, which is the safe direction for a list a reviewer approves.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use ratio_names::ModuleId;
 use ratio_syntax::Span;
@@ -132,14 +133,14 @@ pub struct Summary {
     /// The tools it may run by name, sorted (`mcp__*` for any MCP tool).
     pub tools: Vec<String>,
     /// The trust sites it reaches, by index into [`crate::Checked::trust_sites`], sorted.
-    pub trust_sites: Vec<usize>,
+    pub trust_sites: Arc<[usize]>,
     /// The `meta.harness` loads it reaches, by index into [`crate::Checked::loads`], sorted.
-    pub loads: Vec<usize>,
+    pub loads: Arc<[usize]>,
 }
 
-/// The insertions into trust-site and load sets the analysis makes before it gives up and
-/// lists every site for every item.
-pub const MAX_SITE_WORK: usize = 2_000_000;
+/// The entries of trust-site and load sets the analysis builds before it gives up and lists
+/// every site for every item.
+pub const MAX_SITE_WORK: usize = 4_000_000;
 
 /// What the checker recorded while checking bodies, for the analysis.
 #[derive(Clone, Debug, Default)]
@@ -264,6 +265,8 @@ impl Checker<'_> {
             e.sort_unstable();
             e.dedup();
         }
+        let final_sites: Vec<Arc<[usize]>>;
+        let final_loads: Vec<Arc<[usize]>>;
         let mut callers: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (from, to) in edges.iter().enumerate() {
             for t in to {
@@ -283,32 +286,18 @@ impl Checker<'_> {
                 }
             }
         }
-        // Trust sites and loads, within a work bound.
-        let mut spent = 0usize;
-        let mut work: Vec<usize> = (0..n).collect();
-        'sites: while let Some(i) = work.pop() {
-            for &c in &callers[i] {
-                let add_sites: Vec<usize> = sites[i].difference(&sites[c]).copied().collect();
-                let add_loads: Vec<usize> = loads[i].difference(&loads[c]).copied().collect();
-                spent += add_sites.len() + add_loads.len() + 1;
-                if spent > MAX_SITE_WORK {
-                    out.approximate = true;
-                    break 'sites;
-                }
-                if !add_sites.is_empty() || !add_loads.is_empty() {
-                    sites[c].extend(add_sites);
-                    loads[c].extend(add_loads);
-                    work.push(c);
-                }
-            }
-        }
+        // Trust sites and loads: over the strongly connected components of the call graph,
+        // callees first, each component's set is its members' own and its callees' sets,
+        // within a work bound.
+        let (comp_sites, comp_loads, comp_of) = components(&edges, &sites, &loads, &mut out);
         if out.approximate {
-            let all_sites: BTreeSet<usize> = (0..out.trust_sites.len()).collect();
-            let all_loads: BTreeSet<usize> = (0..out.loads.len()).collect();
-            for i in 0..n {
-                sites[i].clone_from(&all_sites);
-                loads[i].clone_from(&all_loads);
-            }
+            let all_sites: Arc<[usize]> = (0..out.trust_sites.len()).collect();
+            let all_loads: Arc<[usize]> = (0..out.loads.len()).collect();
+            final_sites = vec![all_sites; n];
+            final_loads = vec![all_loads; n];
+        } else {
+            final_sites = comp_of.iter().map(|c| comp_sites[*c].clone()).collect();
+            final_loads = comp_of.iter().map(|c| comp_loads[*c].clone()).collect();
         }
         for (i, (module, index)) in nodes.iter().enumerate() {
             let item = &self.loaded.modules[module.0].ast.items[*index];
@@ -323,11 +312,99 @@ impl Checker<'_> {
                 Summary {
                     effects: effects[i],
                     tools: tools[i].iter().cloned().collect(),
-                    trust_sites: sites[i].iter().copied().collect(),
-                    loads: loads[i].iter().copied().collect(),
+                    trust_sites: final_sites[i].clone(),
+                    loads: final_loads[i].clone(),
                 },
             );
         }
         out
     }
+}
+
+/// Per strongly connected component of the call graph (Tarjan's algorithm, iterative, which
+/// emits each component after every component it reaches): the sites and loads it reaches,
+/// and each node's component. Past [`MAX_SITE_WORK`] entries, `out.approximate` is set.
+#[allow(clippy::type_complexity, reason = "three parallel results")]
+fn components(
+    edges: &[Vec<usize>],
+    sites: &[BTreeSet<usize>],
+    loads: &[BTreeSet<usize>],
+    out: &mut Results,
+) -> (Vec<Arc<[usize]>>, Vec<Arc<[usize]>>, Vec<usize>) {
+    let n = edges.len();
+    let (mut index, mut low) = (vec![usize::MAX; n], vec![0usize; n]);
+    let (mut on_stack, mut stack) = (vec![false; n], Vec::new());
+    let mut comp_of = vec![usize::MAX; n];
+    let mut comp_sites: Vec<Arc<[usize]>> = Vec::new();
+    let mut comp_loads: Vec<Arc<[usize]>> = Vec::new();
+    let mut next = 0usize;
+    let mut spent = 0usize;
+    for root in 0..n {
+        if index[root] != usize::MAX {
+            continue;
+        }
+        let mut frames: Vec<(usize, usize)> = vec![(root, 0)];
+        index[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        while let Some(&mut (v, ref mut edge)) = frames.last_mut() {
+            if let Some(&w) = edges[v].get(*edge) {
+                *edge += 1;
+                if index[w] == usize::MAX {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    frames.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+            frames.pop();
+            if let Some(&(parent, _)) = frames.last() {
+                low[parent] = low[parent].min(low[v]);
+            }
+            if low[v] != index[v] {
+                continue;
+            }
+            let id = comp_sites.len();
+            let mut members = Vec::new();
+            while let Some(w) = stack.pop() {
+                on_stack[w] = false;
+                comp_of[w] = id;
+                members.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            let (mut s, mut l): (BTreeSet<usize>, BTreeSet<usize>) =
+                (BTreeSet::new(), BTreeSet::new());
+            for &m in &members {
+                s.extend(sites[m].iter().copied());
+                l.extend(loads[m].iter().copied());
+                for &w in &edges[m] {
+                    let c = comp_of[w];
+                    if c != id && c != usize::MAX && !out.approximate {
+                        spent += comp_sites[c].len() + comp_loads[c].len() + 1;
+                        if spent > MAX_SITE_WORK {
+                            out.approximate = true;
+                        }
+                        s.extend(comp_sites[c].iter().copied());
+                        l.extend(comp_loads[c].iter().copied());
+                    }
+                }
+            }
+            if out.approximate {
+                s.clear();
+                l.clear();
+            }
+            comp_sites.push(s.into_iter().collect());
+            comp_loads.push(l.into_iter().collect());
+        }
+    }
+    (comp_sites, comp_loads, comp_of)
 }
