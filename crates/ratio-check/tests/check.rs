@@ -298,3 +298,64 @@ fn many_exponential_matches_are_refused_once_and_quickly() {
     let (_, codes) = check_within(&source, Duration::from_secs(5));
     assert_eq!(codes, vec![Code::MatchTooComplex]);
 }
+
+#[test]
+fn a_budget_spent_by_the_last_relation_still_refuses_the_package() {
+    // The body's last relation (`UserText <: Str`, the result against the declared type)
+    // comes after its last expression was checked. Find the smallest budget that checks
+    // cleanly; one unit less runs out exactly there, and the package must still be refused
+    // with `C0022`, reported once at the module.
+    let loaded = load("fn f(x: UserText) -> Str {\n  x\n}\n");
+    let clean = (0..100_000u64)
+        .find(|fuel| ratio_check::budget::check(&loaded, *fuel).is_clean())
+        .expect("some budget checks cleanly");
+    assert!(clean > 0);
+    let short = ratio_check::budget::check(&loaded, clean - 1);
+    let too_complex: Vec<_> = short
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == Code::TooComplex)
+        .collect();
+    assert_eq!(too_complex.len(), 1, "{:?}", short.diagnostics);
+    assert_eq!(
+        too_complex[0].span.start, 0,
+        "reported at the module, after the passes"
+    );
+    assert!(!short.is_clean());
+}
+
+#[test]
+fn none_is_the_context_mode_variant_only_where_context_mode_is_expected() {
+    let source = "fn cfg() -> HarnessConfig {\n  { context: none }\n}\n\nfn absent() -> ContextMode? {\n  let c: ContextMode? = none\n  c\n}\n";
+    let (checked, codes) = check(source);
+    assert!(codes.is_empty(), "{:?}", checked.diagnostics);
+    let table = &checked.tables[0];
+    let first = source.find("none").unwrap();
+    let key = ratio_check::Key {
+        start: first,
+        end: first + 4,
+    };
+    match table.res.get(&key) {
+        Some(Res::Variant(id, index)) => {
+            let def = checked.types.enum_def(*id);
+            assert_eq!(def.name, "ContextMode");
+            assert_eq!(def.variants[*index].name, "none");
+        }
+        other => panic!("`context: none` resolved to {other:?}"),
+    }
+    let second = source.rfind("= none").unwrap() + 2;
+    let key = ratio_check::Key {
+        start: second,
+        end: second + 4,
+    };
+    assert!(
+        table.res.get(&key).is_none(),
+        "`none` for a `ContextMode?` is absence"
+    );
+    let ty = table.types[&key];
+    assert!(
+        matches!(checked.types.get(ty), Ty::Option(inner) if *inner == TypeId::NEVER),
+        "{}",
+        checked.types.display(ty)
+    );
+}

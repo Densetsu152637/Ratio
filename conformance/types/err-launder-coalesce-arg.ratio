@@ -1,0 +1,13 @@
+// expect: check-error C0004 at 12:9
+
+fn apply<T>(f: fn(T) -> Str, x: T) -> Str {
+  f(x)
+}
+
+fn id(s: Str) -> Str {
+  s
+}
+
+fn launder(web: Untrusted<Str>?, c: Bool) -> Str {
+  apply(id, if c { web ?? "x" } else { "y" })
+}

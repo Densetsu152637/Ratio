@@ -1,0 +1,9 @@
+// expect: check-error C0004 at 8:7
+
+fn two<T>(f: fn(T) -> Str, g: fn() -> T) -> Str {
+  f(g())
+}
+
+fn launder(web: Untrusted<Str>) -> Str {
+  two(|s: Str| s, || web)
+}

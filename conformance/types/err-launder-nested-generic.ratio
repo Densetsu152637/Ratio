@@ -1,0 +1,17 @@
+// expect: check-error C0004 at 16:9
+
+fn apply<T>(f: fn(T) -> Str, x: T) -> Str {
+  f(x)
+}
+
+fn pass<U>(u: U) -> U {
+  u
+}
+
+fn id(s: Str) -> Str {
+  s
+}
+
+fn launder(web: Untrusted<Str>) -> Str {
+  apply(pass(id), pass(web))
+}

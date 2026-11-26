@@ -1,0 +1,14 @@
+// expect: check-error C0004 at 12:38
+
+fn mk<T>(x: T) -> fn(T) -> T {
+  |y| y
+}
+
+fn id(s: Str) -> Str {
+  s
+}
+
+fn launder(web: Untrusted<Str>) -> Str {
+  let f: fn(Untrusted<Str>) -> Str = mk("a")
+  f(web)
+}

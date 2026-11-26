@@ -92,10 +92,11 @@ impl Checked {
 
 /// The passes, on the current thread, following expressions, patterns and types at most
 /// `max_depth` deep.
-fn check_on(loaded: &Loaded, max_depth: usize) -> Checked {
+fn check_on(loaded: &Loaded, max_depth: usize, fuel: u64) -> Checked {
     let mut internal = Vec::new();
     let std = check::std_modules(&mut internal);
     let mut checker = Checker::new(loaded, &std, max_depth);
+    checker.types.fuel = fuel;
     checker.internal = internal;
     checker.declare_enums();
     checker.lower_payloads();
@@ -137,14 +138,26 @@ pub mod fallback {
     /// [`crate::check`] in fallback mode.
     #[must_use]
     pub fn check(loaded: &ratio_names::Loaded) -> crate::Checked {
-        crate::check_on(loaded, crate::stack::FALLBACK_DEPTH)
+        crate::check_on(loaded, crate::stack::FALLBACK_DEPTH, crate::types::FUEL)
+    }
+}
+
+/// The check with a given work budget instead of the default, so tests can make it run out at
+/// a chosen point. For tests only.
+#[doc(hidden)]
+pub mod budget {
+    /// [`crate::check`] with `fuel` units of work for relations and substitutions.
+    #[must_use]
+    pub fn check(loaded: &ratio_names::Loaded, fuel: u64) -> crate::Checked {
+        crate::stack::run(|max_depth| crate::check_on(loaded, max_depth, fuel))
+            .unwrap_or_else(|| crate::check(loaded))
     }
 }
 
 /// Checks the modules of a loaded package.
 #[must_use]
 pub fn check(loaded: &Loaded) -> Checked {
-    let done = stack::run(|max_depth| check_on(loaded, max_depth));
+    let done = stack::run(|max_depth| check_on(loaded, max_depth, types::FUEL));
     done.unwrap_or_else(|| Checked {
         types: Types::new(),
         tables: Vec::new(),
