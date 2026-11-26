@@ -1,8 +1,14 @@
 //! The canonical printer: a [`Module`] back to source text.
 //!
 //! The text it writes reads back as the same tree: for every tree the parser builds without
-//! errors, `parse(print(tree))` has the same [span-free dump](crate::dump) as the tree, and
-//! printing that again gives the same text (printing is idempotent). The printer keeps what the
+//! errors whose printed text is within the source limit (`MAX_SOURCE_BYTES`),
+//! `parse(print(tree))` has the same [span-free dump](crate::dump) as the tree, and printing that
+//! again gives the same text (printing is idempotent). The limit is a real condition: printing
+//! indents by depth, so a deep tree can print to more bytes than the source it came from (255
+//! nested `if a {` print to about 264,000 bytes) and the text is then refused with `L0013`.
+//!
+//! The printer runs on a thread with a large stack; if none can be started it runs on the
+//! caller's stack and writes `<too deep>` for anything nested deeper than 32 levels. The printer keeps what the
 //! tree keeps (parentheses, `T??` as two options, long and raw strings) and drops what it does
 //! not: comments other than `///` documentation, blank lines, and the original spacing.
 //!
@@ -57,6 +63,8 @@
 
 use std::fmt::Write as _;
 
+use crate::stack::{self, FALLBACK_DEPTH};
+
 use crate::ast::{
     Arg, Arm, Attribute, BinaryOp, Block, Catch, ClosureParam, Condition, Doc, Else, EnumDecl,
     Expr, ExprKind, FieldInit, FieldPattern, FieldType, Ident, Import, ImportPath, Item, ItemKind,
@@ -68,16 +76,21 @@ use crate::ast::{
 /// The canonical source text of `module` (the notation is described in the module documentation).
 #[must_use]
 pub fn print(module: &Module) -> String {
-    let mut p = Printer {
-        out: String::new(),
-        indent: 0,
-        flat: 0,
-        bol: true,
-        type_depth: 0,
-        open_head: false,
-    };
-    p.module(module);
-    p.out
+    stack::run(|big| {
+        let mut p = Printer {
+            out: String::new(),
+            indent: 0,
+            flat: 0,
+            bol: true,
+            type_depth: 0,
+            open_head: false,
+            depth: 0,
+            max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
+        };
+        p.module(module);
+        p.out
+    })
+    .unwrap_or_else(|| "<internal error>".to_owned())
 }
 
 struct Printer {
@@ -94,6 +107,9 @@ struct Printer {
     /// no `{` after it. The token reader takes such a type for the head of a function and puts
     /// off ending the statement until a `{` or an explicit `;`.
     open_head: bool,
+    /// The nesting of expressions, types and patterns being printed, and the most allowed.
+    depth: usize,
+    max_depth: usize,
 }
 
 /// Whether the printed text so far ends in a token that can end a statement at a line end
@@ -322,6 +338,16 @@ impl Printer {
 
     // ---- module and items ----
 
+    /// Enters one level of nesting; past the limit writes `<too deep>` and says no.
+    fn enter(&mut self) -> bool {
+        if self.depth >= self.max_depth {
+            self.w("<too deep>");
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
     fn module(&mut self, module: &Module) {
         let mut first = true;
         if let Some(meta) = &module.meta {
@@ -532,6 +558,13 @@ impl Printer {
     // ---- types ----
 
     fn ty(&mut self, ty: &Type) {
+        if self.enter() {
+            self.ty_inner(ty);
+            self.depth -= 1;
+        }
+    }
+
+    fn ty_inner(&mut self, ty: &Type) {
         match &ty.kind {
             TypeKind::Error => self.w("<error>"),
             TypeKind::Named { path, args } => {
@@ -731,11 +764,18 @@ impl Printer {
         self.comma_block(arms, Self::arm);
     }
 
+    fn expr(&mut self, expr: &Expr) {
+        if self.enter() {
+            self.expr_inner(expr);
+            self.depth -= 1;
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per expression form, in the order of the AST"
     )]
-    fn expr(&mut self, expr: &Expr) {
+    fn expr_inner(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Error => self.w("<error>"),
             ExprKind::Lit(lit) => self.lit(lit),
@@ -1142,6 +1182,13 @@ impl Printer {
     // ---- patterns ----
 
     fn pattern(&mut self, pattern: &Pattern) {
+        if self.enter() {
+            self.pattern_inner(pattern);
+            self.depth -= 1;
+        }
+    }
+
+    fn pattern_inner(&mut self, pattern: &Pattern) {
         match &pattern.kind {
             PatternKind::Error => self.w("<error>"),
             PatternKind::Wildcard => self.w("_"),

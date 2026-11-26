@@ -5,7 +5,8 @@
 //! `x.f().g`, `T??`) are read in loops, and recursion happens only where the tree nests; every
 //! level of nesting is counted against the limit of chapter 07 (`LexOptions::max_nesting`), so the
 //! parser's stack and the depth of the tree it builds are bounded whatever the input. Past the
-//! limit it reports `P0002` and stops.
+//! limit it reports `P0002` and stops. The parser runs on a thread with a large stack; if none can
+//! be started it runs on the caller's stack with the limit clamped to 32.
 //!
 //! What a `{` opens is decided once, by the token reader, with rule 1 of chapter 02's
 //! disambiguation rules; the reader records it on the token ([`BraceKind`]) and the parser takes
@@ -26,6 +27,7 @@ use crate::ast::{
 };
 use crate::diag::{Code, Diagnostic};
 use crate::lexer::{LexOptions, MAX_DIAGNOSTICS, MAX_NESTING, lex_with};
+use crate::stack::{self, FALLBACK_DEPTH};
 use crate::token::{BraceKind, Contextual, Keyword, Span, Token, TokenKind};
 
 /// The result of parsing a source: the module (always present, with `Error` nodes where parsing
@@ -102,49 +104,39 @@ pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
     }
 }
 
-/// The stack the parser runs on. Recursive descent costs about a dozen frames per level of
-/// nesting (one per level of the precedence ladder), and a debug build's frames are large, so a
-/// source at the nesting limit (256 levels) needs more than the 2 MiB a test thread gets and, on
-/// Windows, than the 1 MiB of a main thread. The parser therefore always runs on a thread of its
-/// own with this much stack: the limit bounds the depth, this bounds the stack for that depth
-/// with a wide margin (`tests/parser.rs` measures the need). The memory is address space until
-/// touched.
-const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
-
-/// Reads the module on a thread with [`PARSER_STACK_BYTES`] of stack; reads it on the caller's
-/// thread if no thread can be started. A panic in the parser (a bug) is passed on to the caller.
+/// Reads the module on the big stack of [`crate::stack`]. If no thread could be started the
+/// parser runs on the caller's stack with its nesting limit clamped to
+/// [`FALLBACK_DEPTH`] (deeper sources get `P0002`). If the parser was lost, the module is empty
+/// and an internal diagnostic says so, so a failure is never silent.
 fn run_parser(parser: Parser, whole: Span) -> (Module, Vec<Diagnostic>) {
-    fn work(slot: &std::sync::Mutex<Option<Parser>>) -> Option<(Module, Vec<Diagnostic>)> {
-        let mut parser = slot.lock().ok()?.take()?;
+    let done = stack::run(move |big| {
+        let mut parser = parser;
+        if !big {
+            parser.max_depth = parser.max_depth.min(FALLBACK_DEPTH);
+        }
         let module = parser.module();
-        Some((module, parser.diags))
-    }
-    let slot = std::sync::Mutex::new(Some(parser));
-    let spawned = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSER_STACK_BYTES)
-            .name("ratio-parser".to_owned())
-            .spawn_scoped(scope, || work(&slot))
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
+        (module, parser.diags)
     });
-    match spawned {
-        Ok(Some(done)) => done,
-        // No thread could be started: the parser is still in the slot.
-        _ => work(&slot).unwrap_or_else(|| {
-            (
-                Module {
-                    meta: None,
-                    items: Vec::new(),
-                    span: whole,
-                },
-                Vec::new(),
-            )
-        }),
-    }
+    done.unwrap_or_else(|| {
+        let at = Span {
+            end: whole.start,
+            end_line: whole.line,
+            end_col: whole.col,
+            ..whole
+        };
+        (
+            Module {
+                meta: None,
+                items: Vec::new(),
+                span: whole,
+            },
+            vec![Diagnostic {
+                code: Code::UnexpectedToken,
+                message: "internal error: the parser could not run".to_owned(),
+                span: at,
+            }],
+        )
+    })
 }
 
 fn whole_span(source: &str, eof: Option<Span>) -> Span {

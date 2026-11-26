@@ -26,7 +26,9 @@ its result type, and a closure's parameter commas do not end a `match` arm; and 
 form (a new subsection): the printer's explicit `;` after a statement ending in `>`, `??` or a
 `fn` or `harness` type, no trailing comma in an `import` list, `{ x, }` for a one-field
 shorthand record, canonical quantity, duration and money units, ranges without spaces, long and
-raw long string layout. Chapter 10 says what a `tree:` line is.
+raw long string layout. Chapter 10 says what a `tree:` line is. The round trip is stated for printed text within the
+source limit, and `print`, the tree dump and the parser run on a large stack, clamping depth to
+32 if no thread can be started (chapter 02, "Canonical form").
 
 **Changes in draft 0.7** (kept for reference). Errata from the stage 1 review and the repository-split review.
 Chapter 02: blocks and prompt bodies separate statements with `;` and allow one after the last;

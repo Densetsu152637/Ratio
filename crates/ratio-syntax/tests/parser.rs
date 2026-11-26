@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratio_syntax::ast::ItemKind;
-use ratio_syntax::{Code, LexOptions, parse, parse_with};
+use ratio_syntax::{Code, LexOptions, MAX_SOURCE_BYTES, dump, parse, parse_with, print};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -266,6 +266,81 @@ fn the_deepest_allowed_source_parses_on_a_small_stack() {
         })
         .expect("a thread");
     handle.join().expect("no stack overflow, no panic");
+}
+
+/// The deepest source of a block shape that parses cleanly at `max_nesting` 256.
+fn deepest(open: &str, close: &str, inner: &str) -> String {
+    let make = |n: usize| {
+        format!(
+            "fn f() {{ {}{inner}{} }}\n",
+            open.repeat(n),
+            close.repeat(n)
+        )
+    };
+    let n = (1..=256)
+        .rev()
+        .find(|n| parse_with(&make(*n), &options(256)).is_clean())
+        .expect("some depth parses");
+    assert!(n >= 60, "only {n} levels of `{open}` parse");
+    make(n)
+}
+
+#[test]
+fn printing_and_dumping_the_deepest_trees_work_on_a_small_stack() {
+    // `print` and `dump` run on the same big stack as the parser, so the caller's 512 KiB do not
+    // matter, in a debug build where frames are large.
+    let mut sources: Vec<(String, String)> = shapes()
+        .into_iter()
+        .map(|(name, per_level, make)| (name.to_owned(), make(last_clean(per_level, 256))))
+        .collect();
+    for (name, open, close, inner) in [
+        ("ifs", "if a { ", " }", "1"),
+        ("fors", "for x in xs { ", " }", "1"),
+        ("tries", "try { ", " } catch e { 1 }", "1"),
+        ("matches", "match a { _ => ", " }", "1"),
+        ("pars", "par { ", " }", "1"),
+        ("let blocks", "let b = { ", " }", "1"),
+        ("parens", "f(", ")", "1"),
+        ("closures", "g(|x| ", ")", "1"),
+    ] {
+        sources.push((name.to_owned(), deepest(open, close, inner)));
+    }
+    let handle = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            for (name, source) in sources {
+                let parsed = parse_with(&source, &options(256));
+                assert!(parsed.is_clean(), "{name}: {:?}", parsed.diagnostics);
+                let text = print(&parsed.module);
+                assert!(!text.contains("<too deep>"), "{name}");
+                assert!(!dump(&parsed.module).contains("(too-deep)"), "{name}");
+            }
+        })
+        .expect("a thread");
+    handle.join().expect("no stack overflow, no panic");
+}
+
+#[test]
+fn the_round_trip_holds_only_within_the_source_limit() {
+    // Printing indents by depth, so the text of a deep tree can outgrow `MAX_SOURCE_BYTES` even
+    // though the source it came from was small: it then does not read back (`L0013`).
+    let make = |n: usize| format!("fn f() {{ {}1{} }}\n", "if a { ".repeat(n), " }".repeat(n));
+    let deep = make(255);
+    let parsed = parse_with(&deep, &options(256));
+    assert!(parsed.is_clean(), "{:?}", parsed.diagnostics);
+    let text = print(&parsed.module);
+    assert!(text.len() > MAX_SOURCE_BYTES, "{} bytes", text.len());
+    let again: Vec<Code> = parse_with(&text, &options(256))
+        .diagnostics
+        .iter()
+        .map(|d| d.code)
+        .collect();
+    assert_eq!(again, [Code::SourceTooLarge]);
+    // Within the limit the text reads back as the same tree.
+    let shallow = parse(&make(60));
+    let text = print(&shallow.module);
+    assert!(text.len() <= MAX_SOURCE_BYTES);
+    assert_eq!(dump(&parse(&text).module), dump(&shallow.module));
 }
 
 #[test]

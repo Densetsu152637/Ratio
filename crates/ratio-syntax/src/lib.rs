@@ -12,6 +12,7 @@ mod lexer;
 mod number;
 mod parser;
 mod printer;
+mod stack;
 mod token;
 
 pub use diag::{Code, Diagnostic};

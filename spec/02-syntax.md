@@ -217,7 +217,8 @@ may be a statement, an argument or an arm body, but it is not an operand: `1 + r
 Parser nesting is the depth of the syntax tree: each nested expression, type or pattern counts
 one level, and so does each prefix operator (`not`, `-`) and each link of a postfix, binary or
 `|>` chain, so `a.b.c.d` is deeper than `a`. The limit is `max_nesting` (default 128, chapter
-07); exceeding it is `P0002` and parsing stops.
+07); exceeding it is `P0002` and parsing stops. (If the host cannot start the thread with a
+large stack that the parser runs on, the limit is clamped to 32; see "Canonical form".)
 
 ```ebnf
 module          = [ meta_decl ] , { item } , EOF ;
@@ -398,6 +399,8 @@ section         = "system" , expr
    otherwise `()` (Unit). Inserted semicolons do not change a block's value.
 5. `|` begins a closure in primary position and separates patterns in a pattern; there is no
    bitwise-or operator. A closure parameter is a single pattern without top-level `|`.
+   The commas of a closure's parameter list never end a `match` arm: in
+   `a => |x, y| match n { … }` the `{` still opens the inner `match`'s arms.
 6. **Patterns.** In a `match` or `catch` arm, an identifier that resolves to a variant of the
    scrutinee's enum (rule 10) or a qualified `type_name` naming a variant is a variant pattern;
    any other bare identifier binds.
@@ -423,6 +426,41 @@ constants, operators, and calls of **pure** functions and pure built-ins (`model
 `text.*`, `list.*`, …); the checker refuses calls that make effects (model calls, tools, the
 clock, randomness). `const CRITIC: ModelRef = model.route(tier: frontier)` is therefore valid: it
 builds a reference and resolves nothing until a call uses it.
+
+### Canonical form
+
+The canonical printer (`ratio_syntax::print`) writes a parsed module back as source. For every
+tree the parser builds without errors, whose printed text is **within the source limit**
+(chapter 07), that text reads back as the same tree and printing it again gives the same text.
+The limit matters because printing adds bytes: it indents by nesting depth, so the text of a deep
+tree can be larger than the source it came from (255 nested `if a {` print to about 264,000 bytes,
+over the 256 KiB limit, and the printed text is refused with `L0013`); the printer does not
+shorten it. Its choices are:
+
+- **Statement ends.** A statement ends with a line end. The printer also writes an explicit `;`
+  after a statement whose last token is a `>` or `??` closing a type, or that holds a `fn` or
+  `harness` type outside brackets with no `{` after it, although the reader would insert one at
+  a line end in a type declaration or `format` section; both spellings read as the same tree.
+  The last statement of a block needs none.
+- **Lists.** An `import` name list takes no trailing comma (`{ a, b }`). A record with one
+  shorthand field is written `{ x, }`, so that rule 1 does not take it for a block.
+- **Literals.** Integers in decimal. A quantity is written with `M` only for a whole number of
+  millions, otherwise with `k` and up to three decimals (`1.5k`, `1500k`). A duration is written in
+  the largest of `h`, `m`, `s`, `ms` that holds it whole (`120m` is `2h`, `90m` stays `90m`).
+  Money is `$12` when whole, otherwise with at least two decimals (`$0.50`). Ranges have no
+  spaces (`0..n`, `a..=b`).
+- **Long strings.** A long string is written on several lines, its closing `"""` on a line of
+  its own at the statement's indentation; `"`, `{`, `}`, `\` and tab are escaped, and a leading
+  space that the dedent would strip is written `\u{20}`. A raw long string is written with its
+  lines at column 0, because it has no escapes to tell indentation from text. A raw long string
+  whose non-blank lines all share indentation has no canonical form (the parser never builds one,
+  since its dedent removes that indentation; a hand-built tree can): the printer still writes it
+  at column 0, and it reads back dedented.
+
+`print` and the tree dump run on a thread with a large stack, like the parser. If no such thread
+can be started, they run on the caller's stack and refuse trees deeper than 32 levels (the printer
+writes `<too deep>` and the dump `(too-deep)` there), and the parser clamps `max_nesting` to 32,
+so a deeper source gets `P0002`.
 
 ## A complete small program
 

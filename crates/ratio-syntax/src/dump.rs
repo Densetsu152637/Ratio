@@ -74,6 +74,8 @@
 
 use std::fmt::Write as _;
 
+use crate::stack::{self, FALLBACK_DEPTH};
+
 use crate::ast::{
     Arg, Arm, Attribute, Block, Catch, Condition, Doc, Else, EnumDecl, Expr, ExprKind, FieldInit,
     FieldPattern, FieldType, FnDecl, HarnessDecl, Ident, Import, ImportPath, Item, ItemKind,
@@ -85,13 +87,23 @@ use crate::ast::{
 /// The span-free S-expression of `module` (the notation is described in the module documentation).
 #[must_use]
 pub fn dump(module: &Module) -> String {
-    let mut d = Dump { out: String::new() };
-    d.module(module);
-    d.out
+    stack::run(|big| {
+        let mut d = Dump {
+            out: String::new(),
+            depth: 0,
+            max_depth: if big { usize::MAX } else { FALLBACK_DEPTH },
+        };
+        d.module(module);
+        d.out
+    })
+    .unwrap_or_else(|| "(internal-error)".to_owned())
 }
 
 struct Dump {
     out: String,
+    /// The nesting of expressions, types and patterns being dumped, and the most allowed.
+    depth: usize,
+    max_depth: usize,
 }
 
 impl Dump {
@@ -167,6 +179,17 @@ impl Dump {
     }
 
     // ---- module and items ----
+
+    /// Enters one level of nesting; past the limit writes `(too-deep)` and says no.
+    fn enter(&mut self) -> bool {
+        if self.depth >= self.max_depth {
+            self.sep();
+            self.out.push_str("(too-deep)");
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
 
     fn module(&mut self, module: &Module) {
         self.node("module", |d| {
@@ -335,6 +358,13 @@ impl Dump {
     // ---- types ----
 
     fn ty(&mut self, ty: &Type) {
+        if self.enter() {
+            self.ty_inner(ty);
+            self.depth -= 1;
+        }
+    }
+
+    fn ty_inner(&mut self, ty: &Type) {
         match &ty.kind {
             TypeKind::Error => self.node("type-error", |_| {}),
             TypeKind::Named { path, args } => self.node("named", |d| {
@@ -472,11 +502,18 @@ impl Dump {
         });
     }
 
+    fn expr(&mut self, expr: &Expr) {
+        if self.enter() {
+            self.expr_inner(expr);
+            self.depth -= 1;
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per expression form, in the order of the AST"
     )]
-    fn expr(&mut self, expr: &Expr) {
+    fn expr_inner(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Error => self.node("error", |_| {}),
             ExprKind::Lit(lit) => self.lit(lit),
@@ -612,6 +649,13 @@ impl Dump {
     // ---- patterns ----
 
     fn pattern(&mut self, pattern: &Pattern) {
+        if self.enter() {
+            self.pattern_inner(pattern);
+            self.depth -= 1;
+        }
+    }
+
+    fn pattern_inner(&mut self, pattern: &Pattern) {
         match &pattern.kind {
             PatternKind::Error => self.node("pattern-error", |_| {}),
             PatternKind::Wildcard => self.node("wild", |_| {}),
