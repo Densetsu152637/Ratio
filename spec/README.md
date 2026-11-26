@@ -23,8 +23,6 @@ change.
 - Wording: `C0037` covers a generic function returned too (chapter 03); the call-only criterion
   names every source or sink whose rule depends on the written arguments (chapter 06).
 
-
-
 **Changes in draft 0.12** (kept for reference). Errata from stage 5, schemas and taint. No grammar change.
 
 - Concatenating or interpolating a `Brief` with trusted text only gives a `Brief` (chapter 03).
