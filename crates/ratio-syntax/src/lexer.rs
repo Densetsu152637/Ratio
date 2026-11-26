@@ -475,7 +475,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// A one-character span at an opening mark, for diagnostics about unclosed things.
+    /// A zero-width span at an opening mark, for diagnostics about unclosed things.
     fn point_span(m: Mark) -> Span {
         Span {
             start: m.off,

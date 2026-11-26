@@ -9,12 +9,15 @@ what changed at the top of `spec/README.md`.
 
 ## Building
 
-- Rust 1.89 or newer; `rust-toolchain.toml` picks stable with `rustfmt` and `clippy`.
+- Rust 1.89 or newer (the MSRV); `rust-toolchain.toml` pins the toolchain CI uses (1.99.1, with
+  `rustfmt` and `clippy`). Bumping it is a pull request that changes that file and the
+  workflows' `toolchain:` lines together.
 - Edition 2024, resolver 3. Every crate inherits the workspace's lints: `unsafe_code = "forbid"`,
   and `clippy::all` plus `clippy::pedantic` as warnings, which CI turns into errors. Silence a
   pedantic lint only locally, with `#[allow(…, reason = "…")]`.
 - The crates have no dependencies outside the workspace. Adding one needs a reason in the pull
   request.
+- Every crate is `publish = false` until crates.io publishing is set up.
 
 ## Checks
 
@@ -27,7 +30,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and on `main`:
 | `msrv` | `cargo +1.89 check --workspace --all-targets --locked` |
 | `docs` | markdownlint over every Markdown file (`.markdownlint-cli2.jsonc`), and `scripts/ci/check-links.py` for relative links and heading anchors |
 | `license` | `scripts/ci/check-license.py`: `LICENSE` is MIT and every crate declares MIT |
-| `workflows` | actionlint |
+| `workflows` | actionlint (the image pinned by digest) |
 
 Run `bash scripts/check-rust.sh` before pushing; the Python checks need Python 3.11 or newer.
 
@@ -41,5 +44,14 @@ chapters and headings it tests; the `spec` test fails otherwise. Files are byte-
 ## Releases
 
 Releases are tags `vX.Y.Z` on `main`, made only from a commit whose CI is green, with the
-workspace version bumped to match. Imperium depends on a tag; chapter 10 ("How Imperium pins
-Ratio") describes how a release that changes the `Host` API or the IR reaches it.
+workspace version bumped to match. `.github/workflows/release.yml` runs on every pushed `v*` tag
+and creates the GitHub release only if the tagged commit is on `main`, its CI run on `main`
+succeeded, and the workspace version equals the tag.
+
+The maintainer protects tags with a repository ruleset (Settings, Rules, Rulesets): target
+`v*` tags, restrict creation to the maintainer, and block updates and deletions. It is a
+repository setting, not code, so it is set up by hand once.
+
+The first release, `v0.1.0`, is tagged after the workspace lands on `main`. Imperium depends on a
+tag; chapter 10 ("How Imperium pins Ratio") describes how a release that changes the `Host` API,
+the IR or the tape format reaches it, and how local development patches the dependency.

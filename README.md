@@ -37,9 +37,10 @@ belong to which repository).
 | [`spec/`](spec/README.md) | The specification; start at [spec/README.md](spec/README.md) |
 | [`crates/ratio/`](crates/ratio/README.md) | Package `ratio-lang`, library `ratio`: the public facade, the only crate a host depends on |
 | [`crates/ratio-syntax/`](crates/ratio-syntax/README.md) | Package and library `ratio-syntax`: the token reader (stage 1), and the parser from stage 2 |
+| `std/` | The built-in packages' sources (`std:default` and the rest), embedded by the `ratio` library; it arrives with stage 23 |
 | `conformance/` | The conformance corpus, by chapter (`syntax/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
 | `scripts/` | The checks CI runs: `check-rust.sh`, and `ci/check-links.py` and `ci/check-license.py` |
-| `.github/workflows/ci.yml` | CI |
+| `.github/workflows/` | `ci.yml` (every pull request and `main`) and `release.yml` (every `v*` tag) |
 
 The facade's package is `ratio-lang` because a bare `ratio` may be taken on crates.io; code still
 reads `ratio::lex`. Later stages add crates behind the facade (a checker, the IR and interpreter,
@@ -48,7 +49,7 @@ the standard library); they are implementation details, and only `ratio` is publ
 ## Building and testing
 
 You need Rust 1.89 or newer (the minimum supported version, which matches Imperium's);
-`rust-toolchain.toml` selects the stable toolchain with `rustfmt` and `clippy`. The crates have no
+`rust-toolchain.toml` pins the toolchain CI uses (1.99.1, with `rustfmt` and `clippy`). The crates have no
 dependencies outside this repository.
 
 ```sh
@@ -63,7 +64,9 @@ workflow files; [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks and the conv
 
 ## Using Ratio from a host
 
-Depend on a release tag (none is tagged yet; the first will be `v0.1.0`):
+Depend on a release tag. None exists yet: the first, `v0.1.0`, is tagged after the workspace
+lands on `main`. The crates are not on crates.io (`publish = false`); publishing, and reserving
+the names, is deferred until the user's account is set up for it.
 
 ```toml
 [dependencies]
@@ -75,8 +78,17 @@ let lexed = ratio::lex("let x = 1");
 assert!(lexed.is_clean());
 ```
 
+For local development against a Ratio checkout, add a patch to Imperium's workspace in a local
+commit that is never merged (Imperium's CI fails on it):
+
+```toml
+[patch."https://github.com/Densetsu152637/Ratio"]
+ratio-lang = { path = "../Ratio/crates/ratio" }
+```
+
 Releases follow semantic versioning; chapter 10 defines the `Host` boundary and the
-`HOST_API_VERSION` and `IR_VERSION` constants that accompany it once they exist.
+`HOST_API_VERSION`, `IR_VERSION` and `TAPE_VERSION` constants that accompany it once they
+exist.
 
 ## Licence
 

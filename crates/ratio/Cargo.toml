@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Ratio, the programming language for agent harnesses: the public facade over its crates"
 
 [lib]

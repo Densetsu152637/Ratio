@@ -8,8 +8,11 @@ with its own Cargo workspace, CI and releases, and Imperium becomes a host that 
 release tag (R15 revised). Chapter 10 assigns each of the 28 stages to a repository (stages 1 to
 12 here, the engine host, daemon, gates, clients and headless evaluation in Imperium, four stages
 in both), defines the boundary (the `Host` trait as the public API of the `ratio` library,
-semantic versioning with `HOST_API_VERSION` and `IR_VERSION`, pinning by tag, where cross-repository
-tests live) and says which side owns each security requirement; chapter 08 gains the same split
+semantic versioning with `HOST_API_VERSION`, `IR_VERSION` and `TAPE_VERSION`, pinning by tag,
+releases, where cross-repository tests live) and says which side owns each security requirement:
+the engine independently verifies every frame's attenuation at `open_frame`, label propagation is
+named as Ratio's residual risk, and every `tools.install_extension` call is an agent-origin
+install that asks per install in every mode (chapter 06); chapter 08 gains the same split
 for its subjects. The specification is no longer pinned by revision; the conformance corpus names
 the chapters it tests instead. No language change.
 
@@ -78,6 +81,7 @@ This specification is the `spec/` folder of the Ratio repository, next to the im
 | `spec/` | This specification |
 | `crates/ratio/` | The `ratio` library (package `ratio-lang`), the public facade hosts depend on |
 | `crates/ratio-syntax/` | The token reader (stage 1); the parser from stage 2 |
+| `std/` | The built-in packages' sources, embedded by the library (from stage 23) |
 | `conformance/` | The conformance corpus by chapter, `spec-map.txt` (which chapters each directory tests) and `builtins.txt` |
 | `scripts/` | The checks CI runs |
 

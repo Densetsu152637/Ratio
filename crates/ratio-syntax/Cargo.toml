@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Ratio's syntax: the token reader (stage 1), and the parser from stage 2"
 
 [dependencies]
