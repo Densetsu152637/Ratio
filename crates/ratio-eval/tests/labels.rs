@@ -251,6 +251,7 @@ fn drive(
     loop {
         match m.run() {
             Suspend::Yield => {}
+            Suspend::Wait(w) => w.wait(),
             Suspend::Effect(req) => {
                 // Every argument crossing to the host passes the sink check (debug builds
                 // assert the summaries agree with a full scan).

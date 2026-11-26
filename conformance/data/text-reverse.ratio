@@ -1,0 +1,10 @@
+// arg: "abé"
+// expect: value ["éba", ""]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.reverse(s)),
+    text.show(text.reverse("")),
+  ]
+}

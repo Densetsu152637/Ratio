@@ -1,0 +1,10 @@
+// arg: "hé"
+// expect: value ["[\"h\",\"é\"]", "[]"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.chars(s)),
+    text.show(text.chars("")),
+  ]
+}

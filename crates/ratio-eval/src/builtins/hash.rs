@@ -26,7 +26,7 @@
 use std::fmt::Write as _;
 
 use super::blake3;
-use super::data3::{TextBuf, charged, raise_invalid, text_value, too_long};
+use super::data3::{TextBuf, charged, raise_invalid, text_value};
 use super::{Args, Resume, Task, TaskStep, arg, int, opt, text, weight};
 use crate::error::{Kind, RtError, raise};
 use crate::heap::Charge;
@@ -102,6 +102,10 @@ fn quote(cx: &mut Cx<'_>, out: &mut TextBuf, s: &str) -> Result<(), RtError> {
 /// does not depend on how the standard library formats a `Debug` float: `1.0`, `0.001`,
 /// `1e21`, `1.5e-7`. Positional notation for exponents `-5..16`, scientific otherwise.
 pub(super) fn float_text(f: f64) -> String {
+    // `-0.0` is `0.0`: equal values hash alike.
+    if f == 0.0 {
+        return "0.0".to_owned();
+    }
     let sci = format!("{f:e}");
     let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
     let exp: i32 = exp.parse().unwrap_or(0);
@@ -169,7 +173,10 @@ fn entries_charge(cx: &Cx<'_>, count: u64, key_weight: u64) -> Result<Charge, Rt
 /// order), holding the memory charge made for them.
 fn entries(mut list: Vec<(String, Value)>, charge: Charge) -> Frame {
     work::add((list.len() as u64).saturating_mul(crate::ops::log_work(list.len() as u64).max(1)));
-    list.sort_by(|a, b| a.0.cmp(&b.0));
+    list.sort_by(|a, b| {
+        work::add(a.0.len().min(b.0.len()) as u64);
+        a.0.cmp(&b.0)
+    });
     Frame::Entries {
         it: list.into_iter(),
         first: true,
@@ -410,23 +417,20 @@ struct Stable {
     since_check: u64,
     /// `short`: the number of hex digits wanted, and the labels of the count.
     short: Option<(usize, Labels)>,
-    /// Whether the steps for a refused text were debited (the refusal comes next).
-    refusal_paid: bool,
 }
 
 impl Task for Stable {
     fn resume(&mut self, cx: &mut Cx<'_>, _input: Resume) -> Result<TaskStep, RtError> {
-        // A canonical text over 16 MiB is refused, but first paid for as written.
-        if self.refusal_paid {
-            return Err(too_long(cx, self.canon.labels));
-        }
         match self.run(cx) {
-            Err(_) if self.canon.out.refused().is_some() => {
-                self.refusal_paid = true;
-                let written = self.canon.out.refused().unwrap_or(0) as u64;
-                Ok(TaskStep::Charge(written.div_ceil(64)))
+            // A walk that fails pays for what it did, past the class's charge.
+            Err(e) => {
+                cx.debit = self
+                    .work
+                    .saturating_sub(self.n_pre.saturating_add(self.extra))
+                    .div_ceil(64);
+                Err(e)
             }
-            other => other,
+            ok => ok,
         }
     }
 }
@@ -485,7 +489,6 @@ pub(super) fn stable(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtEr
         extra: 0,
         since_check: 0,
         short: None,
-        refusal_paid: false,
     }))
 }
 
@@ -505,7 +508,6 @@ pub(super) fn short(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtErr
         extra: 0,
         since_check: 0,
         short: Some((take, n.map_or(Labels::NONE, |n| n.labels))),
-        refusal_paid: false,
     }))
 }
 

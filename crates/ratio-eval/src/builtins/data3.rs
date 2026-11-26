@@ -94,8 +94,6 @@ pub(super) struct TextBuf {
     charge: Charge,
     charged: u64,
     labels: Labels,
-    /// The bytes written when a push was refused for passing 16 MiB.
-    refused: Option<usize>,
 }
 
 impl TextBuf {
@@ -106,18 +104,11 @@ impl TextBuf {
             charge: Charge::none(),
             charged: 0,
             labels,
-            refused: None,
         }
     }
 
     pub(super) fn len(&self) -> usize {
         self.s.len()
-    }
-
-    /// The bytes written when a push was refused as too long, if one was: what a task pays
-    /// for before it fails (a built-in's `Cx::debit` does that for itself).
-    pub(super) fn refused(&self) -> Option<usize> {
-        self.refused
     }
 
     /// Makes room for `more` bytes: refuses a text over 16 MiB (paying for what was written)
@@ -130,7 +121,6 @@ impl TextBuf {
             .filter(|t| *t <= MAX_STR_BYTES);
         let Some(total) = total else {
             cx.debit = cx.debit.max((self.s.len() as u64).div_ceil(64));
-            self.refused = Some(self.s.len());
             return Err(too_long(cx, self.labels));
         };
         let total = total as u64;
@@ -174,6 +164,17 @@ impl TextBuf {
 /// Text built in one go (its size is known): charged to the heap before it is made.
 pub(super) fn text_value(cx: &Cx<'_>, s: String, labels: Labels) -> Result<Value, RtError> {
     super::new_text(cx, s, labels)
+}
+
+/// `Cancelled`, for a long built-in that finds the flag set.
+pub(super) fn cancelled(cx: &Cx<'_>) -> RtError {
+    raise(
+        cx.p,
+        Kind::Cancelled,
+        "the evaluation was cancelled",
+        Labels::NONE,
+        cx.loc,
+    )
 }
 
 /// The refusal of a text over 16 MiB.

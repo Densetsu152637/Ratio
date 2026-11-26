@@ -42,7 +42,7 @@
 
 use std::collections::HashSet;
 
-use super::data3::{TextBuf, charged, raise_invalid, too_long};
+use super::data3::{TextBuf, charged, raise_invalid};
 use super::{Args, Resume, Sizes, Task, TaskStep, arg, new_list, new_text, sz, text, weight};
 use crate::error::{Kind, RtError, raise};
 use crate::heap::{Charge, cost};
@@ -255,8 +255,6 @@ struct Render {
     since_check: u64,
     /// Units the walk has paid for beyond the class's charge.
     extra: u64,
-    /// Whether the steps for a refused text were debited (the refusal comes next).
-    refusal_paid: bool,
 }
 
 /// The value one step into `v` under `key`: a record's field or a map's `Str` key, with the
@@ -279,7 +277,11 @@ fn child(v: &Value, key: &str, acc: &mut Labels) -> Option<Value> {
                 None
             }
         }
-        _ => None,
+        _ => {
+            // Looking into a scalar or `none` found nothing, and that depends on the value.
+            *acc |= v.labels;
+            None
+        }
     }
 }
 
@@ -341,26 +343,22 @@ impl Render {
 
 impl Task for Render {
     fn resume(&mut self, cx: &mut Cx<'_>, _input: Resume) -> Result<TaskStep, RtError> {
-        // A text over 16 MiB is refused, but first paid for as written.
-        if self.refusal_paid {
-            return Err(too_long(cx, self.out_labels()));
-        }
         match self.run(cx) {
-            Err(_) if self.out.refused().is_some() => {
-                self.refusal_paid = true;
-                let written = self.out.refused().unwrap_or(0) as u64;
-                Ok(TaskStep::Charge(written.div_ceil(64)))
+            // A walk that fails pays for what it did, past the class's charge: the characters
+            // written and the work, less what was covered before running.
+            Err(e) => {
+                let done = self.work.saturating_add(self.out.len() as u64);
+                cx.debit = done
+                    .saturating_sub(self.n_pre.saturating_add(self.extra))
+                    .div_ceil(64);
+                Err(e)
             }
-            other => other,
+            ok => ok,
         }
     }
 }
 
 impl Render {
-    fn out_labels(&self) -> Labels {
-        self.acc | self.tpl.labels
-    }
-
     fn run(&mut self, cx: &mut Cx<'_>) -> Result<TaskStep, RtError> {
         if self.parsed.is_none() {
             let tpl = self.tpl.clone();
@@ -554,6 +552,5 @@ pub(super) fn render(cx: &mut Cx<'_>, args: &Args) -> Result<Box<dyn Task>, RtEr
         work: 0,
         since_check: 0,
         extra: 0,
-        refusal_paid: false,
     }))
 }

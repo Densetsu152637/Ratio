@@ -130,6 +130,12 @@ fn normalized<'a>(parts: &Parts<'a>) -> Vec<&'a str> {
     out
 }
 
+/// Whether a component reads as a drive: a letter and a colon.
+fn drive_like(c: &str) -> bool {
+    let b = c.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
 fn stem_ext(name: &str) -> (&str, Option<&str>) {
     match name.rfind('.') {
         Some(i) if i > 0 && i + 1 < name.len() && !name.bytes().all(|b| b == b'.') => {
@@ -227,7 +233,12 @@ pub(super) fn normalize(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
     let p = arg(cx, args, 0)?;
     let (parts, _charge) = split(cx, text(cx, p)?)?;
     let comps = normalized(&parts);
-    let out = if comps.is_empty() && !parts.rooted {
+    // A relative path whose first component reads as a drive (`C:`) would become a drive path
+    // once the parts before it were resolved away: it keeps a `./` in front.
+    let drive_first = parts.root.is_empty() && comps.first().is_some_and(|c| drive_like(c));
+    let out = if drive_first {
+        format!("./{}", render("", &comps))
+    } else if comps.is_empty() && !parts.rooted {
         // Nothing left of a relative path: the current directory (of the drive, if any).
         format!("{}.", parts.root)
     } else {
@@ -270,7 +281,9 @@ pub(super) fn relative_to(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError
         return Ok(none());
     }
     let rest = &pc[bc.len()..];
-    if rest.first() == Some(&"..") {
+    if rest.first() == Some(&"..")
+        || (pp.root.is_empty() && rest.first().is_some_and(|c| drive_like(c)))
+    {
         // Only a relative `p` that climbs out of its start has `..` left: not under `base`.
         return Ok(none());
     }

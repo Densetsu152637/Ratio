@@ -321,17 +321,3 @@ fn the_conformance_files_pass() {
         );
     }
 }
-
-#[test]
-fn the_builtins_drift_check_is_still_a_stub() {
-    // Chapter 10 generates `builtins.txt` from chapter 06 of the specification and fails CI when the
-    // checked-in file differs. No stage before 7 has built-ins, so the file holds comments only;
-    // when the generator lands, this test becomes the drift check.
-    let text =
-        fs::read_to_string(support::conformance_root().join("builtins.txt")).expect("builtins.txt");
-    assert!(
-        text.lines()
-            .all(|line| line.trim().is_empty() || line.starts_with('#')),
-        "builtins.txt has entries but no generator checks them yet"
-    );
-}

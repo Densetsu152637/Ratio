@@ -29,7 +29,7 @@
     reason = "chunks of a decoded slice, whose last chunk may be short"
 )]
 
-use super::data3::{TextBuf, charged, raise_invalid, text_of, text_value};
+use super::data3::{TextBuf, cancelled, charged, raise_invalid, text_of, text_value};
 use super::{Args, arg, list, new_list, new_text, opt, text};
 use crate::error::RtError;
 use crate::heap::{Charge, cost};
@@ -332,6 +332,8 @@ pub(super) fn csv_parse(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
     let mut rows: Vec<Value> = Vec::new();
     let mut rows_charge = Charge::none();
     let mut keys_charge = Charge::none();
+    let mut order: Vec<usize> = Vec::new();
+    let mut held: Vec<Charge> = Vec::new();
     while !r.at_end() {
         let start_line = r.line;
         let mut fields: Vec<Value> = Vec::new();
@@ -348,6 +350,7 @@ pub(super) fn csv_parse(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
         }
         match &keys {
             None if header => {
+                let _seen_charge = charged(cx, 16 * fields.len() as u64)?;
                 let mut seen: Vec<&str> = fields.iter().filter_map(Value::as_text).collect();
                 seen.sort_unstable();
                 if seen.windows(2).any(|w| w[0] == w[1]) {
@@ -386,12 +389,28 @@ pub(super) fn csv_parse(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
                 labels,
             ));
         }
-        let mut m = Map::empty();
-        for (k, v) in ks.iter().zip(fields) {
-            m = m
-                .insert(cx.heap, k.clone(), v)
-                .map_err(|f| cx.fault(f, labels))?;
+        if cx.cancel.is_cancelled() {
+            return Err(cancelled(cx));
         }
+        if order.len() != ks.len() {
+            // The header sorted once: every row is built from this order with no comparing.
+            held.push(charged(
+                cx,
+                16 * ks.len() as u64 + 2 * cost::SLOT * ks.len() as u64,
+            )?);
+            order = (0..ks.len()).collect();
+            let name = |i: usize| ks[i].as_text().unwrap_or("");
+            order.sort_by(|a, b| {
+                work::add(name(*a).len().min(name(*b).len()) as u64 + 1);
+                name(*a).cmp(name(*b))
+            });
+        }
+        work::add(ks.len() as u64);
+        let entries: Vec<(Value, Value)> = order
+            .iter()
+            .map(|i| (ks[*i].clone(), fields[*i].clone()))
+            .collect();
+        let m = Map::from_sorted(cx.heap, &entries).map_err(|f| cx.fault(f, labels))?;
         rows_charge
             .grow(cx.heap, cost::SLOT)
             .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;
@@ -458,6 +477,7 @@ pub(super) fn csv_write(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
         for (i, k) in header.iter().enumerate() {
             let mut found: Option<Value> = None;
             while let Some((rk, rv)) = pending.take() {
+                work::add(rk.weight().min(k.weight()));
                 match cmp_natural(&rk, k) {
                     std::cmp::Ordering::Less => pending = cells.next(),
                     std::cmp::Ordering::Equal => {

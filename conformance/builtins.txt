@@ -1,3 +1,485 @@
-# Stub. Chapter 10 generates this file from the built-ins of chapter 06 (spec/06-stdlib/) and CI
-# fails when the checked-in copy drifts. Nothing consumes built-ins before stage 7, so the
-# generator and the drift check land with it; until then this file stays empty of entries.
+# Every built-in of chapter 06 (spec/06-stdlib/), generated from its tables by
+# crates/ratio/tests/spec.rs; CI fails when this file differs. Do not edit it: change the
+# chapter, then regenerate with
+#   RATIO_BLESS=1 cargo test -p ratio-lang --test spec builtins
+#
+# name<TAB>signature<TAB>needs<TAB>cost class (pure `data` built-ins; `-` otherwise)
+agents.spawn	(brief: Untrusted<Str>, package: Str? = none, agent: Str? = none, model: ModelRef? = none, tier: Tier? = none, location: Location? = none, tags: [Str] = [], effort: Effort? = none, access: Access = read, knowledge: Str? = none, title: Str? = none, single_call: Bool = false, budget: Budget? = none) -> Task<Report>	delegate, tool:spawn_agent	-
+agents.await	(tasks: [Task<Report>], timeout: Duration? = none) -> [TaskReport]	delegate, tool:await_tasks	-
+agents.join	(task: Task<Report>, timeout: Duration? = none) -> TaskReport	delegate, tool:await_tasks	-
+agents.delegate	(brief: Untrusted<Str>, package: Str? = none, opts: SpawnOpts = {}) -> TaskReport	delegate, tool:spawn_agent	-
+agents.map	(briefs: [Untrusted<Str>], package: Str? = none, limit: Int = 4, opts: SpawnOpts = {}) -> [TaskReport]	delegate, tool:spawn_agent	-
+agents.delegate_chunks	(artefact: Artefact, chunk_tokens: Int, brief: Untrusted<Str>, reduce: Untrusted<Str>? = none) -> [Task<Report>]	delegate, tool:delegate_chunks	-
+agents.steer	(task: Task<Report>, text: Untrusted<Str>) -> ()	delegate, tool:steer_agent	-
+agents.queue	(task: Task<Report>, text: Untrusted<Str>) -> ()	delegate, tool:queue_agent	-
+agents.resume	(task: Task<Report>, text: Untrusted<Str>) -> Task<Report>	delegate, tool:resume_agent	-
+agents.cancel	(task: Task<Report>) -> ()	delegate, tool:resume_agent	-
+agents.status	(task: Task<Report>) -> AgentSummary	sees:agents	-
+agents.worktree	(task: Task<Report>) -> WorktreeInfo?	engine	-
+agents.merge	(task: Task<Report>) -> MergeResult	tool:*agent_merge*	-
+agents.list	() -> [AgentSummary]	sees:agents	-
+agents.current	() -> AgentInfo	engine	-
+agents.named	() -> [AgentFileInfo]	engine	-
+agents.ask	(agent: Str, question: Untrusted<Str>, timeout: Duration = 300s) -> Untrusted<Str>	delegate, tool:ask_agent	-
+agents.knowledge	(query: Str? = none) -> [KnowledgeCard]	tool:list_knowledge_agents	-
+agents.keep_as_knowledge	(task: Task<Report>, topic: Str) -> KnowledgeCard	delegate, tool:keep_as_knowledge	-
+agents.retire_knowledge	(task: Task<Report>) -> ()	delegate, tool:keep_as_knowledge	-
+context.current	() -> Conversation	engine	-
+context.main	() -> Conversation	engine	-
+context.new	(system: TrustedPrompt? = none) -> Conversation	engine	-
+context.fork	(conv: Conversation) -> Conversation	engine	-
+context.fork_at	(conv: Conversation, mark: Mark) -> Conversation	engine	-
+context.rollback	(conv: Conversation, mark: Mark) -> Int	entry for the main conversation, else engine	-
+context.append_user	(conv: Conversation, content: Prompt) -> ()	engine	-
+context.append_turn	(conv: Conversation, turn: Turn) -> ()	entry	-
+context.append_task	(conv: Conversation, task: TaskInput) -> ()	entry	-
+context.append_assistant	(conv: Conversation, text: Untrusted<Str>) -> ()	engine	-
+context.notice	(conv: Conversation, text: Str, data: Untrusted<Str>? = none) -> ()	engine	-
+context.load	(reference: Str) -> Untrusted<Str>	tool:context_load	-
+context.messages	(conv: Conversation) -> Transcript	engine	-
+context.last	(conv: Conversation, n: Int) -> Transcript	engine	-
+context.excerpt	(conv: Conversation, from: Mark? = none, last_turns: Int? = none, roles: [Role] = [user, assistant, tool]) -> Transcript	engine	-
+context.mark	(conv: Conversation) -> Mark	engine	-
+context.snapshot	(conv: Conversation) -> Transcript	engine	-
+context.system	(conv: Conversation) -> Prompt	engine	-
+context.system_default	(role: AgentRole = root) -> TrustedPrompt	sees:system_default	-
+context.safe_point	(conv: Conversation) -> SafePoint	engine	-
+context.pending	(conv: Conversation) -> [Pending]	engine	-
+context.compact	(conv: Conversation, keep_turns: Int = 2, focus: Str? = none) -> Compaction	model ×1..6	-
+context.clear_stale	(conv: Conversation, older_than_turns: Int = 2) -> Int	engine	-
+context.pin	(conv: Conversation, from: Mark, to: Mark? = none, reason: Str) -> Pin	engine	-
+context.unpin	(pin: Pin) -> ()	engine	-
+context.pins	(conv: Conversation) -> [PinInfo]	engine	-
+context.labelled	(conv: Conversation) -> Bool	engine	-
+context.tokens	(conv: Conversation) -> TokenCount	engine	-
+context.window	(conv: Conversation? = none) -> Int?	engine	-
+context.remaining	(conv: Conversation) -> Int?	engine	-
+context.fits	(conv: Conversation, extra: Prompt? = none) -> Bool	engine	-
+context.breakdown	(conv: Conversation) -> Breakdown?	engine	-
+context.store	(text: Untrusted<Str>, name: Str? = none) -> Artefact	engine	-
+context.read_artefact	(a: Artefact, offset: Int = 0, limit: Int = 32000) -> Untrusted<Str>	engine	-
+context.chunks	(a: Artefact, chunk_tokens: Int) -> [Untrusted<Str>]	engine	-
+retry	<T>(f: fn() -> T, attempts: Int = 3, backoff: Backoff = Backoff.exponential(1s, 2.0, 30s), on: [ErrorKind] = [ModelFailed, RateLimited, Timeout]) -> T	as f, plus effect	-
+timeout	<T>(d: Duration, f: fn() -> T) -> T	as f	-
+race	<T>(fs: [fn() -> T]) -> T	as fs	-
+fallback	<T>(fs: [fn() -> T], on: [ErrorKind] = [ModelFailed, RateLimited, Timeout, SchemaMismatch, Unsupported]) -> T	as fs	-
+par	<T>(fs: [fn() -> T], limit: Int? = none) -> [T]	as fs	-
+par_map	<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [U]	as f	-
+par_map_settled	<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [Result<U>]	as f	-
+par_fold	<T, U, A>(xs: [T], f: fn(T) -> U, init: A, step: fn(A, Int, Result<U>) -> Fold<A>, limit: Int = 4, order: FoldOrder = index) -> Folded<A>	as f and step	-
+rate_limit	(key: Str, n: Int, per: Duration) -> ()	effect	-
+cached	<T>(key: Str, f: fn() -> T, scope: CacheScope = turn, ttl: Duration? = none) -> T	as f; effect	-
+memo	<A, R>(f: fn(A) -> R) -> fn(A) -> R	pure	-
+once	<T>(key: Str, f: fn() -> T) -> T	as f	-
+assert	(cond: Bool, message: Str = "assertion failed") -> ()	pure	-
+assert_eq	<T>(a: T, b: T, message: Str? = none) -> ()	pure	-
+ensure	<T>(v: T?, message: Str) -> T	pure	-
+fail	(tag: Str, message: Untrusted<Str>, data: Json = null) -> Error	pure	-
+question	(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error	pure	-
+result	<T>(f: fn() -> T) -> Result<T>	as f	-
+trust	<T>(x: Untrusted<T>, because: Str) -> T	effect	-
+as_task	(x: Untrusted<Str>, because: Str) -> Brief	effect	-
+declassify	<T>(x: Secret<T>, because: Str) -> T	user	-
+cancelled	() -> Bool	engine	-
+budget_left	() -> Budget	engine	-
+spent	() -> Spent	engine	-
+log.debug	<T>(message: Untrusted<Str>, data: T? = none) -> ()	effect	-
+log.info	<T>(message: Untrusted<Str>, data: T? = none) -> ()	effect	-
+log.warn	<T>(message: Untrusted<Str>, data: T? = none) -> ()	effect	-
+log.error	<T>(message: Untrusted<Str>, data: T? = none) -> ()	effect	-
+trace.span	<T>(name: Str, f: fn() -> T) -> T	effect	-
+trace.event	<T>(name: Str, data: T) -> ()	effect	-
+text.len	(s: S) -> Int	pure	const
+text.is_empty	(s: S) -> Bool	pure	const
+text.lower	(s: S) -> S	pure	linear
+text.upper	(s: S) -> S	pure	linear
+text.trim	(s: S) -> S	pure	linear
+text.trim_start	(s: S) -> S	pure	linear
+text.trim_end	(s: S) -> S	pure	linear
+text.contains	(s: S, part: S) -> Bool	pure	linear
+text.starts_with	(s: S, prefix: S) -> Bool	pure	linear
+text.ends_with	(s: S, suffix: S) -> Bool	pure	linear
+text.find	(s: S, part: S, from: Int = 0) -> Int?	pure	linear
+text.rfind	(s: S, part: S) -> Int?	pure	linear
+text.count	(s: S, part: S) -> Int	pure	linear
+text.slice	(s: S, start: Int, end: Int? = none) -> S	pure	linear
+text.truncate	(s: S, max: Int, marker: Str = "…") -> S	pure	linear
+text.split	(s: S, sep: S, limit: Int? = none) -> [S]	pure	linear
+text.split_once	(s: S, sep: S) -> (S, S)?	pure	linear
+text.lines	(s: S) -> [S]	pure	linear
+text.words	(s: S) -> [S]	pure	linear
+text.chars	(s: S) -> [S]	pure	linear
+text.join	(parts: [S], sep: S = "") -> S	pure	linear
+text.replace	(s: S, from: S, to: S) -> S	pure	linear
+text.replace_first	(s: S, from: S, to: S) -> S	pure	linear
+text.repeat	(s: S, n: Int) -> S	pure	output
+text.reverse	(s: S) -> S	pure	linear
+text.pad_start	(s: S, width: Int, fill: Str = " ") -> S	pure	output
+text.pad_end	(s: S, width: Int, fill: Str = " ") -> S	pure	output
+text.before	(s: S, sep: S) -> S	pure	linear
+text.after	(s: S, sep: S) -> S	pure	linear
+text.before_last	(s: S, sep: S) -> S	pure	linear
+text.after_last	(s: S, sep: S) -> S	pure	linear
+text.strip_prefix	(s: S, prefix: S) -> S?	pure	linear
+text.strip_suffix	(s: S, suffix: S) -> S?	pure	linear
+text.trim_end_matches	(s: S, suffix: S) -> S	pure	linear
+text.dedent	(s: S) -> S	pure	linear
+text.indent	(s: S, prefix: Str = "  ") -> S	pure	linear
+text.wrap	(s: S, width: Int = 80) -> S	pure	linear
+text.number_lines	(s: S, start: Int = 1) -> S	pure	linear
+text.show	<T>(v: T) -> S	pure	linear
+text.parse_int	(s: S) -> Int?	pure	linear
+text.parse_float	(s: S) -> Float?	pure	linear
+text.similarity	(a: S, b: S) -> Float	pure	product
+text.extract_json	(s: S) -> Json?	pure	linear
+text.code_blocks	(s: S, lang: Str? = none) -> [CodeBlock<S>]	pure	linear
+text.quote	(s: S, label: Str = "data") -> Untrusted<Str>	pure	linear
+re.is_match	(pattern: Str, s: S) -> Bool	pure	product
+re.find	(pattern: Str, s: S) -> Match<S>?	pure	product
+re.find_all	(pattern: Str, s: S, limit: Int = 1000) -> [Match<S>]	pure	product
+re.captures	(pattern: Str, s: S) -> Captures<S>?	pure	product
+re.captures_all	(pattern: Str, s: S, limit: Int = 1000) -> [Captures<S>]	pure	product
+re.replace	(pattern: Str, s: S, with: S) -> S	pure	product
+re.replace_all	(pattern: Str, s: S, with: S) -> S	pure	product
+re.split	(pattern: Str, s: S) -> [S]	pure	product
+re.escape	(s: Str) -> Str	pure	linear
+json.parse	(s: S) -> Json	pure	linear
+json.stringify	<T>(v: T, pretty: Bool = false) -> S	pure	linear
+json.decode	<T>(j: Json) -> Untrusted<T>	pure	linear
+json.encode	<T>(v: T) -> Json	pure	linear
+json.schema	<T>() -> Json	pure	linear
+json.validate	(j: Json, schema: Json) -> [Violation]	pure	linear
+json.get	(j: Json, pointer: Str) -> Json?	pure	linear
+json.set	(j: Json, pointer: Str, v: Json) -> Json	pure	linear
+json.keys	(j: Json) -> [Untrusted<Str>]	pure	linear
+json.type_of	(j: Json) -> JsonType	pure	const
+json.merge	(a: Json, b: Json) -> Json	pure	linear
+json.patch	(j: Json, ops: Json) -> Json	pure	linear
+json.diff	(a: Json, b: Json) -> Json	pure	product
+json.equal	(a: Json, b: Json) -> Bool	pure	linear
+list.len	<T>(xs: [T]) -> Int	pure	const
+list.is_empty	<T>(xs: [T]) -> Bool	pure	const
+list.get	<T>(xs: [T], i: Int) -> T?	pure	log
+list.first	<T>(xs: [T]) -> T?	pure	const
+list.last	<T>(xs: [T]) -> T?	pure	const
+list.push	<T>(xs: [T], x: T) -> [T]	pure	log
+list.insert	<T>(xs: [T], i: Int, x: T) -> [T]	pure	log
+list.remove_at	<T>(xs: [T], i: Int) -> [T]	pure	log
+list.concat	<T>(xs: [T], ys: [T]) -> [T]	pure	log
+list.flatten	<T>(xss: [[T]]) -> [T]	pure	linear
+list.range	(start: Int, end: Int, step: Int = 1) -> [Int]	pure	output
+list.repeat	<T>(x: T, n: Int) -> [T]	pure	output
+list.map	<T, U>(xs: [T], f: fn(T) -> U) -> [U]	pure	linear
+list.map_indexed	<T, U>(xs: [T], f: fn(Int, T) -> U) -> [U]	pure	linear
+list.filter	<T>(xs: [T], f: fn(T) -> Bool) -> [T]	pure	linear
+list.filter_map	<T, U>(xs: [T], f: fn(T) -> U?) -> [U]	pure	linear
+list.flat_map	<T, U>(xs: [T], f: fn(T) -> [U]) -> [U]	pure	linear
+list.fold	<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A	pure	linear
+list.reduce	<T>(xs: [T], f: fn(T, T) -> T) -> T?	pure	linear
+list.find	<T>(xs: [T], f: fn(T) -> Bool) -> T?	pure	linear
+list.find_index	<T>(xs: [T], f: fn(T) -> Bool) -> Int?	pure	linear
+list.index_of	<T>(xs: [T], x: T) -> Int?	pure	linear
+list.contains	<T>(xs: [T], x: T) -> Bool	pure	linear
+list.any	<T>(xs: [T], f: fn(T) -> Bool) -> Bool	pure	linear
+list.all	<T>(xs: [T], f: fn(T) -> Bool) -> Bool	pure	linear
+list.count	<T>(xs: [T], f: fn(T) -> Bool) -> Int	pure	linear
+list.sum	(xs: [Num]) -> Num	pure	linear
+list.min	<T>(xs: [T]) -> T?	pure	linear
+list.max	<T>(xs: [T]) -> T?	pure	linear
+list.min_by	<T, K>(xs: [T], key: fn(T) -> K) -> T?	pure	linear
+list.max_by	<T, K>(xs: [T], key: fn(T) -> K) -> T?	pure	linear
+list.sort	<T>(xs: [T]) -> [T]	pure	nlogn
+list.sort_by	<T, K>(xs: [T], key: fn(T) -> K, descending: Bool = false) -> [T]	pure	nlogn
+list.reverse	<T>(xs: [T]) -> [T]	pure	linear
+list.unique	<T>(xs: [T]) -> [T]	pure	nlogn
+list.unique_by	<T, K>(xs: [T], key: fn(T) -> K) -> [T]	pure	nlogn
+list.group_by	<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, [T]>	pure	nlogn
+list.partition	<T>(xs: [T], f: fn(T) -> Bool) -> ([T], [T])	pure	linear
+list.chunk	<T>(xs: [T], size: Int) -> [[T]]	pure	linear
+list.window	<T>(xs: [T], size: Int) -> [[T]]	pure	linear
+list.zip	<A, B>(xs: [A], ys: [B]) -> [(A, B)]	pure	linear
+list.unzip	<A, B>(ps: [(A, B)]) -> ([A], [B])	pure	linear
+list.enumerate	<T>(xs: [T]) -> [(Int, T)]	pure	linear
+list.take	<T>(xs: [T], n: Int) -> [T]	pure	log
+list.drop	<T>(xs: [T], n: Int) -> [T]	pure	log
+list.take_while	<T>(xs: [T], f: fn(T) -> Bool) -> [T]	pure	linear
+list.slice	<T>(xs: [T], start: Int, end: Int? = none) -> [T]	pure	log
+map.from	<K, V>(pairs: [(K, V)]) -> Map<K, V>	pure	nlogn
+map.len	<K, V>(m: Map<K, V>) -> Int	pure	const
+map.is_empty	<K, V>(m: Map<K, V>) -> Bool	pure	const
+map.get	<K, V>(m: Map<K, V>, k: K) -> V?	pure	log
+map.has	<K, V>(m: Map<K, V>, k: K) -> Bool	pure	log
+map.set	<K, V>(m: Map<K, V>, k: K, v: V) -> Map<K, V>	pure	log
+map.remove	<K, V>(m: Map<K, V>, k: K) -> Map<K, V>	pure	log
+map.update	<K, V>(m: Map<K, V>, k: K, f: fn(V) -> V, default: V) -> Map<K, V>	pure	log
+map.keys	<K, V>(m: Map<K, V>) -> [K]	pure	linear
+map.values	<K, V>(m: Map<K, V>) -> [V]	pure	linear
+map.entries	<K, V>(m: Map<K, V>) -> [(K, V)]	pure	linear
+map.merge	<K, V>(a: Map<K, V>, b: Map<K, V>) -> Map<K, V>	pure	linear
+map.map_values	<K, V, W>(m: Map<K, V>, f: fn(V) -> W) -> Map<K, W>	pure	linear
+map.filter	<K, V>(m: Map<K, V>, f: fn(K, V) -> Bool) -> Map<K, V>	pure	linear
+map.count_by	<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, Int>	pure	nlogn
+math.abs	(x: Num) -> Num	pure	const
+math.sign	(x: Num) -> Int	pure	const
+math.min	(a: Num, b: Num) -> Num	pure	const
+math.max	(a: Num, b: Num) -> Num	pure	const
+math.clamp	(x: Num, lo: Num, hi: Num) -> Num	pure	const
+math.floor	(x: Float) -> Int	pure	const
+math.ceil	(x: Float) -> Int	pure	const
+math.round	(x: Float, digits: Int = 0) -> Float	pure	const
+math.trunc	(x: Float) -> Int	pure	const
+math.to_float	(x: Int) -> Float	pure	const
+math.sqrt	(x: Float) -> Float	pure	const
+math.pow	(x: Num, y: Num) -> Num	pure	const
+math.exp	(x: Float) -> Float	pure	const
+math.ln	(x: Float) -> Float	pure	const
+math.log2	(x: Float) -> Float	pure	const
+math.log10	(x: Float) -> Float	pure	const
+math.is_nan	(x: Float) -> Bool	pure	const
+math.mean	(xs: [Num]) -> Float?	pure	linear
+math.median	(xs: [Num]) -> Float?	pure	nlogn
+math.mode	<T>(xs: [T]) -> T?	pure	nlogn
+math.variance	(xs: [Num], sample: Bool = true) -> Float?	pure	linear
+math.stdev	(xs: [Num], sample: Bool = true) -> Float?	pure	linear
+math.percentile	(xs: [Num], p: Float) -> Float?	pure	nlogn
+math.softmax	(xs: [Float], temperature: Float = 1.0) -> [Float]	pure	linear
+math.argmax	(xs: [Num]) -> Int?	pure	linear
+math.argmin	(xs: [Num]) -> Int?	pure	linear
+math.entropy	(ps: [Float]) -> Float	pure	linear
+rand.int	(lo: Int, hi: Int) -> Int	effect	-
+rand.float	() -> Float	effect	-
+rand.bool	(p: Float = 0.5) -> Bool	effect	-
+rand.choice	<T>(xs: [T]) -> T	effect	-
+rand.sample	<T>(xs: [T], k: Int) -> [T]	effect	-
+rand.shuffle	<T>(xs: [T]) -> [T]	effect	-
+rand.uuid	() -> Str	effect	-
+time.now	() -> Instant	effect	-
+time.since	(t: Instant) -> Duration	effect	-
+time.sleep	(d: Duration) -> ()	effect	-
+time.today	(tz: Str = "local") -> Date	effect	-
+time.add	(t: Instant, d: Duration) -> Instant	pure	const
+time.diff	(a: Instant, b: Instant) -> Duration	pure	const
+time.format	(t: Instant, fmt: Str = "%Y-%m-%dT%H:%M:%SZ", tz: Str = "UTC") -> Str	pure	linear
+time.parse	(s: S, fmt: Str = "%Y-%m-%dT%H:%M:%S%z") -> Instant?	pure	linear
+time.date	(t: Instant, tz: Str = "UTC") -> Date	pure	const
+time.duration	(seconds: Float) -> Duration	pure	const
+time.seconds	(d: Duration) -> Float	pure	const
+time.show	(d: Duration) -> Str	pure	const
+hash.sha256	(s: S) -> Str	pure	linear
+hash.blake3	(s: S) -> Str	pure	linear
+hash.stable	<T>(v: T) -> Str	pure	linear
+hash.short	<T>(v: T, n: Int = 8) -> Str	pure	linear
+diff.lines	(a: S, b: S) -> Diff	pure	product
+diff.words	(a: S, b: S) -> Diff	pure	product
+diff.unified	(a: S, b: S, context: Int = 3, from: Str = "a", to: Str = "b") -> S	pure	product
+diff.apply	(text: S, patch: S) -> S	pure	linear
+diff.stats	(d: Diff) -> DiffStats	pure	linear
+template.render	<T>(tpl: Str, vars: T) -> S	pure	linear
+template.names	(tpl: Str) -> [Str]	pure	linear
+vec.dot	(a: Vector, b: Vector) -> Float	pure	linear
+vec.norm	(a: Vector) -> Float	pure	linear
+vec.normalize	(a: Vector) -> Vector	pure	linear
+vec.cosine	(a: Vector, b: Vector) -> Float	pure	linear
+vec.add	(a: Vector, b: Vector) -> Vector	pure	linear
+vec.mean	(vs: [Vector]) -> Vector?	pure	linear
+vec.top_k	(query: Vector, vs: [Vector], k: Int = 5) -> [(Int, Float)]	pure	nlogn
+path.join	(parts: [S]) -> S	pure	linear
+path.parent	(p: S) -> S?	pure	linear
+path.name	(p: S) -> S	pure	linear
+path.stem	(p: S) -> S	pure	linear
+path.ext	(p: S) -> S?	pure	linear
+path.normalize	(p: S) -> S	pure	linear
+path.is_absolute	(p: S) -> Bool	pure	linear
+path.relative_to	(p: S, base: S) -> S?	pure	linear
+url.parse	(s: S) -> Url?	pure	linear
+url.host	(s: S) -> S?	pure	linear
+url.with_query	(s: S, params: Map<Str, S>) -> S	pure	linear
+url.encode	(s: S) -> S	pure	linear
+url.decode	(s: S) -> S?	pure	linear
+codec.base64_encode	(s: S) -> S	pure	linear
+codec.base64_decode	(s: S) -> S?	pure	linear
+codec.hex_encode	(s: S) -> S	pure	linear
+codec.hex_decode	(s: S) -> S?	pure	linear
+codec.csv_parse	(s: S, header: Bool = true, delimiter: Str = ",") -> [Map<S, S>]	pure	linear
+codec.csv_write	(rows: [Map<Str, S>], delimiter: Str = ",") -> S	pure	linear
+eval.run_tests	(command: Str, format: TestFormat = auto, timeout: Duration = 600s) -> Untrusted<TestReport>	tool:run_command	-
+eval.metric	(name: Str, value: Float, tags: Map<Str, Str> = {}) -> ()	effect	-
+eval.score	(name: Str, value: Float, reason: Untrusted<Str>? = none) -> ()	effect	-
+eval.label	(key: Str, value: Str) -> ()	effect	-
+eval.expect	(cond: Bool, name: Str) -> Bool	effect	-
+eval.timer	<T>(name: Str, f: fn() -> T) -> T	effect	-
+eval.task	() -> EvalTask?	engine	-
+eval.is_headless	() -> Bool	engine	-
+eval.fixture	(name: Str) -> Json	engine	-
+eval.mode	() -> TapeMode	engine	-
+eval.tape	() -> TapeInfo?	engine	-
+eval.golden	(name: Str, value: Untrusted<Str>) -> Bool	effect	-
+eval.script_model	(replies: [ScriptedReply]) -> ()	pure	-
+eval.script_tool	(name: Str, replies: [ScriptedToolReply]) -> ()	pure	-
+memory.search	(query: Untrusted<Str>, scope: MemoryScope? = none, type: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]>	tool:memory_search	-
+memory.read	(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry>	tool:memory_read	-
+memory.remember	(entry: NewMemory) -> ()	memory.write, tool:memory_remember	-
+memory.edit	(name: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>, scope: MemoryScope? = none) -> ()	memory.write, tool:memory_edit	-
+memory.forget	(name: Untrusted<Str>, scope: MemoryScope? = none) -> ()	memory.write, tool:memory_forget	-
+memory.propose	(entry: NewMemory) -> ()	effect	-
+memory.index	(scope: MemoryScope = global) -> Untrusted<[IndexLine]>	sees:memory_index	-
+memory.environment	() -> Untrusted<Str>	sees:memory_environment	-
+memory.recall	(text: Untrusted<Str>, limit: Int = 5) -> Untrusted<[MemoryHit]>	tool:memory_search	-
+memory.links	(entry: Untrusted<MemoryEntry>) -> [Untrusted<Str>]	pure	-
+memory.used	() -> [Untrusted<Str>]	sees:memory_index	-
+memory.search_sessions	(query: Untrusted<Str>, archived: Bool = false, limit: Int = 10) -> Untrusted<[SessionHit]>	tool:search_sessions	-
+meta.harnesses	(query: Str? = none) -> [HarnessInfo]	meta	-
+meta.harness	<H>(name: Str) -> H	meta	-
+meta.has_harness	(name: Str) -> Bool	meta	-
+meta.signature	<H>(h: H) -> Signature	pure	-
+meta.package	() -> PackageInfo	meta	-
+meta.trust_sites	() -> [Site]	meta	-
+meta.author	(name: Str, source: Untrusted<Str>, description: Untrusted<Str>) -> AuthoredVersion	tool:*write_harness*	-
+meta.authored	() -> [AuthoredVersion]	meta	-
+meta.frame	() -> FrameInfo	engine	-
+meta.caller	() -> CallerInfo?	engine	-
+meta.depth	() -> Int	engine	-
+meta.limits	() -> FrameLimits	engine	-
+meta.site	() -> Site	pure	-
+meta.permissions	() -> PermissionView	engine	-
+meta.can	(tool: Str, arguments: Json = {}) -> Decision	engine	-
+meta.tools	() -> [ToolInfo]	engine	-
+meta.models	() -> [ModelCard]	engine	-
+meta.engine	() -> EngineInfo	engine	-
+meta.ratio_version	() -> Str	pure	-
+meta.features	() -> [Str]	engine	-
+model.generate	(p: Prompt, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+model.generate_as	<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T>	model ×1..1+repairs	-
+model.generate_n	(p: Prompt, n: Int, opts: GenOpts = {}) -> [Untrusted<Str>]	model ×n	-
+model.complete	(text: Str, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+model.stream	(p: Prompt, on_text: fn(Untrusted<Str>) -> (), until: (fn(Untrusted<Str>, Untrusted<Str>) -> Bool)? = none, opts: GenOpts = {}) -> Untrusted<Streamed>	model ×1	-
+model.logprobs	(p: Prompt, opts: GenOpts = {}) -> Untrusted<TokenText>	model ×1	-
+model.chat	(conv: Conversation, tools: ToolSet? = none, opts: GenOpts = {}) -> ModelReply	model ×1	-
+model.chat_as	<T>(conv: Conversation, instructions: Prompt? = none, opts: GenOpts = {}) -> Untrusted<T>	model ×1..1+repairs	-
+model.loop	(conv: Conversation, max_steps: Int = 50, tools: ToolSet? = none, until: (fn(ModelReply) -> Bool)? = none, concurrent: Bool = true, opts: GenOpts = {}) -> LoopResult	model ×1..max_steps, plus each dispatched tool's own permission	-
+model.classify	<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<E>	model ×1	-
+model.choose	(input: Untrusted<Str>, options: [Str], opts: GenOpts = {}) -> Chosen	model ×1	-
+model.extract	<T>(input: Untrusted<Str>, what: Str? = none, opts: GenOpts = {}) -> Untrusted<T>	model ×1..3	-
+model.summarize	(input: Untrusted<Str>, max_words: Int = 150, focus: Str? = none, opts: GenOpts = {}) -> Untrusted<Str>	model ×1..2	-
+model.rewrite	(input: Untrusted<Str>, instruction: Str, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+model.translate	(input: Untrusted<Str>, to: Str, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+model.judge	(candidate: Untrusted<Str>, rubric: Str, opts: GenOpts = {}) -> Untrusted<Judgement>	model ×1	-
+model.score	(candidate: Untrusted<Str>, criteria: [Criterion], opts: GenOpts = {}) -> Untrusted<Scores>	model ×1	-
+model.compare	(a: Untrusted<Str>, b: Untrusted<Str>, criteria: Str, swap: Bool = true, opts: GenOpts = {}) -> Untrusted<Preference>	model ×1..2	-
+model.rank	<T>(items: [T], show: fn(T) -> Untrusted<Str>, criteria: Str, method: RankMethod = listwise, opts: GenOpts = {}) -> [Scored<T>]	model ×1..n log n	-
+model.embed	(texts: [Untrusted<Str>], model: ModelRef? = none) -> [Vector]	model ×⌈n/16⌉	-
+model.count_tokens	(x: Countable, model: ModelRef? = none) -> TokenCount	engine	-
+model.window	(model: ModelRef? = none) -> Int?	engine	-
+model.render	(p: Prompt, model: ModelRef? = none) -> Transcript	pure	-
+model.prompt_hash	(p: Prompt) -> Str	pure	-
+model.route	(tier: Tier? = none, location: Location? = none, tags: [Str] = [], min_context: Int? = none) -> ModelRef	pure	-
+model.resolve	(m: ModelRef) -> ModelCard	engine	-
+model.list	(query: Str? = none, location: Location? = none, limit: Int = 20) -> [ModelCard]	tool:list_models	-
+model.current	() -> ModelCard	engine	-
+model.can_reason	(m: ModelRef? = none) -> Bool	engine	-
+session.ask	(questions: [Question]) -> [UserText]	user (recommendations when unattended)	-
+session.request_approval	(summary: Str, detail: Untrusted<Str>? = none) -> Bool	user	-
+session.notify	(text: Untrusted<Str>, level: NoticeLevel = info) -> ()	effect	-
+session.stream	(text: Untrusted<Str>) -> ()	effect	-
+session.plan	() -> Untrusted<Plan>?	sees:plan	-
+session.update_plan	(plan: Untrusted<Plan>) -> ()	tool:update_plan	-
+session.state	() -> Untrusted<AidState>	sees:plan	-
+session.update_state	(change: AidStateChange) -> Untrusted<AidState>	tool:update_state	-
+session.checkpoint	(label: Str? = none) -> Checkpoint	tool:*session_checkpoint*	-
+session.rewind_files	(cp: Checkpoint) -> ()	user, tool:*session_rewind_files*	-
+session.branch	(at_turn: Int? = none, title: Str? = none) -> SessionRef	tool:*session_branch*	-
+session.start	(prompt: Str, environment: Str? = none, package: Str? = none, model: ModelRef? = none) -> SessionRef	tool:start_session	-
+session.id	() -> Str	engine	-
+session.info	() -> SessionInfo	engine	-
+session.turn	() -> Turn	sees:turn	-
+session.attended	() -> Bool	engine	-
+session.mode	() -> PermissionMode	engine	-
+session.folders	() -> [Str]	engine	-
+session.scratch_folder	() -> Str?	engine	-
+session.usage	() -> Spent	engine	-
+session.queued	() -> [UserText]	engine	-
+session.emit	(name: Str, data: Json) -> ()	effect	-
+state.get	() -> S	sees:state	-
+state.set	(v: S) -> ()	sees:state, entry	-
+state.update	(f: fn(S) -> S) -> S	sees:state, entry	-
+state.reset	() -> ()	sees:state, entry	-
+think.steps	<A>(p: Prompt, steps: [Str], visible: Bool = true, opts: GenOpts = {}) -> Stepped<A>	model ×1..3	-
+think.scratchpad	() -> Scratchpad	pure	-
+think.note	(pad: Scratchpad, text: Untrusted<Str>) -> ()	pure	-
+think.notes	(pad: Scratchpad, last: Int? = none) -> Untrusted<Str>	pure	-
+think.step_back	(question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+think.until	<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float? = none) -> Iterated<T>	as step	-
+think.plan	(goal: Untrusted<Str>, context: Prompt? = none, max_steps: Int = 8, opts: GenOpts = {}) -> Untrusted<Plan>	model ×1..3	-
+think.replan	(plan: Untrusted<Plan>, step: Untrusted<Str>, reason: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Plan>	model ×1..3	-
+think.decompose	(task: Untrusted<Str>, max_parts: Int = 6, opts: GenOpts = {}) -> Untrusted<[Subtask]>	model ×1..3	-
+think.hypothesize	(observations: Untrusted<Str>, n: Int = 3, opts: GenOpts = {}) -> Untrusted<[Hypothesis]>	model ×1	-
+think.reflect	(trace: Untrusted<Str>, outcome: Str, opts: GenOpts = {}) -> Untrusted<Reflection>	model ×1	-
+think.rubric	(task: Untrusted<Str>, n: Int = 5, opts: GenOpts = {}) -> Untrusted<[Criterion]>	model ×1	-
+think.critique	(work: Untrusted<Str>, rubric: Str, opts: GenOpts = {}) -> Untrusted<Critique>	model ×1..3	-
+think.revise	(work: Untrusted<Str>, critique: Untrusted<Critique>, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+think.refine	<T>(draft: T, critique: fn(T) -> Untrusted<Critique>, revise: fn(T, Untrusted<Critique>) -> T, stop: Stop = { max_rounds: 3 }) -> Refined<T>	as callbacks	-
+think.verify	(claim: Untrusted<Str>, evidence: [Untrusted<Str>], opts: GenOpts = {}) -> Untrusted<Verification>	model ×1..2	-
+think.check	<T>(value: T, checks: [Check<T>]) -> CheckReport	as checks	-
+think.counterexample	(claim: Untrusted<Str>, context: Prompt? = none, opts: GenOpts = {}) -> Untrusted<Counterexample?>	model ×1	-
+think.vote	<T>(candidates: [T], key: fn(T) -> Untrusted<Str>) -> Vote<T>	pure	-
+think.self_consistency	<T>(n: Int, sample: fn() -> T, key: fn(T) -> Untrusted<Str>, parallel: Bool = true, early_stop: Bool = false) -> Vote<T>	as sample ×n	-
+think.best_of	<T>(n: Int, sample: fn() -> T, score: fn(T) -> Float, parallel: Bool = true, early_stop: Bool = false, good_enough: Float? = none) -> Scored<T>	as callbacks ×n	-
+think.consensus	<T>(answers: [T], method: ConsensusMethod = majority, show: fn(T) -> Untrusted<Str> = text.show, opts: GenOpts = {}) -> Consensus<T>	pure, or model ×1 for judge	-
+think.reconcile	(answers: [Untrusted<Str>], question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
+think.debate	(question: Untrusted<Str>, sides: [fn(DebateTurn) -> Untrusted<Str>], judge: fn(DebateRecord) -> Untrusted<Judgement>, rounds: Int = 2) -> DebateResult	as callbacks	-
+think.tree_search	<S>(root: S, expand: fn(S) -> [S], score: fn(S) -> Float, is_goal: fn(S) -> Bool, strategy: SearchStrategy = best_first, beam: Int? = none, max_nodes: Int = 64, max_depth: Int = 6) -> SearchResult<S>	as callbacks	-
+think.beam_search	<S>(init: [S], expand: fn(S) -> [S], score: fn(S) -> Float, width: Int = 3, depth: Int = 4) -> [Scored<S>]	as callbacks	-
+think.mcts	<S>(root: S, expand: fn(S) -> [S], rollout: fn(S) -> Float, iterations: Int = 32, exploration: Float = 1.4) -> SearchResult<S>	as callbacks	-
+think.confidence	(question: Untrusted<Str>, answer: Untrusted<Str>, method: ConfidenceMethod = self_report, n: Int = 5, opts: GenOpts = {}) -> Confidence	model ×1 or ×n	-
+think.uncertainty	(keys: [Untrusted<Str>]) -> Float	pure	-
+think.clarify	(missing_parameter: Str, options: [Untrusted<Str>], question: Str? = none, confidence: Float? = none) -> UserText?	user	-
+tools.read_file	(path: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> FileText	tool:read_file	-
+tools.write_file	(path: Untrusted<Str>, content: Untrusted<Str>) -> Written	tool:write_file	-
+tools.edit_file	(path: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>) -> Written	tool:edit_file	-
+tools.list_dir	(path: Untrusted<Str>, offset: Int = 0) -> Untrusted<Listing>	tool:list_dir	-
+tools.glob	(pattern: Str, path: Untrusted<Str>? = none, max_results: Int = 100, offset: Int = 0, include_ignored: Bool = false) -> Untrusted<Globbed>	tool:glob	-
+tools.grep	(pattern: Str, path: Untrusted<Str>? = none, glob: Str? = none, case_insensitive: Bool = false, context: Int = 0, max_results: Int = 100, offset: Int = 0, include_ignored: Bool = false) -> Untrusted<Grepped>	tool:grep	-
+tools.run_command	(command: Untrusted<Str>, timeout: Duration = 120s, check: Bool = false) -> Untrusted<CommandResult>	tool:run_command	-
+tools.run_background	(command: Untrusted<Str>) -> Process	tool:run_command	-
+tools.command_output	(p: Process, since: Int? = none) -> Untrusted<ProcessOutput>	tool:command_output	-
+tools.command_stop	(p: Process) -> ()	tool:command_stop	-
+tools.web_search	(query: Untrusted<Str>, count: Int = 10) -> Untrusted<[SearchHit]>	tool:web_search	-
+tools.web_fetch	(url: Untrusted<Str>, offset: Int? = none, limit: Int? = none) -> Untrusted<Page>	tool:web_fetch	-
+tools.browser_open	(url: Untrusted<Str>, new_tab: Bool = false) -> Untrusted<PageView>	tool:browser_open	-
+tools.browser_read	() -> Untrusted<PageView>	tool:browser_read	-
+tools.browser_click	(selector: Untrusted<Str>) -> Untrusted<PageView>	tool:browser_click	-
+tools.browser_type	(selector: Untrusted<Str>, text: Untrusted<Str>, submit: Bool = false) -> Untrusted<PageView>	tool:browser_type	-
+tools.browser_tabs	() -> Untrusted<[TabInfo]>	tool:browser_tabs	-
+tools.browser_switch	(tab: Str) -> Untrusted<PageView>	tool:browser_switch	-
+tools.browser_close	(tab: Str) -> ()	tool:browser_close	-
+tools.browser_screenshot	() -> Image	tool:browser_screenshot	-
+tools.browser_download	(url: Untrusted<Str>, filename: Str? = none) -> Untrusted<Downloaded>	tool:browser_download	-
+tools.preview_open	(target: PreviewTarget) -> Preview	tool:preview_open	-
+tools.preview_close	() -> ()	tool:preview_close	-
+tools.media_image	(prompt: Untrusted<Str>, width: Int? = none, height: Int? = none, name: Str? = none) -> MediaFile	tool:media_image	-
+tools.media_speak	(text: Untrusted<Str>, voice: Str? = none, name: Str? = none) -> MediaFile	tool:media_speak	-
+tools.media_transcribe	(path: Untrusted<Str>) -> Untrusted<Str>	tool:media_transcribe	-
+tools.mcp_servers	() -> [McpServerInfo]	engine	-
+tools.mcp_call	(server: Str, tool: Str, arguments: Json) -> Untrusted<McpResult>	tool:mcp__<server>__<tool>	-
+tools.mcp_resources	(server: Str, cursor: Str? = none) -> Untrusted<McpListing>	tool:mcp__<server>__resources_list	-
+tools.mcp_read_resource	(server: Str, uri: Untrusted<Str>) -> Untrusted<Str>	tool:mcp__<server>__resources_read	-
+tools.mcp_prompts	(server: Str) -> Untrusted<McpListing>	tool:mcp__<server>__prompts_list	-
+tools.mcp_get_prompt	(server: Str, name: Str, arguments: Map<Str, Str> = {}) -> Transcript	tool:mcp__<server>__prompts_get	-
+tools.tool_search	(query: Str? = none, names: [Str] = []) -> [ToolSchema]	tool:tool_search	-
+tools.call_tool	(name: Str, arguments: Json) -> Untrusted<ToolResult>	the named tool's	-
+tools.dispatch	(conv: Conversation, call: ToolCall) -> ToolResult	the called tool's	-
+tools.refuse	(conv: Conversation, call: ToolCall, reason: Str) -> ToolResult	engine	-
+tools.dispatch_all	(conv: Conversation, calls: [ToolCall], concurrent: Bool = true) -> [ToolResult]	the called tools'	-
+tools.offered	() -> [ToolSchema]	engine	-
+tools.spec	(name: Str) -> ToolSchema?	engine	-
+tools.has	(name: Str) -> Bool	engine	-
+tools.narrow	(set: ToolSet, names: [Str]) -> ToolSet	pure	-
+tools.skills	() -> [SkillInfo]	engine	-
+tools.plugins	() -> [PluginInfo]	engine	-
+tools.load_skill	(name: Str) -> Untrusted<Str>	tool:load_skill	-
+tools.activate_plugin	(name: Str) -> ()	tool:activate_plugin	-
+tools.set_model_card	(model: Str, card: Str?) -> ()	tool:set_model_card	-
+tools.install_extension	(kind: ExtensionKind, source: Str, path: Str? = none, revision: Str? = none) -> ()	tool:install_extension	-
+tools.uninstall_extension	(kind: ExtensionKind, name: Str) -> ()	tool:uninstall_extension	-
+tools.suggest_local_model	(task: Str, needs: [Str], context_tokens: Int? = none) -> Untrusted<Str>	tool:suggest_local_model	-
+tools.run_script	(code: Untrusted<Str>) -> Untrusted<ScriptResult>	tool:run_script	-

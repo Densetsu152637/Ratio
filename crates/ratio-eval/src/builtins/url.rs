@@ -385,10 +385,10 @@ fn parse_host(host: &str, special: bool) -> Option<String> {
     {
         return None;
     }
-    if !special {
-        return Some(host.to_owned());
-    }
     let lower = host.to_ascii_lowercase();
+    if !special {
+        return Some(lower);
+    }
     match ipv4_host(&lower) {
         Ipv4::Address(addr) => Some(addr),
         Ipv4::Invalid => None,
@@ -496,6 +496,15 @@ fn parse_url(s: &str) -> Option<Parsed> {
         {
             return None;
         }
+        if scheme == "file" {
+            // A `file` URL has no user information, and a drive letter is not a host.
+            let hb = hostport.as_bytes();
+            if userinfo.is_some()
+                || (hb.len() >= 2 && hb[0].is_ascii_alphabetic() && matches!(hb[1], b':' | b'|'))
+            {
+                return None;
+            }
+        }
         let (host_text, port_text) = if hostport.starts_with('[') {
             let close = hostport.find(']')?;
             let after_close = &hostport[close + 1..];
@@ -517,7 +526,13 @@ fn parse_url(s: &str) -> Option<Parsed> {
             }
             String::new()
         } else {
-            parse_host(host_text, special)?
+            let h = parse_host(host_text, special)?;
+            // `localhost` is the local machine: the empty host of a `file` URL.
+            if scheme == "file" && h == "localhost" {
+                String::new()
+            } else {
+                h
+            }
         };
         let port = match port_text {
             None | Some("") => None,

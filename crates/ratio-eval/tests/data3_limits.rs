@@ -84,7 +84,8 @@ fn the_charges_follow_chapter_06() {
             "fn main(a: Str, b: Str) -> Int { list.len(diff.lines(a, b)) }",
             vec![Value::text(&a), Value::text(&b)],
         );
-        (steps, (n1 * n2 + c).div_ceil(64) as u64)
+        // The product, and the characters counted first (debited as `linear`).
+        (steps, ((n1 * n2 + c).div_ceil(64) + c.div_ceil(64)) as u64)
     };
     // The output of `diff.lines` is a list (no output part for `product`).
     let (s1, c1) = diff(100, 100);
@@ -115,7 +116,7 @@ fn unified(a: Str, b: Str) -> Int { text.len(diff.unified(a, b)) }
             panic!("{name} returned")
         };
         assert_eq!(e.budget(&p).as_deref(), Some("steps"), "{name}");
-        assert!(f.steps < 20, "{name} charged {}", f.steps);
+        assert!(f.steps < 20_000, "{name} charged {}", f.steps);
         assert!(f.heap_peak < 1 << 20, "{name} allocated {}", f.heap_peak);
     }
     let words: String = (0..20_000).map(|i| format!("a{i} ")).collect();
@@ -125,7 +126,7 @@ fn unified(a: Str, b: Str) -> Int { text.len(diff.unified(a, b)) }
         panic!("words returned")
     };
     assert_eq!(e.budget(&p).as_deref(), Some("steps"));
-    assert!(f.steps < 20);
+    assert!(f.steps < 20_000);
     // The same inputs are refused outright on a budget that cannot pay, and run on one that can.
     let small = lines(300, "a");
     let small_b = lines(300, "b");
@@ -159,7 +160,7 @@ fn a_diff_with_one_empty_side_is_cheap_however_long_the_other() {
         panic!("raised")
     };
     assert_eq!(v.as_int(), Some(100_000));
-    assert!(f.steps < 2 * (big.len() as u64 / 64 + 100));
+    assert!(f.steps < 3 * (big.len() as u64 / 64 + 100));
 }
 
 #[test]

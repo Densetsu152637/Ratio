@@ -1,0 +1,13 @@
+// arg: "7"
+// expect: value ["  7", "007", "abab7", "long", "x"]
+// expect: labels secret secret secret none none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.pad_start(s, 3)),
+    text.show(text.pad_start(s, 3, fill: "0")),
+    text.show(text.pad_start(s, 5, fill: "ab")),
+    text.show(text.pad_start("long", 2)),
+    text.show(text.pad_start("x", 3, fill: "")),
+  ]
+}

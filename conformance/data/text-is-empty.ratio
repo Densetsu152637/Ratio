@@ -1,0 +1,10 @@
+// arg: "x"
+// expect: value ["false", "true"]
+// expect: labels secret none
+
+fn main(s: Str) -> [Untrusted<Str>] {
+  [
+    text.show(text.is_empty(s)),
+    text.show(text.is_empty("")),
+  ]
+}

@@ -54,7 +54,7 @@ pub use ratio_eval::{
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.13";
+pub const SPEC_DRAFT: &str = "0.14";
 
-/// The implementation stage reached (chapter 10's table): the IR and the core interpreter.
-pub const STAGE: u32 = 6;
+/// The implementation stage reached (chapter 10's table): Data I (`text`, `re`, the pool).
+pub const STAGE: u32 = 7;

@@ -91,6 +91,7 @@ fn product_of(a: &Args, count: fn(&str) -> u64) -> Sizes {
         n2,
         c: chars(0).saturating_add(chars(1)),
         m: 0,
+        scratch: 0,
     }
 }
 
@@ -100,6 +101,16 @@ pub(super) fn s_lines(a: &Args) -> Sizes {
 
 pub(super) fn s_words(a: &Args) -> Sizes {
     product_of(a, word_count)
+}
+
+/// `unified`: the sizes of its two texts, and the characters of its two header names, which
+/// are copied into the output.
+pub(super) fn s_unified(a: &Args) -> Sizes {
+    let mut s = product_of(a, line_count);
+    s.c =
+        s.c.saturating_add(super::sz(a, 3))
+            .saturating_add(super::sz(a, 4));
+    s
 }
 
 /// The shortest edit script from `a` to `b`, as one of [`EQUAL`], [`INSERT`], [`DELETE`] per
@@ -218,7 +229,7 @@ fn hirschberg(cx: &Cx<'_>, a: &[u32], b: &[u32], ops: &mut Vec<u8>) -> Result<()
                 diag = old;
             }
         }
-        let done = (al * bl) as u64;
+        let done = (al as u64).saturating_mul(bl as u64);
         work::add(done);
         cells += done;
         if cells >= CHECK_CELLS {
@@ -405,6 +416,17 @@ fn range(first: usize, len: usize) -> String {
     }
 }
 
+fn name_arg<'a>(
+    cx: &Cx<'_>,
+    v: Option<&'a Value>,
+    default: &'static str,
+) -> Result<&'a str, RtError> {
+    match v {
+        Some(v) => text(cx, v),
+        None => Ok(default),
+    }
+}
+
 pub(super) fn unified(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let (ctx, from, to) = (opt(args, 2), opt(args, 3), opt(args, 4));
@@ -424,13 +446,7 @@ pub(super) fn unified(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             labels,
         ));
     };
-    let name = |v: Option<&'_ Value>, default: &'static str| -> Result<String, RtError> {
-        match v {
-            Some(v) => text(cx, v).map(str::to_owned),
-            None => Ok(default.to_owned()),
-        }
-    };
-    let (from, to) = (name(from, "a")?, name(to, "b")?);
+    let (from, to) = (name_arg(cx, from, "a")?, name_arg(cx, to, "b")?);
     if from.contains(['\n', '\r']) || to.contains(['\n', '\r']) {
         return Err(raise_invalid(
             cx,
@@ -526,6 +542,9 @@ pub(super) fn unified(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
             at += 1;
         }
     }
+    // The text written is charged too, as the other built-ins' output is: a product has no
+    // output part of its own.
+    cx.debit = cx.debit.saturating_add((out.len() as u64).div_ceil(64));
     out.finish(cx)
 }
 

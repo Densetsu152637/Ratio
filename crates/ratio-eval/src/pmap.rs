@@ -45,7 +45,11 @@ fn rank(v: &Value) -> u8 {
 /// The order of map keys.
 pub(crate) fn key_cmp(a: &Value, b: &Value) -> Ordering {
     match (&a.repr, &b.repr) {
-        (Repr::Str(x), Repr::Str(y)) => x.as_str().cmp(y.as_str()),
+        (Repr::Str(x), Repr::Str(y)) => {
+            // A comparison walks the common prefix: the work counters count it.
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64 + 1);
+            x.as_str().cmp(y.as_str())
+        }
         (Repr::Int(x), Repr::Int(y)) => x.cmp(y),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
         (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
@@ -355,6 +359,33 @@ impl Map {
         }
         Ok(Map {
             root: Some(insert(heap, self.root.as_ref(), key, value)?),
+        })
+    }
+
+    /// A map of entries already in strictly ascending key order, built balanced in one pass
+    /// with no comparison of keys (the caller sorted them once, and a thousand maps over the
+    /// same keys need no sorting each).
+    ///
+    /// # Errors
+    ///
+    /// Over the heap, element or depth limits.
+    pub(crate) fn from_sorted(heap: &Heap, entries: &[Entry]) -> Result<Map, Fault> {
+        fn build(heap: &Heap, e: &[Entry]) -> Result<Option<Arc<MNode>>, Fault> {
+            if e.is_empty() {
+                return Ok(None);
+            }
+            // Halves differ in size by at most one, so in height by at most one: balanced.
+            let mid = e.len() / 2;
+            let left = build(heap, &e[..mid])?;
+            let right = build(heap, &e[mid + 1..])?;
+            let (k, v) = &e[mid];
+            Ok(Some(mk(heap, k.clone(), v.clone(), left, right)?))
+        }
+        if entries.len() as u64 > MAX_ELEMS {
+            return Err(Fault::TooLarge("a map of more than 1,000,000 entries"));
+        }
+        Ok(Map {
+            root: build(heap, entries)?,
         })
     }
 

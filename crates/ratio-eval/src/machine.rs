@@ -18,18 +18,23 @@
 //! calls (callbacks included). The **heap** is the live-value ledger of [`crate::heap`].
 //! Exhausting any of them raises `Budget`, which no code inside the turn can catch.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Waker;
 
 use ratio_ir::{ArgFrom, AssignOp, BinOp, Loc, UnOp};
 
-use crate::builtins::{BUILTINS, Class, Imp, Resume, Task, TaskStep, output_size, pre_work};
+use crate::builtins::{
+    BUILTINS, Builtin, Class, Compiled, Imp, PureFn, ReCache, Resume, Task, TaskStep, output_size,
+    pre_work,
+};
 use crate::error::{Class as ErrClass, Kind, RtError, raise};
 use crate::heap::{Charge, Heap};
 use crate::labels::Labels;
 use crate::ops::{self, steps_for};
 use crate::plist::{Cursor, List};
 use crate::pmap::{Map, MapCursor};
+use crate::pool::{JobHandle, PoolSession, Waiter};
 use crate::prepare::{
     FuncKind, NodeId, PCallee, PCatch, PItemKind, PKind, PPart, PPat, PPrompt, PStep, PStmt, PatId,
     Prepared,
@@ -76,9 +81,16 @@ impl Default for Limits {
 /// The steps between checkpoints, where the evaluation yields and checks cancellation.
 pub const CHECKPOINT: u64 = 1_000;
 
-/// A cancellation flag a host sets; the evaluation sees it at its next checkpoint.
+/// A cancellation flag a host sets; the evaluation sees it at its next checkpoint, or at once
+/// while it waits for a built-in on the pool (the waiting driver is woken).
 #[derive(Clone, Debug, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
+pub struct CancelToken(Arc<CancelInner>);
+
+#[derive(Debug, Default)]
+struct CancelInner {
+    flag: AtomicBool,
+    wakers: Mutex<Vec<Waker>>,
+}
 
 impl CancelToken {
     #[must_use]
@@ -87,12 +99,29 @@ impl CancelToken {
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.flag.store(true, Ordering::Relaxed);
+        let wakers =
+            std::mem::take(&mut *self.0.wakers.lock().unwrap_or_else(PoisonError::into_inner));
+        for w in wakers {
+            w.wake();
+        }
     }
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.flag.load(Ordering::Relaxed)
+    }
+
+    /// Wakes `waker` when the token is cancelled (at once if it is).
+    pub fn register(&self, waker: &Waker) {
+        if self.is_cancelled() {
+            waker.wake_by_ref();
+            return;
+        }
+        let mut wakers = self.0.wakers.lock().unwrap_or_else(PoisonError::into_inner);
+        if !wakers.iter().any(|w| w.will_wake(waker)) {
+            wakers.push(waker.clone());
+        }
     }
 }
 
@@ -121,6 +150,9 @@ pub enum Suspend {
     Yield,
     /// An effect: answer it with [`Machine::resume_effect`], then call `run` again.
     Effect(EffectRequest),
+    /// A built-in is running on the pool: call `run` again once the [`Waiter`] is ready (or
+    /// the evaluation was cancelled, which stops the wait at once).
+    Wait(Waiter),
     /// The evaluation ended.
     Done(Outcome),
 }
@@ -133,9 +165,17 @@ pub(crate) struct Cx<'a> {
     pub type_args: &'a [u32],
     /// The evaluation's cancellation flag, for a long built-in to check as it works.
     pub cancel: &'a CancelToken,
-    /// Steps for work a built-in did before failing (a rendering refused as too long): the
-    /// machine debits them whether the built-in returns or raises.
+    /// Steps for work a built-in did beyond what was debited before it ran (a rendering
+    /// refused as too long, a regex iteration past its search charge): the machine debits them
+    /// whether the built-in returns or raises.
     pub debit: u64,
+    /// The compiled pattern of a `re` built-in (or why it was refused).
+    pub regex: Option<Arc<Compiled>>,
+    /// The steps left after the charge debited before running: a built-in that debits more
+    /// as it works stops with `Budget { which: steps }` when it would pass them.
+    pub steps_left: u64,
+    /// Elementary operations counted (for the debug-build work counters).
+    pub work: u64,
 }
 
 impl Cx<'_> {
@@ -356,7 +396,90 @@ enum Mode {
     Ret(Value),
     Unwind(Signal),
     Effect(EffectRequest),
+    /// Waiting for a built-in on the pool.
+    Wait(Box<Waiting>),
     Done,
+}
+
+/// A built-in running on the pool, and what its return still needs charged.
+#[derive(Debug)]
+struct Waiting {
+    job: JobHandle<Ran>,
+    builtin: Builtin,
+    n: u64,
+    pre: u64,
+    loc: Loc,
+}
+
+/// What a pure built-in's body produced, inline or on the pool.
+#[derive(Debug)]
+pub(crate) struct Ran {
+    result: Result<Value, RtError>,
+    debit: u64,
+    work: u64,
+}
+
+/// One pure built-in call, as the debug-build work counters record it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuiltinWork {
+    pub name: &'static str,
+    /// The steps the call was charged (before, during and after running).
+    pub steps: u64,
+    /// The elementary operations its body counted.
+    pub work: u64,
+    /// Whether it ran on the pool.
+    pub offloaded: bool,
+}
+
+/// The output part of a `linear` charge: `⌈(n + m) / 64⌉ − ⌈n / 64⌉`.
+fn output_part(n: u64, m: u64) -> u64 {
+    n.saturating_add(m).div_ceil(64) - n.div_ceil(64)
+}
+
+/// Runs a pure built-in's body.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "everything the body's context holds"
+)]
+fn run_pure(
+    f: PureFn,
+    p: &Prepared,
+    heap: &Heap,
+    cancel: &CancelToken,
+    loc: Loc,
+    type_args: &[u32],
+    regex: Option<Arc<Compiled>>,
+    steps_left: u64,
+    args: &[Option<Value>],
+) -> Ran {
+    let mut cx = Cx {
+        p,
+        heap,
+        loc,
+        type_args,
+        cancel,
+        debit: 0,
+        regex,
+        steps_left,
+        work: 0,
+    };
+    let result = f(&mut cx, args);
+    Ran {
+        result,
+        debit: cx.debit,
+        work: cx.work,
+    }
+}
+
+/// Whether a value is large enough to run a built-in over it on the pool.
+fn large(v: &Value, t: crate::pool::Thresholds) -> bool {
+    match &v.repr {
+        Repr::Str(s) => s.as_str().len() as u64 >= t.text_bytes,
+        Repr::List(l) => l.len() >= t.elements,
+        Repr::Map(m) => m.len() >= t.elements,
+        Repr::Json(_) => v.weight() >= t.elements,
+        _ => false,
+    }
 }
 
 /// The evaluator's state for one evaluation.
@@ -379,6 +502,12 @@ pub struct Machine {
     outcome: Option<Outcome>,
     /// The effect being awaited.
     pending: Option<EffectRequest>,
+    /// Where large pure built-ins run, if anywhere but here.
+    offload: Option<PoolSession>,
+    /// The `re` call sites' compiled patterns.
+    re_cache: ReCache,
+    #[cfg(debug_assertions)]
+    work_log: Vec<BuiltinWork>,
 }
 
 /// Why an evaluation could not start.
@@ -448,6 +577,10 @@ impl Machine {
             cancel,
             outcome: None,
             pending: None,
+            offload: None,
+            re_cache: ReCache::default(),
+            #[cfg(debug_assertions)]
+            work_log: Vec::new(),
         };
         let mut given: Vec<Option<Value>> = args.into_iter().map(Some).collect();
         given.resize(m.p.funcs[func as usize].params.len(), None);
@@ -465,6 +598,25 @@ impl Machine {
     #[must_use]
     pub fn heap(&self) -> &Heap {
         &self.heap
+    }
+
+    /// Runs pure built-ins over large inputs on `session`'s pool (chapter 01): the same
+    /// results, labels and charges, while [`Machine::run`] returns [`Suspend::Wait`].
+    pub fn set_offload(&mut self, session: Option<PoolSession>) {
+        self.offload = session;
+    }
+
+    /// The evaluation's cancellation token.
+    #[must_use]
+    pub fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
+    }
+
+    /// Every pure built-in call so far, with its charge and its counted work (debug builds).
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn work_log(&self) -> &[BuiltinWork] {
+        &self.work_log
     }
 
     #[must_use]
@@ -548,6 +700,38 @@ impl Machine {
                     self.pending = Some(req.clone());
                     return Suspend::Effect(req);
                 }
+                Mode::Wait(w) => match w.job.try_take() {
+                    Some(Ok(ran)) => {
+                        let Waiting {
+                            builtin,
+                            n,
+                            pre,
+                            loc,
+                            ..
+                        } = *w;
+                        self.finish_pure(builtin, n, pre, loc, ran, true);
+                    }
+                    Some(Err(_)) => {
+                        self.invalid("a built-in failed on the pool", Labels::NONE, w.loc);
+                    }
+                    None if self.cancel.is_cancelled() => {
+                        // Stop waiting at once. The job runs to its end and keeps its place
+                        // in the session's cap, its steps and its heap until then.
+                        let e = raise(
+                            &self.p,
+                            Kind::Cancelled,
+                            "the evaluation was cancelled",
+                            Labels::NONE,
+                            w.loc,
+                        );
+                        self.mode = Mode::Unwind(Signal::Raise(e));
+                    }
+                    None => {
+                        let waiter = w.job.waiter();
+                        self.mode = Mode::Wait(w);
+                        return Suspend::Wait(waiter);
+                    }
+                },
                 Mode::Done => {
                     if let Some(o) = self.outcome.take() {
                         return Suspend::Done(o);
@@ -861,58 +1045,211 @@ impl Machine {
         let Some(builtin) = BUILTINS.get(b as usize).copied() else {
             return self.invalid("an unknown built-in", Labels::NONE, loc);
         };
-        let sizes = (builtin.size)(args);
-        // The part of the charge the arguments fix is debited before the built-in runs.
-        if let Err(e) = self.charge(steps_for(pre_work(builtin.class, sizes)), loc) {
+        // A `re` built-in's pattern is compiled (or found compiled) first: its program's size
+        // is part of the charge.
+        let regex = if builtin.regex() {
+            match self.compiled(args, loc) {
+                Ok(r) => r,
+                Err(e) => return self.fail(e),
+            }
+        } else {
+            None
+        };
+        // Sizing that reads the arguments is paid for before it reads them.
+        let scan = builtin.scan_chars(args).div_ceil(64);
+        if scan > 0
+            && let Err(e) = self.charge(scan, loc)
+        {
             return self.fail(e);
         }
-        let p = Arc::clone(&self.p);
-        let heap = self.heap.clone();
-        let cancel = self.cancel.clone();
-        let mut cx = Cx {
-            p: &p,
-            heap: &heap,
-            loc,
-            type_args,
-            debit: 0,
-            cancel: &cancel,
+        let sizes = builtin.sizes(args, regex.as_deref());
+        // The part of the charge the arguments fix is debited before the built-in runs.
+        let pre = steps_for(pre_work(builtin.class, sizes));
+        if let Err(e) = self.charge(pre, loc) {
+            return self.fail(e);
+        }
+        // So is its working memory, held until it finishes.
+        let Ok(scratch) = self.heap.alloc(sizes.scratch) else {
+            return self.fault_at(Fault::Heap, Labels::NONE, loc);
         };
         match builtin.imp {
-            Imp::Pure(f) => match f(&mut cx, args) {
-                // Work done before a refusal is paid for too.
-                Err(e) if cx.debit > 0 => match self.charge(cx.debit, loc) {
-                    Ok(()) => self.fail(e),
-                    Err(budget) => self.fail(budget),
-                },
-                Ok(v) => {
-                    if builtin.class == Class::Linear
-                        && let Err(e) = self.charge_output(sizes.n, output_size(&v), loc)
-                    {
-                        return self.fail(e);
-                    }
-                    self.mode = Mode::Ret(v);
-                }
-                Err(e) => self.fail(e),
-            },
-            Imp::Task(mk) => match mk(&mut cx, args) {
-                Ok(task) => {
-                    self.ctl.push(K::Task {
-                        task,
-                        class: builtin.class,
-                        n: sizes.n,
-                        loc,
+            Imp::Pure(f) => {
+                let steps_left = self.limits.steps.saturating_sub(self.steps);
+                if let Some(session) = self.offload_for(builtin, args, pre, steps_left) {
+                    let p = Arc::clone(&self.p);
+                    let heap = self.heap.clone();
+                    let cancel = self.cancel.clone();
+                    let args = args.to_vec();
+                    let type_args = type_args.to_vec();
+                    let job = session.submit(move || {
+                        // The arguments and the working memory stay charged until the job
+                        // ends, whether or not anyone still waits for it.
+                        let _scratch = scratch;
+                        if cancel.is_cancelled() {
+                            // Cancelled while it was queued: it ends without running.
+                            return Ran {
+                                result: Err(raise(
+                                    &p,
+                                    Kind::Cancelled,
+                                    "the evaluation was cancelled",
+                                    Labels::NONE,
+                                    loc,
+                                )),
+                                debit: 0,
+                                work: 0,
+                            };
+                        }
+                        run_pure(
+                            f, &p, &heap, &cancel, loc, &type_args, regex, steps_left, &args,
+                        )
                     });
-                    self.drive_task(Resume::Start);
+                    self.mode = Mode::Wait(Box::new(Waiting {
+                        job,
+                        builtin,
+                        n: sizes.n,
+                        pre,
+                        loc,
+                    }));
+                } else {
+                    let p = Arc::clone(&self.p);
+                    let heap = self.heap.clone();
+                    let cancel = self.cancel.clone();
+                    let ran = run_pure(
+                        f, &p, &heap, &cancel, loc, type_args, regex, steps_left, args,
+                    );
+                    drop(scratch);
+                    self.finish_pure(builtin, sizes.n, pre, loc, ran, false);
                 }
-                Err(e) => self.fail(e),
-            },
+            }
+            Imp::Task(mk) => {
+                drop(scratch);
+                let p = Arc::clone(&self.p);
+                let heap = self.heap.clone();
+                let cancel = self.cancel.clone();
+                let mut cx = Cx {
+                    p: &p,
+                    heap: &heap,
+                    loc,
+                    type_args,
+                    debit: 0,
+                    cancel: &cancel,
+                    regex: None,
+                    steps_left: 0,
+                    work: 0,
+                };
+                match mk(&mut cx, args) {
+                    Ok(task) => {
+                        self.ctl.push(K::Task {
+                            task,
+                            class: builtin.class,
+                            n: sizes.n,
+                            loc,
+                        });
+                        self.drive_task(Resume::Start);
+                    }
+                    Err(e) => self.fail(e),
+                }
+            }
         }
     }
 
-    /// The output part of a `linear` charge: `⌈(n + m) / 64⌉ − ⌈n / 64⌉`.
+    /// The session to run this call on, when there is a pool and the call is large: an
+    /// argument past the thresholds, a charge before running of more than
+    /// [`crate::pool::OFFLOAD_STEPS`] (a heavy pattern over a short text), or a built-in that
+    /// debits as it goes (an iteration over matches) when the steps left could pay for more.
+    fn offload_for(
+        &self,
+        builtin: Builtin,
+        args: &[Option<Value>],
+        pre: u64,
+        steps_left: u64,
+    ) -> Option<PoolSession> {
+        let session = self.offload.as_ref()?;
+        if !builtin.offloadable() {
+            return None;
+        }
+        let t = session.thresholds();
+        let heavy = pre > t.steps || (builtin.debits_as_it_goes() && steps_left > t.steps);
+        (heavy || args.iter().flatten().any(|v| large(v, t))).then(|| session.clone())
+    }
+
+    /// The compiled pattern of a `re` call (its first argument), from the call site's cache.
+    fn compiled(
+        &mut self,
+        args: &[Option<Value>],
+        loc: Loc,
+    ) -> Result<Option<Arc<Compiled>>, RtError> {
+        let Some(pattern) = args
+            .first()
+            .and_then(Option::as_ref)
+            .and_then(Value::as_text)
+        else {
+            return Ok(None);
+        };
+        self.re_cache
+            .get(loc, pattern, &self.heap)
+            .map(Some)
+            .map_err(|_| fault(&self.p, Fault::Heap, Labels::NONE, loc))
+    }
+
+    /// Charges what a pure built-in's return still costs (the steps it debited as it worked,
+    /// a `linear` built-in's output part) and returns or raises its result.
+    fn finish_pure(
+        &mut self,
+        builtin: Builtin,
+        n: u64,
+        pre: u64,
+        loc: Loc,
+        ran: Ran,
+        pooled: bool,
+    ) {
+        let Ran {
+            result,
+            debit,
+            work,
+        } = ran;
+        let mut charged = pre;
+        if debit > 0 {
+            if let Err(budget) = self.charge(debit, loc) {
+                return self.fail(budget);
+            }
+            charged += debit;
+        }
+        match result {
+            Ok(v) => {
+                if builtin.class == Class::Linear {
+                    let extra = output_part(n, output_size(&v));
+                    if let Err(e) = self.charge(extra, loc) {
+                        return self.fail(e);
+                    }
+                    charged += extra;
+                }
+                self.log_work(builtin.name, charged, work, pooled);
+                self.mode = Mode::Ret(v);
+            }
+            Err(e) => {
+                self.log_work(builtin.name, charged, work, pooled);
+                self.fail(e);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn log_work(&mut self, name: &'static str, steps: u64, work: u64, offloaded: bool) {
+        self.work_log.push(BuiltinWork {
+            name,
+            steps,
+            work,
+            offloaded,
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn log_work(&mut self, _: &'static str, _: u64, _: u64, _: bool) {}
+
+    /// The output part of a `linear` charge.
     fn charge_output(&mut self, n: u64, m: u64, loc: Loc) -> Result<(), RtError> {
-        let extra = n.saturating_add(m).div_ceil(64) - n.div_ceil(64);
-        self.charge(extra, loc)
+        self.charge(output_part(n, m), loc)
     }
 
     /// Resumes the task on top of the stack.
@@ -936,6 +1273,9 @@ impl Machine {
             type_args: &[],
             debit: 0,
             cancel: &cancel,
+            regex: None,
+            steps_left: 0,
+            work: 0,
         };
         match task.resume(&mut cx, input) {
             Ok(TaskStep::Call(f, args)) => {
@@ -967,7 +1307,16 @@ impl Machine {
                 }
                 self.mode = Mode::Ret(v);
             }
-            Err(e) => self.fail(e),
+            // A task that fails pays for the work it did, as a pure built-in does through
+            // `debit`: no task gets unpaid work by failing.
+            Err(e) => {
+                if cx.debit > 0
+                    && let Err(budget) = self.charge(cx.debit, loc)
+                {
+                    return self.fail(budget);
+                }
+                self.fail(e);
+            }
         }
     }
 

@@ -422,6 +422,7 @@ pub(super) fn mode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let mut order: Vec<u32> = (0..u32::try_from(items.len()).unwrap_or(u32::MAX)).collect();
     work::add(sort_work(n).saturating_mul(2));
     order.sort_unstable_by(|&a, &b| {
+        work::add(items[a as usize].weight().min(items[b as usize].weight()));
         cmp_natural(&items[a as usize], &items[b as usize]).then(a.cmp(&b))
     });
     // Runs of equal values; the best run has the most members, then the earliest first member.
