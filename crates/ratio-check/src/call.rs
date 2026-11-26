@@ -612,18 +612,19 @@ impl Checker<'_> {
                     self.private(origin, name, r);
                     TypeId::ERROR
                 }
-                None if let ModRef::Std(s) = m => {
-                    let full = format!("{}.{}", self.std[s].name, name.name);
-                    self.no_signature(origin, span, &full)
-                }
                 None => {
-                    self.report(
-                        origin,
-                        Code::NoMember,
-                        name.span,
-                        format!("the module defines no `{}`", name.name),
-                    );
-                    TypeId::ERROR
+                    if let ModRef::Std(s) = m {
+                        let full = format!("{}.{}", self.std[s].name, name.name);
+                        self.no_signature(origin, span, &full)
+                    } else {
+                        self.report(
+                            origin,
+                            Code::NoMember,
+                            name.span,
+                            format!("the module defines no `{}`", name.name),
+                        );
+                        TypeId::ERROR
+                    }
                 }
             },
         }
