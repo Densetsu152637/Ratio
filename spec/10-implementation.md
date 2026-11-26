@@ -355,7 +355,7 @@ The token reader's expectations (stage 1) are:
 //                                                 max_interpolation_depth or max_diagnostics)
 ```
 
-The header is every line at the top of the file that starts with `// `; each must be one of these
+The header is every line at the top of the file that starts with `//` and a space; each must be one of these
 directives (a misspelt one fails the file), and the first other line starts the program. Line
 numbers count the header. In the `tokens:` notation a keyword is `kw:let`, a contextual keyword
 `ctx:task`, an identifier `ident:x`, literals `int:1`, `qty:1500`, `float:0.5`, `dur:500000us`
