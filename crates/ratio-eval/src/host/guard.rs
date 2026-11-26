@@ -112,6 +112,39 @@ fn placeholder(labels: Labels) -> String {
     format!("[secret: source {}]", sources.join(", "))
 }
 
+/// `v` with every labelled part replaced by a placeholder naming its label sources: text
+/// leaves, list elements, record fields and tuple items are redacted one by one; a part whose
+/// own labels decided its shape (or any other labelled kind) is replaced whole.
+pub(crate) fn redact(v: &Value) -> Value {
+    use crate::value::Repr;
+    if crate::sink::check(v).is_ok() {
+        return v.clone();
+    }
+    if !v.labels().is_empty() {
+        return Value::text(&placeholder(v.scan()));
+    }
+    match &v.repr {
+        Repr::List(l) => {
+            let mut items = Vec::new();
+            l.for_each(&mut |x| items.push(redact(x)));
+            Value::list(items).unwrap_or_else(|_| Value::text(&placeholder(v.scan())))
+        }
+        Repr::Tuple(a) => Value::tuple(a.items.iter().map(redact).collect())
+            .unwrap_or_else(|_| Value::text(&placeholder(v.scan()))),
+        Repr::Record(r) => {
+            let fields: Vec<(&str, Value)> = r
+                .layout
+                .names
+                .iter()
+                .zip(r.items.iter())
+                .map(|(n, x)| (&**n, redact(x)))
+                .collect();
+            Value::record(fields).unwrap_or_else(|_| Value::text(&placeholder(v.scan())))
+        }
+        _ => Value::text(&placeholder(v.scan())),
+    }
+}
+
 /// The guard every evaluation wraps its host in.
 pub struct Guard {
     inner: Arc<dyn Host>,
@@ -219,10 +252,8 @@ impl Guard {
         if req.summary.is_labelled() {
             req.summary = Labelled::plain(placeholder(req.summary.labels));
         }
-        if let Some(d) = &req.detail
-            && let Err(l) = crate::sink::check(d)
-        {
-            req.detail = Some(Value::text(&placeholder(l)));
+        if let Some(d) = &req.detail {
+            req.detail = Some(redact(d));
         }
         req
     }
@@ -350,6 +381,14 @@ impl Host for Guard {
     ) -> HostFuture<Result<Value, HostError>> {
         if let Err(e) = Guard::check_operation(&mut op) {
             return refused(e);
+        }
+        // What the person is shown (`session.ask`'s questions) shows no secret to the host.
+        if super::bridge::from_user(&op.builtin) {
+            op.args = op
+                .args
+                .iter()
+                .map(|(n, v)| (Arc::clone(n), redact(v)))
+                .collect();
         }
         Arc::clone(&self.inner).operate(frame, cx, op)
     }

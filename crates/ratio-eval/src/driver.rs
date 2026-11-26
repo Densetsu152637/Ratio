@@ -860,7 +860,7 @@ impl Scheduler {
         // A drain call is bound by the scheduler too: failed at its declared bound.
         let bound = (class.class == CancelClass::Drain).then(|| {
             let max = class.max_running.unwrap_or(MAX_DRAIN).min(MAX_DRAIN);
-            self.host.timer(self.host.now() + max)
+            self.bound_timer(max)
         });
         let ledgers = req.frame.ledgers.clone();
         let mut f = Box::new(InFlight {
@@ -1013,13 +1013,34 @@ impl Scheduler {
         }
     }
 
+    /// Completes a call's reservations with everything they held.
+    fn complete_held(&self, f: &InFlight) {
+        let key = f.req.key();
+        for (i, r) in f.reservations.iter().enumerate() {
+            let _ = f.ledgers.complete(r, r.held);
+            self.record(Event::Complete {
+                key: sub_key(&key, i as u64),
+                actual: r.held.into(),
+            });
+        }
+    }
+
+    /// The scheduler's own bound `d` from now: the earlier of the host's timer and Ratio's
+    /// own clock, so a host whose timer never fires cannot lift it.
+    fn bound_timer(&self, d: Duration) -> HostFuture<()> {
+        let host = self.host.timer(self.host.now() + d);
+        let own = crate::host::sleep::Sleep::until(Instant::now() + d);
+        Box::pin(Earliest(host, Box::pin(own)))
+    }
+
     /// A call passed the scheduler's bound on it: a cancelled `abort` call the host did not
     /// acknowledge within the grace, or a `drain` call past its declared bound.
     fn expired(&mut self, id: TaskId, f: &InFlight) {
         f.token.cancel();
-        self.complete(f, Amounts::default());
         let loc = f.req.loc;
         if let Some(scope) = f.cancelling {
+            // Unacknowledged: the call may still be spending, so it is charged all it held.
+            self.complete_held(f);
             self.record(Event::Ended {
                 key: f.req.key().to_string(),
                 outcome: "unacknowledged".to_owned(),
@@ -1031,6 +1052,7 @@ impl Scheduler {
             }
             return;
         }
+        self.complete(f, Amounts::default());
         let e = HostError::Timeout {
             message: format!("`{}` was failed at its declared bound", f.req.builtin),
         };
@@ -1483,7 +1505,7 @@ impl Scheduler {
             CancelClass::Abort => {
                 // The scope returns once the host acknowledges, or after the grace.
                 f.cancelling = Some(scope);
-                f.bound = Some(self.host.timer(self.host.now() + self.abort_grace));
+                f.bound = Some(self.bound_timer(self.abort_grace));
                 self.tasks[id].state = State::Effect(f);
             }
             CancelClass::Drain => {
@@ -1605,7 +1627,7 @@ impl Scheduler {
             let _ = t.answered(&d.call.req, &a.result);
         }
         let digest = match &a.result {
-            Ok(v) => Some(crate::tape::value_digest(v).hex()),
+            Ok(v) => self.tape.as_ref().map(|t| t.value_digest(v)),
             Err(_) => None,
         };
         self.record(Event::Ended {
@@ -1694,6 +1716,21 @@ impl Scheduler {
             outcome,
             steps: m.steps(),
             heap_peak: m.heap().ledger().map_or(0, crate::heap::HeapLedger::peak),
+        }
+    }
+}
+
+/// Resolves when the first of two timers does.
+struct Earliest(HostFuture<()>, Pin<Box<crate::host::sleep::Sleep>>);
+
+impl Future for Earliest {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.0.as_mut().poll(cx).is_ready() || self.1.as_mut().poll(cx).is_ready() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
         }
     }
 }

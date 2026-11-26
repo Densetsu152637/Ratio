@@ -630,6 +630,9 @@ pub trait Tape: Send + Sync {
     fn check_ended(&self, key: &EffectKey) -> Result<(), String>;
     /// A divergence found by the tape host itself.
     fn divergence(&self) -> Option<String>;
+    /// The digest of a host value as this tape names it: keyed when the value is labelled
+    /// and the tape headless.
+    fn value_digest(&self, v: &Value) -> String;
     /// The turn ended: record or compare the reply digest.
     ///
     /// # Errors
@@ -1218,7 +1221,10 @@ impl Host for TapeHost {
         cx: EffectCtx,
         op: Operation,
     ) -> HostFuture<Result<Value, HostError>> {
-        if self.replaying() {
+        // The person's answers (`@user`: `session.ask`) are never taken from a tape: a crafted
+        // tape could forge trusted user text. A replay asks live, under its own session's
+        // rules (unattended, the host's recommendations).
+        if self.replaying() && !crate::host::bridge::from_user(&op.builtin) {
             let extra = self.inner.source_labels(&frame, &op.builtin, &op.args);
             return match self.answer(&cx, &op.builtin, &op.args, extra) {
                 Some(r) => self.replayed(r),
@@ -1267,7 +1273,10 @@ impl Host for TapeHost {
 
 /// The arguments an approval's request digest covers (the summary and detail).
 fn approval_args(req: &ApprovalRequest) -> Vec<(Arc<str>, Value)> {
-    let mut a = vec![(Arc::from("summary"), Value::text(&req.summary.value))];
+    let mut a = vec![(
+        Arc::from("summary"),
+        Value::text(&req.summary.value).with_labels(req.summary.labels),
+    )];
     if let Some(d) = &req.detail {
         a.push((Arc::from("detail"), d.clone()));
     }
@@ -1534,6 +1543,13 @@ impl Tape for TapeHost {
 
     fn divergence(&self) -> Option<String> {
         lock(&self.rep).diverged.clone()
+    }
+
+    fn value_digest(&self, v: &Value) -> String {
+        let text = codec::encode(v, false)
+            .map(|j| j.text())
+            .unwrap_or_default();
+        self.digest(&text, crate::sink::check(v).is_err())
     }
 
     fn turn_end(&self, outcome: &Outcome, program: &Prepared) -> Result<(), String> {
@@ -1890,7 +1906,11 @@ fn verify(l: &Loaded) -> Result<(), String> {
                                 .and_then(|j| codec::decode(&j).ok()),
                             Res::Error(_) => None,
                         };
-                        if v.is_none_or(|v| value_digest(&v).hex() != *d) {
+                        // A keyed digest (a labelled answer of a headless tape) can only be
+                        // checked with the session's key; its body is redacted anyway.
+                        let keyed = d.starts_with("k:")
+                            && matches!(&e.res, Res::Blob { name, .. } if name.starts_with("r:"));
+                        if !keyed && v.is_none_or(|v| value_digest(&v).hex() != *d) {
                             return Err(format!(
                                 "{}: the drained call `{key}` does not match its response",
                                 at()
@@ -1929,9 +1949,12 @@ fn verify(l: &Loaded) -> Result<(), String> {
         return Err(format!("`{key}` was admitted but never completed"));
     }
     for ev in &l.events {
+        // The further tool calls of one effect (`key~i`, `dispatch_all`) share its answer
+        // or outcome.
+        let base = |k: &str| k.split_once('~').map_or(k, |(b, _)| b).to_owned();
         if let Event::Admit { key, .. } = ev
-            && !l.entries.contains_key(key)
-            && !l.ended.contains_key(key)
+            && !l.entries.contains_key(&base(key))
+            && !l.ended.contains_key(&base(key))
         {
             return Err(format!("`{key}` has neither an answer nor an outcome"));
         }

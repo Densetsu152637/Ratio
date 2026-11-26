@@ -19,12 +19,16 @@ use crate::value::Value;
 
 /// What the checker's table says about a built-in.
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent attributes")]
 pub(crate) struct Traits {
     pub params: Vec<Arc<str>>,
     pub effects: Vec<String>,
     pub pure: bool,
     pub local: bool,
     pub secrecy_sink: bool,
+    /// `@user`: its answer is the person's (trusted `UserText`, a decision), so it is never
+    /// answered from a tape.
+    pub user: bool,
 }
 
 /// The checker's table, by built-in name.
@@ -40,6 +44,7 @@ fn table() -> &'static HashMap<String, Traits> {
                     pure: r.pure,
                     local: r.local,
                     secrecy_sink: r.secrecy_sink,
+                    user: r.user,
                 };
                 (r.name, t)
             })
@@ -50,6 +55,11 @@ fn table() -> &'static HashMap<String, Traits> {
 /// The table's traits of `builtin`, if it has an entry.
 pub(crate) fn traits(builtin: &str) -> Option<&'static Traits> {
     table().get(builtin)
+}
+
+/// Whether the table marks `builtin` `@user`: the person answers it.
+pub(crate) fn from_user(builtin: &str) -> bool {
+    traits(builtin).is_some_and(|t| t.user)
 }
 
 /// The arguments given (defaults left out), by parameter name.

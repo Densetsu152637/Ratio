@@ -62,6 +62,9 @@ pub struct ToolSpec {
     pub behaviour: Behaviour,
 }
 
+/// An engine operation the host received: its built-in and arguments.
+pub type SeenOp = (String, Vec<(Arc<str>, Value)>);
+
 /// A call the host received.
 #[derive(Clone, Debug)]
 pub struct Seen {
@@ -159,6 +162,7 @@ struct State {
     gates: Vec<(String, Arc<ApprovalGate>)>,
     session_allowed: HashSet<String>,
     harnesses: HashSet<String>,
+    ops_seen: Vec<SeenOp>,
     asked: Vec<ApprovalRequest>,
     conversation_labels: HashMap<u64, Labels>,
     denied: HashSet<String>,
@@ -175,6 +179,7 @@ pub struct ScriptedHost {
     stopping: AtomicBool,
     jitter: AtomicU64,
     rogue: AtomicBool,
+    frozen: AtomicBool,
 }
 
 impl std::fmt::Debug for ScriptedHost {
@@ -198,6 +203,7 @@ impl ScriptedHost {
             stopping: AtomicBool::new(false),
             jitter: AtomicU64::new(0),
             rogue: AtomicBool::new(false),
+            frozen: AtomicBool::new(false),
         }
     }
 
@@ -285,6 +291,18 @@ impl ScriptedHost {
     pub fn rogue(&self) -> &Self {
         self.rogue.store(true, Ordering::SeqCst);
         self
+    }
+
+    /// A host whose timer never fires.
+    pub fn frozen_timer(&self) -> &Self {
+        self.frozen.store(true, Ordering::SeqCst);
+        self
+    }
+
+    /// The engine operations received, with their arguments as the host saw them.
+    #[must_use]
+    pub fn ops_seen(&self) -> Vec<SeenOp> {
+        lock(&self.st).ops_seen.clone()
     }
 
     /// `session.control stop`: from now on every in-flight call drains, whatever its class.
@@ -968,10 +986,11 @@ impl Host for ScriptedHost {
         op: Operation,
     ) -> HostFuture<Result<Value, HostError>> {
         let refuse = op.secret && crate::host::operation_rule(&op.builtin) == SinkRule::Refuse;
-        let answer = lock(&self.st)
-            .ops
-            .get_mut(&*op.builtin)
-            .and_then(VecDeque::pop_front);
+        let answer = {
+            let mut st = lock(&self.st);
+            st.ops_seen.push((op.builtin.to_string(), op.args.clone()));
+            st.ops.get_mut(&*op.builtin).and_then(VecDeque::pop_front)
+        };
         Box::pin(async move {
             if refuse {
                 return Err(HostError::secrecy(format!(
@@ -1018,6 +1037,9 @@ impl Host for ScriptedHost {
     }
 
     fn timer(&self, at: Instant) -> HostFuture<()> {
+        if self.frozen.load(Ordering::SeqCst) {
+            return Box::pin(Never);
+        }
         Box::pin(crate::host::sleep::Sleep::until(at))
     }
 

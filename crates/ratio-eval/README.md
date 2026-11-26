@@ -317,7 +317,8 @@ a model whose card does not say `local` may receive no secret (a prompt's sectio
 so a secret reaching a hosted model through a prompt's `data` is refused at run time), and
 neither may a call on a labelled conversation (`conversation_labels`; an unreadable one counts
 as labelled). Logs, traces and streams pass with the flag set, for the host to redact. The
-labelled parts of an approval's summary and detail reach the host as `[secret: source N]`. It
+labelled parts of an approval's summary and detail, and of a `@user` built-in's arguments (`session.ask`'s
+questions), reach the host as `[secret: source N]`. It
 also repeats `frame::check_within` on every frame it forwards.
 
 **The scheduler** ([`src/driver.rs`](src/driver.rs)) is the `Evaluation` future. `par { … }`,
@@ -346,8 +347,9 @@ once. The fence (`fork::Fence`) then holds that frame's close (the machine repor
 its actual charge. The scheduler bounds calls itself, whatever the host does: a `drain` call
 (an engine write operation too) is failed at its declared bound (at most 3600 s; an
 outstanding one releases the fence there, recorded `failed`), and a cancelled `abort` call the
-host has not acknowledged within `ABORT_GRACE` (30 s) is recorded `unacknowledged` and its
-scope returns. Effects in `defer` blocks are not cancelled. `with timeout d { … } else { … }`
+host has not acknowledged within `ABORT_GRACE` (30 s) is recorded `unacknowledged`, charged
+all its reservation held, and its scope returns. Each bound is the earlier of the host's timer and
+Ratio's own clock, so a host whose timer never fires cannot lift it. Effects in `defer` blocks are not cancelled. `with timeout d { … } else { … }`
 and `timeout(d, f)` are scopes of their machine (no branch element on the path): the scheduler
 sets the deadline when it first sees the scope, arms the host's `timer`, and fires the scope by
 cancelling it, which unwinds to it (running `defer` blocks) and becomes the `else` block or
@@ -391,7 +393,7 @@ end line with the reply digest. The events: frame opens with their caps, admissi
 reservation and the inputs of their arithmetic, waits, refusals, completions, each branch's step
 total, cancellation points `(effects, steps)`, how cancelled calls ended (a drained call's
 discarded answer is its entry), re-parentings, race winners, failing `par` branches, fired
-timeouts and branches that never started. Approvals are never answered from a tape: a replay asks the user live, under its own
+timeouts and branches that never started. Approvals and every `@user` built-in (`session.ask`) are never answered from a tape: a replay asks the user live, under its own
 session's rules, and a declassification's request digest covers a keyed digest of what was
 declassified. Recording stops at the size limit (64 MiB, blobs and held events counted); the
 tape then says it was truncated and replay refuses it. `TapeHost::record` writes it; `TapeHost::replay`

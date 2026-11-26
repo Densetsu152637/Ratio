@@ -81,8 +81,9 @@ impl Future for Sleep {
                 *shared.thread.lock().unwrap_or_else(PoisonError::into_inner) =
                     Some(h.thread().clone());
             }
-            // No thread: poll again (busy, but correct).
-            Err(_) => cx.waker().wake_by_ref(),
+            // No thread to keep time: the deadline counts as passed at once, so a bound
+            // fails its call rather than never firing.
+            Err(_) => return Poll::Ready(()),
         }
         self.shared = Some(shared);
         Poll::Pending

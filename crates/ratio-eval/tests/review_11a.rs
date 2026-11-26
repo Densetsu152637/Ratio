@@ -79,6 +79,10 @@ fn raced_write() -> Str { race { { tools.write_file("/w/a", "x"); "w" }; "fast" 
 fn lone_write() -> Str { tools.write_file("/w/a", "x"); "w" }
 fn raced_read() -> Str { race { { tools.read_file("slow"); "r" }; "fast" } }
 fn approval(s: Str) -> Bool { session.request_approval(s, detail: s) }
+fn asked(s: Str) -> [UserText] {
+  session.ask([{ question: s, options: ["yes", "no"], recommended: "no" }])
+}
+fn drained_secret(s: Str) -> Str { race { { tools.write_file("/w/.env", s); "w" }; "fast" } }
 "#;
 
 /// F1: `model.generate_as` is a model call: the guard refuses a secret before any host
@@ -464,4 +468,161 @@ fn a_labelled_conversation_reaches_no_hosted_model() {
         })
     ));
     assert!(h.model_calls().is_empty());
+}
+
+/// R1: a replay never answers a `@user` built-in from its tape: a forged `session.ask`
+/// answer is not believed; the person is asked live.
+#[test]
+fn r1_user_answers_are_never_taken_from_a_tape() {
+    let p = support::prepared(SRC);
+    let answer = |t: &str| Value::list(vec![Value::text(t)]).unwrap();
+    let inner = scripted();
+    inner.op("session.ask", Ok(answer("recorded")));
+    let s = inner.session();
+    let t = Arc::new(TapeHost::record(
+        dynh(&inner),
+        RecordOptions::new([4; 32]).unwrap(),
+    ));
+    let f = run(
+        &p,
+        "asked",
+        vec![Value::text("go?")],
+        Arc::clone(&t) as Arc<dyn Host>,
+        &s,
+        Some(Arc::clone(&t)),
+        None,
+    );
+    assert_eq!(shown(&p, &f), "[\"recorded\"]");
+    // The tape is forged to answer for the user.
+    let forged = t.tape().replace("recorded", "FORGED");
+    let live = scripted();
+    live.op("session.ask", Ok(answer("live")));
+    let s = live.session();
+    let r = Arc::new(TapeHost::replay(dynh(&live), &forged, ReplayOptions::default()).unwrap());
+    let f = run(
+        &p,
+        "asked",
+        vec![Value::text("go?")],
+        Arc::clone(&r) as Arc<dyn Host>,
+        &s,
+        Some(r),
+        None,
+    );
+    let out = shown(&p, &f);
+    assert!(!out.contains("FORGED"), "{out}");
+    assert_eq!(live.ops_seen().len(), 1, "the person was asked live");
+}
+
+/// Notes: a question's labelled text reaches the host redacted.
+#[test]
+fn questions_show_no_secret_to_the_host() {
+    let p = support::prepared(SRC);
+    let h = scripted();
+    h.op(
+        "session.ask",
+        Ok(Value::list(vec![Value::text("no")]).unwrap()),
+    );
+    let s = h.session();
+    let f = run(
+        &p,
+        "asked",
+        vec![support::secret("is 42 the key?")],
+        dynh(&h),
+        &s,
+        None,
+        None,
+    );
+    assert_eq!(shown(&p, &f), "[\"no\"]");
+    let tape_free = format!("{:?}", h.ops_seen());
+    assert!(!tape_free.contains("42"), "{tape_free}");
+    assert!(tape_free.contains("[secret: source 0]"), "{tape_free}");
+}
+
+/// R2: no plain digest over labelled data in a headless tape: a drained call's discarded
+/// answer and an approval's summary are digested with the session's key.
+#[test]
+fn r2_no_unkeyed_digest_over_labelled_data_in_a_headless_tape() {
+    let p = support::prepared(SRC);
+    let inner = scripted();
+    inner
+        .secret_path("*.env")
+        .tool(
+            "write_file",
+            ToolClass::drain(Duration::from_secs(10)),
+            Behaviour::After(
+                Duration::from_millis(100),
+                Value::text("written").with_labels(Labels::source(0)),
+            ),
+        )
+        .approval(true);
+    let s = inner.session();
+    let t = Arc::new(TapeHost::record(
+        dynh(&inner),
+        RecordOptions::new([8; 32]).unwrap().headless(true),
+    ));
+    let f = run(
+        &p,
+        "drained_secret",
+        vec![support::secret("KEY=1")],
+        Arc::clone(&t) as Arc<dyn Host>,
+        &s,
+        Some(Arc::clone(&t)),
+        None,
+    );
+    assert_eq!(shown(&p, &f), "\"fast\"");
+    let f = run(
+        &p,
+        "approval",
+        vec![support::secret("KEY=1")],
+        Arc::clone(&t) as Arc<dyn Host>,
+        &s,
+        Some(Arc::clone(&t)),
+        None,
+    );
+    assert_eq!(shown(&p, &f), "true");
+    let text = t.tape();
+    let drained = text
+        .lines()
+        .find(|l| l.contains("\"outcome\":\"drained\""))
+        .expect("drained");
+    assert!(drained.contains("\"digest\":\"k:"), "{drained}");
+    for l in text.lines().filter(|l| l.contains("\"q\":")) {
+        assert!(l.contains("\"q\":\"k:"), "an unkeyed request digest: {l}");
+    }
+}
+
+/// R3: the scheduler's bounds hold when the host's timer never fires.
+#[test]
+fn r3_bounds_hold_against_a_host_whose_timer_never_fires() {
+    let p = support::prepared(SRC);
+    let inner = scripted();
+    inner
+        .tool(
+            "write_file",
+            ToolClass::drain(Duration::from_millis(200)),
+            Behaviour::Never,
+        )
+        .rogue()
+        .frozen_timer();
+    let s = inner.session();
+    let start = Instant::now();
+    let f = run(&p, "lone_write", Vec::new(), dynh(&inner), &s, None, None);
+    assert_eq!(shown(&p, &f), "raise Timeout ");
+    assert!(start.elapsed() < Duration::from_secs(5));
+}
+
+/// R4: the further tool calls of one effect (`key~i`, `dispatch_all`) share its answer.
+#[test]
+fn r4_sub_call_admissions_share_their_effects_answer() {
+    let held = r#"{"tokens":0,"cost":0,"steps":0,"model_calls":0,"tool_calls":1}"#;
+    let header = r#"{"tape":1,"ratio":"0.1.0","ir":1,"mode":"default","headless":false,"seed":"0000000000000000000000000000000000000000000000000000000000000000","root":"turn","caps":{},"width":16}"#;
+    let text = format!(
+        "{header}\n{{\"e\":\"k\",\"q\":\"x\",\"v\":[\"u\"]}}\n\
+         {{\"seq\":1,\"ev\":\"admit\",\"key\":\"k\",\"frame\":\"turn\",\"held\":{held},\"max\":null}}\n\
+         {{\"seq\":2,\"ev\":\"admit\",\"key\":\"k~1\",\"frame\":\"turn\",\"held\":{held},\"max\":null}}\n\
+         {{\"seq\":3,\"ev\":\"complete\",\"key\":\"k\",\"actual\":{held}}}\n\
+         {{\"seq\":4,\"ev\":\"complete\",\"key\":\"k~1\",\"actual\":{held}}}\n{{\"end\":\"x\"}}\n"
+    );
+    let t = TapeHost::replay(dynh(&scripted()), &text, ReplayOptions::default()).unwrap();
+    assert_eq!(t.divergence(), None);
 }
