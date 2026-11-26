@@ -1,11 +1,29 @@
 # The Ratio specification
 
-Version: draft 0.15 (2026-11-29). Status: design; stages 1 to 7 and 10 of the implementation
+Version: draft 0.16 (2026-11-26). Status: design; stages 1 to 8 and 10 of the implementation
 (the token reader, the parser, modules and names, the type checker, schemas and taint, the IR
-and core interpreter, the `text` and `re` built-ins with the offload pool, and frames) are built
-in this repository.
+and core interpreter, the `text` and `re` built-ins with the offload pool, the `json`, `list`
+and `map` built-ins, and frames) are built in this repository.
 
-**Changes in draft 0.15.** Errata from stage 10, frames. No grammar change.
+**Changes in draft 0.16.** Errata from stage 8, Data II. No grammar change.
+
+- `json.validate` and `json.patch` are `product`, not `linear`: validation visits pairs of
+  instance and schema nodes, and each patch operation may copy a path through the document
+  (chapter 06, `data`).
+- `list.sort`, `list.unique` and `map.from` compare whole elements, so their `nlogn` work is the
+  elements' weight times ⌈log2(n + 1)⌉; the keyed ones add their keys' weight (chapter 06).
+- `JsonType` and `Violation` are defined among the shared types (chapter 06).
+- `list.insert` takes an index in `0..=len` and `list.remove_at` one in `0..len`, a negative
+  index being out of range; `list.window` needs a size of at least 1 (chapter 06).
+- `json.stringify` writes a record's keys in field-name order and returns `Untrusted<Str>`;
+  `list.unique`, `group_by` and `map.from` take keys equal by natural order (chapter 06).
+- Chapter 10 says a loop of N pushes or sets is charged *at most* O(N log N) steps.
+- A schema `pattern` is read as ECMAScript reads it within the `@pattern` subset, and the forms
+  the two syntaxes read differently are refused (chapter 03; chapter 06, `json.validate`).
+- Walks over a value fit a small stack in release builds; the JSON walks of `data` in every
+  build (chapter 07).
+
+**Changes in draft 0.15** (kept for reference). Errata from stage 10, frames. No grammar change.
 
 - A harness's parameter defaults and declared configuration run before its frame opens, so both
   are effect-free, with no calls of function values; every bound parameter, configuration value

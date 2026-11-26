@@ -1,0 +1,14 @@
+// builtin: map.from
+// case main: value {"a": 3, "b": 2}
+// case empty: value {}
+// case int_keys: value {"1": "x", "2": "y"}
+// labels pairs(xs): [7] ; inner 0
+// labels keyed(k): "a"
+fn main() -> Map<Str, Int> { map.from([("a", 1), ("b", 2), ("a", 3)]) }
+fn empty() -> Map<Str, Int> {
+  let xs: [(Str, Int)] = []
+  map.from(xs)
+}
+fn int_keys() -> Map<Int, Str> { map.from([(2, "y"), (1, "x")]) }
+fn pairs(xs: [Int]) -> Map<Str, Int> { map.from(xs.map(|x| ("k", x))) }
+fn keyed(k: Str) -> Map<Str, Int> { map.from([(k, 1)]) }

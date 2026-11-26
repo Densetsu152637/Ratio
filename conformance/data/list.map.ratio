@@ -1,0 +1,13 @@
+// builtin: list.map, list.map_indexed
+// case main: value [[2, 4, 6], [10, 21, 32]]
+// case raises: error User
+// case indexed_raises: error User
+// labels map(xs): [1, 2] ; inner 0
+// labels indexed(xs): [5, 6] ; inner 0
+fn main() -> ([Int], [Int]) {
+  ([1, 2, 3].map(|x| x * 2), [10, 20, 30].map_indexed(|i, x| x + i))
+}
+fn raises() -> [Int] { [1].map(|x| raise fail("boom", "map")) }
+fn indexed_raises() -> [Int] { [1].map_indexed(|i, x| raise fail("boom", "indexed")) }
+fn map(xs: [Int]) -> [Int] { list.map(xs, |x| x + 1) }
+fn indexed(xs: [Int]) -> [Int] { list.map_indexed(xs, |i, x| x + i) }

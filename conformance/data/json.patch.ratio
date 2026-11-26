@@ -1,0 +1,51 @@
+// builtin: json.patch
+// case rfc6902: value [{"foo": "bar", "baz": "qux"}, {"foo": ["bar", "qux", "baz"]}, {"foo": "bar"}, {"foo": ["bar", "baz"]}, {"baz": "boo", "foo": "bar"}, {"foo": {"bar": "baz"}, "qux": {"corge": "grault", "thud": "fred"}}, {"foo": ["all", "cows", "eat", "grass"]}, {"foo": {"bar": "baz", "waldo": "fred"}, "qux": {"corge": "grault", "thud": "fred"}}, {"baz": "qux", "foo": ["bar", "baz"]}, {"foo": ["bar", "baz", "qux"]}]
+// case empty: value {"a": 1}
+// case test_fails: error Invalid
+// case remove_missing: error Invalid
+// case replace_missing: error Invalid
+// case add_missing_parent: error Invalid
+// case move_into_itself: error Invalid
+// case unknown_op: error Invalid
+// case not_an_array: error Invalid
+// case no_path: error Invalid
+// case array_past_end: error Invalid
+// case atomic: value {"a": 1}
+// labels patch(n): 5
+// labels patch_ops(p): "/a"
+// labels test_value(n): 5
+fn p(doc: Str, ops: Str) -> Json { json.patch(json.parse(doc), json.parse(ops)) }
+fn rfc6902() -> [Json] {
+  [
+    p(r"""{"foo":"bar"} """, r"""[{"op":"add","path":"/baz","value":"qux"}] """),
+    p(r"""{"foo":["bar","baz"]} """, r"""[{"op":"add","path":"/foo/1","value":"qux"}] """),
+    p(r"""{"baz":"qux","foo":"bar"} """, r"""[{"op":"remove","path":"/baz"}] """),
+    p(r"""{"foo":["bar","qux","baz"]} """, r"""[{"op":"remove","path":"/foo/1"}] """),
+    p(r"""{"baz":"qux","foo":"bar"} """, r"""[{"op":"replace","path":"/baz","value":"boo"}] """),
+    p(r"""{"foo":{"bar":"baz","waldo":"fred"},"qux":{"corge":"grault"}} """, r"""[{"op":"move","from":"/foo/waldo","path":"/qux/thud"}] """),
+    p(r"""{"foo":["all","grass","cows","eat"]} """, r"""[{"op":"move","from":"/foo/1","path":"/foo/3"}] """),
+    p(r"""{"foo":{"bar":"baz","waldo":"fred"},"qux":{"corge":"grault"}} """, r"""[{"op":"copy","from":"/foo/waldo","path":"/qux/thud"}] """),
+    p(r"""{"baz":"qux","foo":["bar"]} """, r"""[{"op":"test","path":"/baz","value":"qux"},{"op":"add","path":"/foo/-","value":"baz"}] """),
+    p(r"""{"foo":["bar","baz"]} """, r"""[{"op":"add","path":"/foo/-","value":"qux"}] """),
+  ]
+}
+fn empty() -> Json { p(r"""{"a": 1} """, "[]") }
+fn test_fails() -> Json { p(r"""{"baz":"qux"} """, r"""[{"op":"test","path":"/baz","value":"bar"}] """) }
+fn remove_missing() -> Json { p(r"""{"a":1} """, r"""[{"op":"remove","path":"/b"}] """) }
+fn replace_missing() -> Json { p(r"""{"a":1} """, r"""[{"op":"replace","path":"/b","value":2}] """) }
+fn add_missing_parent() -> Json { p(r"""{"a":1} """, r"""[{"op":"add","path":"/b/c","value":2}] """) }
+fn move_into_itself() -> Json { p(r"""{"a":{"b":1}} """, r"""[{"op":"move","from":"/a","path":"/a/c"}] """) }
+fn unknown_op() -> Json { p(r"""{"a":1} """, r"""[{"op":"frob","path":"/a"}] """) }
+fn not_an_array() -> Json { p(r"""{"a":1} """, r"""{"op":"remove","path":"/a"} """) }
+fn no_path() -> Json { p(r"""{"a":1} """, r"""[{"op":"remove"}] """) }
+fn array_past_end() -> Json { p("[1]", r"""[{"op":"add","path":"/3","value":2}] """) }
+fn atomic() -> Json {
+  try {
+    p(r"""{"a":1} """, r"""[{"op":"add","path":"/b","value":2},{"op":"remove","path":"/zz"}] """)
+  } catch e {
+    json.parse(r"""{"a": 1} """)
+  }
+}
+fn patch(n: Int) -> Json { json.patch(json.parse(r"""{"a": 1} """), json.parse(r"""[{"op":"add","path":"/b","value":2}] """)).set("/n", json.encode(n)) }
+fn patch_ops(p: Str) -> Json { json.patch(json.parse(r"""{"a": 1} """), json.encode([map.from([("op", "remove"), ("path", p)])])) }
+fn test_value(n: Int) -> Json { json.patch(json.parse(r"""{"a": 1} """), json.set(json.parse(r"""[{"op":"test","path":"/a"}] """), "/0/value", json.encode(n))) }

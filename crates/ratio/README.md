@@ -22,7 +22,7 @@ type's JSON Schema and type digest. Stage 6 adds the Core IR of
 `ratio::interp` (`ratio::prepare`, `ratio::evaluate`, `ratio::Value` with its secrecy `Labels`,
 `ratio::Limits`). Stage 7 adds the `text` and `re` built-ins and the offload pool
 (`ratio::interp::Pool`, `Evaluation::offload_to`). It also names the specification draft
-(`SPEC_DRAFT`) and the stage reached (`STAGE`, 7). The `Host` trait and the rest of the standard library
+(`SPEC_DRAFT`) and the stage reached (`STAGE`, 10). The `Host` trait and the rest of the standard library
 join it in later stages; chapter 10 of the
 [specification](../../spec/10-implementation.md#the-public-api) defines the API and its versions.
 

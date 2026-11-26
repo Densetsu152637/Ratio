@@ -1,0 +1,14 @@
+// builtin: list.index_of, list.contains
+// case main: value [1, null, true, false]
+// case operator: value true
+// labels index_of(xs, x): [5, 6, 7] | 6 ; inner 0
+// labels contains(xs, x): [5, 6, 7] | 6 ; inner 0
+// labels absent(xs, x): [5, 6, 7] | 9 ; inner 0
+fn main() -> (Int?, Int?, Bool, Bool) {
+  let xs = [5, 6, 7]
+  (list.index_of(xs, 6), xs.index_of(9), list.contains(xs, 7), xs.contains(0))
+}
+fn operator() -> Bool { 6 in [5, 6] }
+fn index_of(xs: [Int], x: Int) -> Int? { list.index_of(xs, x) }
+fn contains(xs: [Int], x: Int) -> Bool { list.contains(xs, x) }
+fn absent(xs: [Int], x: Int) -> Int? { list.index_of(xs, x) }

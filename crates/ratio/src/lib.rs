@@ -63,7 +63,7 @@ pub use ratio_eval::{evaluate_in, frame};
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.15";
+pub const SPEC_DRAFT: &str = "0.16";
 
 /// The implementation stage reached (chapter 10's table): frames (stage 10), with stages 1 to 7
 /// built too (8 and 9 are in progress).

@@ -126,3 +126,7 @@ enum ErrorKind {
   User { tag: Str },
 }
 enum BudgetKind { tokens, cost, steps, wall, model_calls, tool_calls, depth, call_depth, heap, width }
+
+// JSON (chapter 06, data; stage 8). Both are provisional: the chapter names them without a shape.
+enum JsonType { null, bool, number, string, array, object }
+type Violation = { pointer: Untrusted<Str>, message: Untrusted<Str> }

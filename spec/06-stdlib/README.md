@@ -142,6 +142,8 @@ enum StepStatus { pending, in_progress, done, blocked, skipped }
 
 // Results and stopping
 enum Result<T> { Ok { value: T }, Err { error: Error } }
+enum JsonType { null, bool, number, string, array, object }          // json.type_of
+type Violation = { pointer: Untrusted<Str>, message: Untrusted<Str> }   // json.validate: where, and why
 type Scored<T> = { value: T, score: Float, reasons?: Untrusted<Str>, samples?: Int }   // samples: set by think.best_of
 enum Fold<A> { Next { acc: A }, Stop { acc: A } }                  // par_fold (control)
 enum FoldOrder { index, completion }

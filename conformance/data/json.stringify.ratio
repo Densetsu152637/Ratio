@@ -1,0 +1,36 @@
+// builtin: json.stringify
+// case compact: value "{\"n\":2,\"name\":\"a\",\"tags\":[\"x\",\"y\"]}"
+// case absent_optional: value "{\"n\":2,\"name\":\"a\",\"tags\":[]}"
+// case pretty: value "{\n  \"n\": 2,\n  \"name\": \"a\",\n  \"tags\": [\n    \"x\"\n  ]\n}"
+// case pretty_empty: value "{\n  \"a\": []\n}"
+// case scalars: value ["1", "1.5", "\"t\"", "true", "null", "\"5s\"", "\"$1.5\"", "[1,2]", "{\"a\":1}"]
+// case json_value: value "{\"k\":[1,{\"z\":null}]}"
+// case not_finite: error Invalid
+// case too_long: error Invalid
+// labels compact_of(n, pretty): 5 | false
+type Item = { name: Str, n: Int, tags: [Str], note?: Str }
+
+fn compact() -> Untrusted<Str> { json.stringify({ name: "a", n: 2, tags: ["x", "y"] }) }
+fn absent_optional() -> Untrusted<Str> {
+  let it: Item = { name: "a", n: 2, tags: [] }
+  json.stringify(it)
+}
+fn pretty() -> Untrusted<Str> {
+  let it: Item = { name: "a", n: 2, tags: ["x"] }
+  json.stringify(it, true)
+}
+fn pretty_empty() -> Untrusted<Str> {
+  let blank: [Int] = []
+  json.stringify(map.from([("a", blank)]), true)
+}
+fn scalars() -> [Untrusted<Str>] {
+  let m: Map<Str, Int> = { a: 1 }
+  [json.stringify(1), json.stringify(1.5), json.stringify("t"), json.stringify(true), json.stringify(json.parse("null")),json.stringify(5s), json.stringify($1.50), json.stringify([1, 2]), json.stringify(m)]
+}
+fn json_value() -> Untrusted<Str> { json.stringify(json.parse(r"""{"k": [1, {"z": null}]} """)) }
+fn not_finite() -> Untrusted<Str> { json.stringify(1.0e308 * 10.0) }
+fn too_long() -> Untrusted<Str> {
+  let big = text.repeat("x", 9000000)
+  json.stringify([big, big])
+}
+fn compact_of(n: Int, pretty: Bool) -> Untrusted<Str> { json.stringify(n, pretty) }

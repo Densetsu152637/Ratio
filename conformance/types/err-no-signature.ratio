@@ -2,7 +2,7 @@
 // expect: check-error C0034 at 10:11
 
 fn f(xs: [Int], ys: [Int]) -> Int {
-  let pairs = list.zip(xs, ys)
+  let pairs = rand.shuffle(xs)
   1
 }
 

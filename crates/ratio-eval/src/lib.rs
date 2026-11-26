@@ -36,6 +36,7 @@ mod error;
 pub mod frame;
 mod heap;
 mod json;
+mod jsonedit;
 mod labels;
 mod machine;
 #[cfg(test)]
@@ -47,11 +48,12 @@ mod pool;
 mod prepare;
 #[cfg(test)]
 mod properties;
-
 mod re;
+mod schema;
 pub mod sink;
 mod stack;
 mod value;
+pub mod work;
 
 use std::sync::Arc;
 

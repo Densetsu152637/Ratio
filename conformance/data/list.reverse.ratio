@@ -1,0 +1,8 @@
+// builtin: list.reverse
+// case main: value [[3, 2, 1], []]
+// labels reverse(xs): [1, 2, 3] ; inner 0
+fn main() -> ([Int], [Int]) {
+  let empty: [Int] = []
+  (list.reverse([1, 2, 3]), empty.reverse())
+}
+fn reverse(xs: [Int]) -> [Int] { list.reverse(xs) }

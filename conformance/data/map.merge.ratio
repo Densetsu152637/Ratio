@@ -1,0 +1,24 @@
+// builtin: map.merge
+// case main: value {"a": 1, "b": 20, "c": 3, "d": 40}
+// case with_empty: value [{"a": 1}, {"a": 1}]
+// case persistent: value [{"a": 1, "b": 2}, {"b": 20}]
+// labels merge(v, w): 1 | 2
+// labels merge_inner(xs): [7] ; inner 0
+fn main() -> Map<Str, Int> {
+  let a: Map<Str, Int> = { a: 1, b: 2, c: 3 }
+  let b: Map<Str, Int> = { b: 20, d: 40 }
+  map.merge(a, b)
+}
+fn with_empty() -> (Map<Str, Int>, Map<Str, Int>) {
+  let a: Map<Str, Int> = { a: 1 }
+  let e: Map<Str, Int> = {}
+  (map.merge(a, e), e.merge(a))
+}
+fn persistent() -> (Map<Str, Int>, Map<Str, Int>) {
+  let a: Map<Str, Int> = { a: 1, b: 2 }
+  let b: Map<Str, Int> = { b: 20 }
+  let c = a.merge(b)
+  (a, b)
+}
+fn merge(v: Int, w: Int) -> Map<Str, Int> { map.merge(map.from([("a", v)]), map.from([("b", w)])) }
+fn merge_inner(xs: [Int]) -> Map<Str, Int> { map.merge(map.from(xs.map(|x| ("a", x))), map.from([("b", 0)])) }

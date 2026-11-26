@@ -1,0 +1,24 @@
+// builtin: map.keys, map.values, map.entries
+// case main: value [["a", "b", "c"], [3, 1, 2], [["a", 3], ["b", 1], ["c", 2]]]
+// case empty: value [[], [], []]
+// case int_keys: value [[1, 2, 10], ["x", "y", "z"]]
+// labels keys(k): "b"
+// labels values(v): 5
+// labels entries(v): 5
+// labels values_inner(xs): [5, 6] ; inner 0
+fn main() -> ([Str], [Int], [(Str, Int)]) {
+  let m: Map<Str, Int> = { c: 2, a: 3, b: 1 }
+  (map.keys(m), map.values(m), m.entries())
+}
+fn empty() -> ([Str], [Int], [(Str, Int)]) {
+  let m: Map<Str, Int> = {}
+  (m.keys(), m.values(), m.entries())
+}
+fn int_keys() -> ([Int], [Str]) {
+  let m = map.from([(10, "z"), (2, "y"), (1, "x")])
+  (m.keys(), m.values())
+}
+fn keys(k: Str) -> [Str] { map.keys(map.from([(k, 1), ("a", 2)])) }
+fn values(v: Int) -> [Int] { map.values(map.from([("a", v)])) }
+fn entries(v: Int) -> [(Str, Int)] { map.entries(map.from([("a", v)])) }
+fn values_inner(xs: [Int]) -> [Int] { map.values(map.from(xs.map(|x| (text.show(x), x)))) }
