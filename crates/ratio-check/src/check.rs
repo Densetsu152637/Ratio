@@ -144,6 +144,8 @@ pub(crate) struct Checker<'a> {
     pub(crate) depth: usize,
     pub(crate) max_depth: usize,
     pub(crate) deep_reported: bool,
+    /// An exhaustiveness check went over its bound; later ones are skipped.
+    pub(crate) exhaust_refused: bool,
     pub(crate) fuel_reported: bool,
     /// The effect logs of user items, by item; harness configurations under their harness's
     /// reference in `configs`.
@@ -191,6 +193,7 @@ impl<'a> Checker<'a> {
             depth: 0,
             max_depth,
             deep_reported: false,
+            exhaust_refused: false,
             fuel_reported: false,
             logs: HashMap::new(),
             config_logs: HashMap::new(),
@@ -315,6 +318,18 @@ impl<'a> Checker<'a> {
                 let ItemKind::Enum(decl) = &item.kind else {
                     continue;
                 };
+                if let (Origin::Module(_), Some(first)) = (origin, decl.params.first()) {
+                    self.report(
+                        origin,
+                        Code::GenericEnum,
+                        first.span,
+                        format!(
+                            "the enum `{}` cannot take type parameters: only functions and type \
+                             aliases are generic",
+                            decl.name.name
+                        ),
+                    );
+                }
                 let params = self.declare_params(origin, &decl.params, false);
                 let mut variants: Vec<VariantDef> = Vec::new();
                 let mut seen: HashSet<&str> = HashSet::new();

@@ -1,0 +1,12 @@
+// expect: check-error C0034 at 5:15
+// expect: check-error C0034 at 10:11
+
+fn f(xs: [Int], ys: [Int]) -> Int {
+  let pairs = list.zip(xs, ys)
+  1
+}
+
+fn g() -> Int {
+  let r = retry(|| 1)
+  1
+}

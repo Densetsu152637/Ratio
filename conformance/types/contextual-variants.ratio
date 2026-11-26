@@ -55,3 +55,12 @@ fn single_shot() -> HarnessConfig {
 fn qualified() -> ContextMode {
   ContextMode.none
 }
+
+fn optional_modes(c: ContextMode?) -> Int {
+  let absent: ContextMode? = none
+  match c {
+    none => 0,
+    ContextMode.none => 1,
+    fresh | fork | main => 2,
+  }
+}

@@ -22,9 +22,6 @@ pub(crate) enum Warn {
     Let,
     /// Any other binding: shadowing a standard module.
     Plain,
-    /// None (a binding declared a second time, as parameters are for a harness's
-    /// configuration).
-    Quiet,
 }
 
 /// What `return` does in the innermost function or closure.
@@ -43,6 +40,8 @@ pub(crate) enum Ret {
 pub(crate) struct LoopCx {
     pub(crate) value: bool,
     pub(crate) brk: Option<TypeId>,
+    /// The type expected of a `loop`, which its `break` values are checked with.
+    pub(crate) expected: Option<TypeId>,
 }
 
 /// A function or closure being checked.
@@ -135,9 +134,7 @@ impl Checker<'_> {
                 format!("`{}` shadows an earlier binding", binder.name),
             );
         }
-        if warn != Warn::Quiet
-            && let Some(prelude::PreludeName::Module(m)) = prelude::lookup(&binder.name)
-        {
+        if let Some(prelude::PreludeName::Module(m)) = prelude::lookup(&binder.name) {
             self.report(
                 origin,
                 Code::ShadowsModule,
@@ -354,7 +351,7 @@ impl Checker<'_> {
                     .map(|p| p.name.clone())
                     .zip(sig.type_params.iter().copied())
                     .collect();
-                self.params(&mut b, &decl.params, &sig, Warn::Plain);
+                self.params(&mut b, &decl.params, &sig);
                 self.expect_block(&mut b, &decl.body, sig.ret);
                 self.logs.insert(r, b.log);
             }
@@ -362,16 +359,18 @@ impl Checker<'_> {
                 let Some(sig) = self.fn_sig(r) else {
                     return;
                 };
+                // One body binds the parameters for both: the configuration first, with no
+                // `return` and its own effect log, then the defaults and the body.
+                let mut b = Body::new(module, Ret::Forbidden);
+                self.bind_params(&mut b, &decl.params, &sig);
                 if let Some(config) = &decl.config {
-                    let mut b = Body::new(module, Ret::Forbidden);
-                    self.params(&mut b, &decl.params, &sig, Warn::Quiet);
                     let want = self.known_type("HarnessConfig");
                     let got = self.record_lit(&mut b, config, Some(want), Code::RecordFields);
                     self.mismatch(&b, config.span, got, want);
-                    self.config_logs.insert(r, b.log);
+                    self.config_logs.insert(r, std::mem::take(&mut b.log));
                 }
-                let mut b = Body::new(module, Ret::Known(sig.ret));
-                self.params(&mut b, &decl.params, &sig, Warn::Plain);
+                b.fns[0].ret = Ret::Known(sig.ret);
+                self.check_defaults(&mut b, &decl.params, &sig);
                 self.expect_block(&mut b, &decl.body, sig.ret);
                 self.logs.insert(r, b.log);
             }
@@ -394,19 +393,48 @@ impl Checker<'_> {
     }
 
     /// Binds a declaration's parameters (and checks their defaults).
-    fn params(&mut self, b: &mut Body, params: &[ast::Param], sig: &FnSig, warn: Warn) {
+    fn params(&mut self, b: &mut Body, params: &[ast::Param], sig: &FnSig) {
+        self.bind_params(b, params, sig);
+        self.check_defaults(b, params, sig);
+    }
+
+    fn bind_params(&mut self, b: &mut Body, params: &[ast::Param], sig: &FnSig) {
         for (p, ps) in params.iter().zip(sig.params.iter()) {
-            if let Some(default) = &p.default {
-                self.expect(b, default, ps.ty);
-            }
             let binder = Binder {
                 name: p.name.name.clone(),
                 span: p.name.span,
                 key: p.name.span,
                 ty: ps.ty,
             };
-            self.declare(b, &binder, false, warn);
+            self.declare(b, &binder, false, Warn::Plain);
         }
+    }
+
+    fn check_defaults(&mut self, b: &mut Body, params: &[ast::Param], sig: &FnSig) {
+        for (p, ps) in params.iter().zip(sig.params.iter()) {
+            if let Some(default) = &p.default {
+                self.expect(b, default, ps.ty);
+            }
+        }
+    }
+
+    /// Whether `shapes` cover type `ty`. After one check over the bound (reported), the rest are
+    /// skipped: the package is refused already, and each would spend the budget again.
+    pub(crate) fn exhaustive(
+        &mut self,
+        shapes: Vec<crate::exhaust::DPat>,
+        ty: TypeId,
+    ) -> crate::exhaust::Outcome {
+        use crate::exhaust::{Exhaust, Outcome};
+        if self.exhaust_refused || self.types.resolve(ty) == TypeId::ERROR {
+            return Outcome::Exhaustive;
+        }
+        let depth = self.max_depth * 4;
+        let outcome = Exhaust::new(&mut self.types, depth).check(shapes, ty);
+        if outcome == Outcome::TooComplex {
+            self.exhaust_refused = true;
+        }
+        outcome
     }
 
     /// Checks a body block against its declared result type.
@@ -502,7 +530,7 @@ impl Checker<'_> {
         self.prompt_types.insert(r, Lazy::Busy);
         self.demand_depth += 1;
         let mut b = Body::new(module, Ret::Forbidden);
-        self.params(&mut b, &decl.params, &sig, Warn::Plain);
+        self.params(&mut b, &decl.params, &sig);
         let ty = self.prompt_body(&mut b, &decl.body);
         self.demand_depth -= 1;
         self.prompt_types.insert(r, Lazy::Done(ty));

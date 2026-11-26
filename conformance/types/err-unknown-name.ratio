@@ -1,6 +1,8 @@
-// expect: check-error C0001 at 6:3
-// expect: check-error C0001 at 10:11
-// expect: check-error C0001 at 11:3
+// expect: check-error C0001 at 8:3
+// expect: check-error C0001 at 12:11
+// expect: check-error C0001 at 13:3
+// expect: check-error C0001 at 17:20
+// expect: check-error C0001 at 18:16
 
 fn f() -> Int {
   missing + 1
@@ -9,4 +11,10 @@ fn f() -> Int {
 fn g() -> Int {
   let x = Str
   list
+}
+
+fn h() -> Int {
+  let n = list.len(missing_list)
+  let (a, b) = missing_pair
+  n
 }

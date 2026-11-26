@@ -281,3 +281,20 @@ fn on_a_small_stack_the_fallback_refuses_depth_instead_of_overflowing() {
     assert!(codes.0.contains(&Code::TooComplex), "{:?}", codes.0);
     assert!(codes.1.is_empty(), "{:?}", codes.1);
 }
+
+#[test]
+fn many_exponential_matches_are_refused_once_and_quickly() {
+    // Each match alone is over its bound; after the first is refused the rest are skipped, and
+    // all of them draw on the check's one budget, so the package costs one bound, not 300.
+    let bools = ["true | false"; 8].join(", ");
+    let b8 = "(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)";
+    let mut source = String::new();
+    for i in 0..300 {
+        let _ = writeln!(
+            source,
+            "fn f{i}(t: ({b8}, {b8}, {b8})) -> Int {{\n  match t {{\n    (({bools}), ({bools}), ({bools})) => 1,\n  }}\n}}"
+        );
+    }
+    let (_, codes) = check_within(&source, Duration::from_secs(5));
+    assert_eq!(codes, vec![Code::MatchTooComplex]);
+}

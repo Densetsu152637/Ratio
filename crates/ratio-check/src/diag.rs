@@ -25,8 +25,8 @@ macro_rules! codes {
 }
 
 codes! {
-    /// A name that is no local, item, import or prelude name (or a built-in the checker has
-    /// no signature for yet).
+    /// A name that is no local, item, import or prelude name, or a type or module used as a
+    /// value.
     UnknownName => "C0001",
     /// A type name that resolves to no type.
     UnknownType => "C0002",
@@ -98,6 +98,11 @@ codes! {
     ShadowedBinding => "C0031",
     /// A warning: a local binding that shadows a standard-library module.
     ShadowsModule => "C0032",
+    /// Type parameters on an enum: only functions and type aliases are generic (the built-in
+    /// `Result<T>` is the exception).
+    GenericEnum => "C0033",
+    /// A built-in the checker has no signature for yet (stages 7 to 12 extend the table).
+    NoSignature => "C0034",
 }
 
 impl Code {

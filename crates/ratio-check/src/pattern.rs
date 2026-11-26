@@ -16,7 +16,7 @@ use ratio_syntax::ast::{self, ListPattern, Lit, Pattern, PatternKind, RecordPatt
 use crate::body::Body;
 use crate::check::Checker;
 use crate::diag::Code;
-use crate::exhaust::{Ctor, DPat, Exhaust, LitKey, Outcome};
+use crate::exhaust::{Ctor, DPat, LitKey, Outcome};
 use crate::tables::{Key, PatRes, Res};
 use crate::types::{Field, Ty, TypeId};
 
@@ -55,6 +55,9 @@ impl Checker<'_> {
         let ty = self.types.resolve(ty);
         let shape = self.pattern_inner(b, p, ty, cx, binders);
         self.leave();
+        if ty == TypeId::ERROR {
+            return DPat::Wild;
+        }
         shape
     }
 
@@ -469,8 +472,7 @@ impl Checker<'_> {
 
     /// Reports a refutable pattern where an irrefutable one is needed.
     pub(crate) fn irrefutable(&mut self, b: &Body, shape: DPat, ty: TypeId, span: Span) {
-        let depth = self.max_depth * 4;
-        match Exhaust::new(&mut self.types, depth).check(vec![shape], ty) {
+        match self.exhaustive(vec![shape], ty) {
             Outcome::Exhaustive => {}
             Outcome::Missing(case) => self.report(
                 b.origin(),

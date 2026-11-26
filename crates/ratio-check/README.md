@@ -22,12 +22,15 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
 - **Types.** Scalars, the text types, `Json`, `Image`, prompts, handles, `T?` (`T??` is `T?`),
   lists, tuples of at most 8, records (structural, fields in name order, `b?: B` reads as `B?`),
   maps (keys `Str`, `Untrusted<Str>`, `Int`, `Bool` or a unit-only enum), nominal enums whose
-  payloads are records, function and harness types. Type aliases and enums may be generic
-  (`Result<T>`, `Scored<T>`); functions may be generic; harnesses are not.
+  payloads are records, function and harness types. Functions and type aliases may be
+  generic (`Scored<T>`); harnesses are not, and neither are enums a program declares
+  (`C0033`): only the built-in `Result<T>` is. An enum's type arguments relate by the variance
+  its payloads give each parameter (computed as a fixpoint; `Result<T>` is covariant), never
+  covariantly by default.
 - **Subtyping** is chapter 03's list: `T <: T?`, `Never <: T`, `T <: Untrusted<T>`,
   `UserText <: Str <: Brief <: Untrusted<Str>`, `TrustedPrompt <: Prompt`, a harness is a
-  function, covariant lists, options, tuples, records, map values, tasks and enum arguments,
-  contravariant function parameters. No width subtyping: a record value has exactly its
+  function, covariant lists, options, tuples, records, map values and tasks, enum arguments by
+  their variance, contravariant function parameters. No width subtyping: a record value has exactly its
   declared fields (a required field may stand where an optional one is declared), and a spread
   against a declared type builds the narrower record (`let n: { x: Int } = { ..point }`).
 - **Bidirectional local inference.** Each expression is checked with the type expected where
@@ -35,7 +38,11 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
   variants and generic calls use it. A generic call binds its type parameters from the
   turbofish, else from the arguments that are not closures, then from the expected type, then
   from the closures, whose parameter types come from what is known by then. A parameter still
-  open is an error (`C0014`), never a guess. `let` and `var` without an annotation take their
+  open is an error (`C0014`), never a guess. Once the type arguments are final, every argument
+  is checked again against its parameter's final type, so an argument that widened a type
+  argument cannot launder an earlier one (`apply(id, web)` with `id: fn(Str) -> Str` and
+  `web: Untrusted<Str>` is refused), and binding a variable to a type that contains it fails
+  (occurs check). `let` and `var` without an annotation take their
   value's type. There is no global unification.
 - **Names.** Locals (block scopes, shadowing warned as `shadowed_binding`), then the module's
   items and imports, then the prelude: the standard modules, `control`'s functions, the
@@ -47,8 +54,10 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
   `ToolName` or `ToolSet`, a bare name is a tool. A string literal where a `ModelRef` is
   expected builds `Named { id }`, and where a `ToolName` is expected names a tool pattern.
   `ContextMode`'s variant `none` is a keyword, so the prelude cannot declare it: the checker
-  adds it, and `none` where a `ContextMode` (or `ContextMode?`) is expected is that variant
-  (`with { context: none }`), not an absent value.
+  adds it. Where a `ContextMode` is expected, including the optional field
+  `context?: ContextMode` (`with { context: none }`), `none` is that variant; where a
+  `ContextMode?` is expected (`let c: ContextMode? = none`), it is the absent value, and a
+  pattern names the variant as `ContextMode.none`.
 - **Variant literals** (rule 3): `Name { … }` resolves to the expected enum's variant, else to
   the one enum in scope (the module's, then the prelude's) that has it; several is `C0008`.
 - **Patterns.** In `match`, `catch`, `if let` and `while let` arms a bare name that is a variant
@@ -58,8 +67,9 @@ The rules are chapter 03's ("Types", "Evaluation", "Control flow") and chapter 0
 - **Exhaustiveness** of `match` (guards do not count): Maranget's usefulness algorithm with
   witnesses, so the error names a missing case (`Denied { by: rule, .. }`, `none`, `[_]`).
   It is exponential in the worst case, so it is bounded: every row it builds costs fuel from
-  200,000 units per match, its recursion depth is bounded, and a match over the bound is
-  refused (`C0023`) rather than accepted unchecked. Rows are grouped by their first
+  both a budget of 200,000 units per match and the check's own budget, its recursion depth is
+  bounded, and a match over the bound is refused (`C0023`) rather than accepted unchecked;
+  after one refusal the remaining matches are not checked (the package is refused already). Rows are grouped by their first
   constructor, so a match of thousands of arms over an enum of thousands of variants stays
   linear.
 - **Constants** (chapter 02, "Constants"; chapter 04, "Where configuration is evaluated"). A
@@ -112,9 +122,13 @@ provisional there. Built-in functions are a declarative table in
 with empty bodies, `@pure` where chapter 06's Needs column is `pure`. A declaration without
 `@pure` counts as effectful, so one added carelessly fails closed. The type-parameter names `S`
 (any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,
-`Money`) carry chapter 06's bounds. The table holds what the conformance programs use
-(`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`); stages 7 to 12 extend it
-module by module, and a name it lacks is reported as "no signature yet" (`C0001`).
+`Money`) carry chapter 06's bounds.
+
+**Scope cut**: the table is deliberately partial. It holds what the conformance programs use
+(`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`), a few dozen of chapter
+06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
+reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
+that does not exist (`C0001`).
 
 ## Bounds
 
@@ -127,7 +141,10 @@ work without bound:
 | Recursion through expressions, patterns and types | 512 (12 on the caller's stack) | `C0022` |
 | Aliases, constants or prompts resolved on demand inside each other | 64 | `C0022` |
 | Work on types (relations, substitutions, normalisations) per check | 20,000,000 units | `C0022` |
-| Exhaustiveness work per `match` (or irrefutable pattern) | 200,000 units | `C0023` |
+| Exhaustiveness work per `match` (or irrefutable pattern), also charged to the check's budget | 200,000 units | `C0023` |
+
+Out of budget, relations fail closed (they do not hold), and the check reports `C0022` even
+when the budget ran out after the last expression.
 
 Relations between types without inference variables are memoised, substitution and the
 `Untrusted` mapping are memoised per node, record fields are found by binary search, and enum
@@ -141,7 +158,7 @@ refuses nesting beyond 12.
 
 | Code | Diagnostic |
 | --- | --- |
-| `C0001` | A name that is no local, item, import or prelude name; a type or module used as a value; a built-in without a signature yet |
+| `C0001` | A name that is no local, item, import or prelude name; a type or module used as a value |
 | `C0002` | A type name that resolves to no type |
 | `C0003` | Type arguments that do not fit a type (wrong number, or some on a type that takes none) |
 | `C0004` | A value whose type is not a subtype of the type expected where it stands |
@@ -173,6 +190,8 @@ refuses nesting beyond 12.
 | `C0030` | A name declared twice (variant, field, parameter, type parameter) or bound twice in a pattern |
 | `C0031` | Warning: a `let` that shadows an earlier binding (lint `shadowed_binding`) |
 | `C0032` | Warning: a local binding that shadows a standard module |
+| `C0033` | Type parameters on an enum a program declares (only functions and type aliases are generic) |
+| `C0034` | A standard built-in the checker has no signature for yet (stages 7 to 12 add them) |
 
 ## Tests
 

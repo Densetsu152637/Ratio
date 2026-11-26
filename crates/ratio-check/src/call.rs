@@ -101,7 +101,7 @@ impl Checker<'_> {
     fn no_signature(&mut self, origin: Origin, span: Span, name: &str) -> TypeId {
         self.report(
             origin,
-            Code::UnknownName,
+            Code::NoSignature,
             span,
             format!("the checker has no signature for the built-in `{name}` yet"),
         );
@@ -158,10 +158,10 @@ impl Checker<'_> {
                     .map(|p| (*p, self.types.new_var(*p)))
                     .collect();
                 let ty = self.types.substitute(ty, &pairs);
-                if let Some(want) = expected {
-                    self.types.subtype_quiet(&mut self.memo, ty, want);
-                }
-                self.close_vars(b, &pairs, &name, span);
+                // Instantiated by the expected type; when it does not fit, the caller reports
+                // the mismatch, so open parameters are not reported as well.
+                let fits = expected.is_none_or(|want| self.types.subtype(&mut self.memo, ty, want));
+                self.close_vars(b, &pairs, &name, span, !fits);
                 self.types.resolve(ty)
             }
             ItemKind::Type(_) | ItemKind::Enum(_) => {
@@ -219,13 +219,26 @@ impl Checker<'_> {
 
     /// Reports the type parameters inference left open (binding them to the error type), and
     /// applies the bounds `S` and `Num`.
-    fn close_vars(&mut self, b: &Body, pairs: &[(ParamId, TypeId)], callee: &str, span: Span) {
+    /// `quiet` leaves open parameters unreported, where an error already explains them (an
+    /// argument of the error type, a mismatch the caller reports).
+    fn close_vars(
+        &mut self,
+        b: &Body,
+        pairs: &[(ParamId, TypeId)],
+        callee: &str,
+        span: Span,
+        quiet: bool,
+    ) {
         for (param, t) in pairs {
             let Ty::Var(v) = *self.types.get(*t) else {
                 continue;
             };
             let resolved = self.types.resolve(*t);
             let pname = self.types.param_def(*param).name.clone();
+            if matches!(self.types.get(resolved), Ty::Var(_)) && quiet {
+                self.types.bind_var(v, TypeId::ERROR);
+                continue;
+            }
             if matches!(self.types.get(resolved), Ty::Var(_)) {
                 self.report(
                     b.origin(),
@@ -707,7 +720,8 @@ impl Checker<'_> {
             _ => (rhs, &[], &[]),
         };
         let target = self.callable(b, callee);
-        let t = self.apply(
+        // The call's result is recorded at the pipe expression only (by `expr`).
+        self.apply(
             b,
             e.span,
             target,
@@ -715,11 +729,7 @@ impl Checker<'_> {
             type_args,
             args,
             expected,
-        );
-        if !std::ptr::eq(callee, rhs) {
-            self.record_type(b.module, rhs.span, t);
-        }
-        t
+        )
     }
 
     /// What a call's callee is: a declaration, or a value.
@@ -1101,8 +1111,15 @@ impl Checker<'_> {
         }
         // The receiver and the arguments that are not closures, then what the call is expected
         // to give, then the closures.
+        // Each argument that fit, with its type, where it is and its parameter: re-checked
+        // once the type arguments are final.
+        let mut placed: Vec<(TypeId, Span, usize)> = Vec::new();
+        let mut saw_error = false;
         if let (Some((rt, at)), Some(p)) = (receiver, params.first()) {
-            self.mismatch(b, at, rt, *p);
+            saw_error |= self.types.resolve(rt) == TypeId::ERROR;
+            if self.mismatch(b, at, rt, *p) {
+                placed.push((rt, at, 0));
+            }
         }
         for closures in [false, true] {
             if closures
@@ -1119,7 +1136,11 @@ impl Checker<'_> {
                 if is_closure(value) != closures {
                     continue;
                 }
-                self.expect(b, value, params[i]);
+                let got = self.expr(b, value, Some(params[i]));
+                saw_error |= self.types.resolve(got) == TypeId::ERROR;
+                if self.mismatch(b, value.span, got, params[i]) {
+                    placed.push((got, value.span, i));
+                }
             }
         }
         for k in unplaced {
@@ -1143,7 +1164,15 @@ impl Checker<'_> {
                 ),
             );
         }
-        self.close_vars(b, &pairs, &name, span);
+        self.close_vars(b, &pairs, &name, span, saw_error);
+        // A later argument may have widened a type argument past what an earlier one allowed
+        // (`apply(id, web)` binds `T` to `Str` from `id`, then widens it to `Untrusted<Str>`
+        // for `web`): every argument is checked again against its final parameter type.
+        for (got, at, i) in placed {
+            let want = self.types.resolve(params[i]);
+            let got = self.types.resolve(got);
+            self.mismatch(b, at, got, want);
+        }
         let result = self.types.resolve(ret);
         let type_args = pairs.iter().map(|(_, t)| self.types.resolve(*t)).collect();
         self.table(b.module).calls.insert(

@@ -75,3 +75,9 @@ fn par_and_race() -> (Int, Str) {
 fn membership(xs: [Int]) -> Bool {
   3 in xs and 2 in 0..5 and "a" in "abc"
 }
+
+fn report() -> Report {
+  loop {
+    break { text: "stopped", ok: false }
+  }
+}

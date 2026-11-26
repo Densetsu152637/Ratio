@@ -115,12 +115,15 @@ impl<'t> Exhaust<'t> {
         }
     }
 
+    /// Spends from this match's budget and from the check's.
     fn spend(&mut self, units: usize) -> Step<()> {
-        if self.fuel < units {
+        let global = u64::try_from(units).unwrap_or(u64::MAX);
+        if self.fuel < units || self.types.fuel < global {
             self.fuel = 0;
             return Err(TooComplex);
         }
         self.fuel -= units;
+        self.types.fuel -= global;
         Ok(())
     }
 
@@ -367,6 +370,14 @@ impl<'t> Exhaust<'t> {
                     .as_enum(ty)
                     .map(|id| self.types.enum_def(id).variants[*i].name.clone())
                     .unwrap_or_default();
+                // `none` alone would read as an absent option value.
+                let name = if name == "none" {
+                    let id = self.types.as_enum(ty);
+                    let owner = id.map(|id| self.types.enum_def(id).name.clone());
+                    format!("{}.none", owner.unwrap_or_default())
+                } else {
+                    name
+                };
                 match fields.first() {
                     Some(payload) => format!("{name} {payload}"),
                     None => name,

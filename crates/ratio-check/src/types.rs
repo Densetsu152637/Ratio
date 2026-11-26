@@ -12,7 +12,7 @@
 //! (the checker reports `C0022`); work on types (relations, substitution, display) is memoised
 //! or bounded, never exponential in the size of the source.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// The deepest type the checker builds. Deeper types (from long alias chains or nested
@@ -158,8 +158,42 @@ pub struct EnumDef {
     pub name: String,
     pub params: Vec<ParamId>,
     pub variants: Vec<VariantDef>,
+    /// How each parameter may vary in a subtype relation, from its uses in the payloads.
+    pub variance: Vec<Variance>,
     by_name: HashMap<String, usize>,
     unit_only: bool,
+}
+
+/// How an enum's type argument may vary when two instances are related.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Variance {
+    /// Unused: any arguments relate.
+    Bivariant,
+    Covariant,
+    Contravariant,
+    /// Used both ways (or as a map key): the arguments must be equal.
+    Invariant,
+}
+
+impl Variance {
+    fn join(self, other: Variance) -> Variance {
+        match (self, other) {
+            (Variance::Bivariant, v) | (v, Variance::Bivariant) => v,
+            (a, b) if a == b => a,
+            _ => Variance::Invariant,
+        }
+    }
+
+    /// The variance of a use at polarity `self` of something used with variance `inner`.
+    fn compose(self, inner: Variance) -> Variance {
+        match (self, inner) {
+            (_, Variance::Bivariant) | (Variance::Bivariant, _) => Variance::Bivariant,
+            (Variance::Invariant, _) | (_, Variance::Invariant) => Variance::Invariant,
+            (a, Variance::Covariant) => a,
+            (Variance::Covariant, Variance::Contravariant) => Variance::Contravariant,
+            (Variance::Contravariant, Variance::Contravariant) => Variance::Covariant,
+        }
+    }
 }
 
 impl EnumDef {
@@ -171,10 +205,12 @@ impl EnumDef {
             .map(|(i, v)| (v.name.clone(), i))
             .collect();
         let unit_only = variants.iter().all(|v| !v.has_payload);
+        let variance = vec![Variance::Covariant; params.len()];
         EnumDef {
             name,
             params,
             variants,
+            variance,
             by_name,
             unit_only,
         }
@@ -376,6 +412,107 @@ impl Types {
             binding: None,
         });
         self.intern(Ty::Var(id))
+    }
+
+    /// The types directly inside `t`, with the polarity of each position.
+    fn parts(&self, t: TypeId) -> Vec<(TypeId, Variance)> {
+        let co = Variance::Covariant;
+        match self.get(t) {
+            Ty::Task(a) | Ty::Option(a) | Ty::List(a) | Ty::Secret(a) | Ty::Untrusted(a) => {
+                vec![(*a, co)]
+            }
+            Ty::Map(k, v) => vec![(*k, Variance::Invariant), (*v, co)],
+            Ty::Tuple(ts) => ts.iter().map(|t| (*t, co)).collect(),
+            Ty::Record(fields) => fields.iter().map(|f| (f.ty, co)).collect(),
+            Ty::Enum(id, args) => {
+                let def = &self.enums[id.0 as usize];
+                args.iter()
+                    .zip(def.variance.iter())
+                    .map(|(a, v)| (*a, *v))
+                    .collect()
+            }
+            Ty::Fn(ps, r) | Ty::Harness(ps, r) => ps
+                .iter()
+                .map(|p| (*p, Variance::Contravariant))
+                .chain(std::iter::once((*r, co)))
+                .collect(),
+            Ty::Var(v) => self.vars[v.0 as usize]
+                .binding
+                .map(|b| vec![(b, co)])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Computes each enum's parameter variances from how its payloads use the parameters: a
+    /// fixpoint from "unused", since an enum's payload may use another enum (or itself).
+    pub(crate) fn compute_variance(&mut self) {
+        for def in &mut self.enums {
+            def.variance = vec![Variance::Bivariant; def.params.len()];
+        }
+        let rounds = 3 * self.enums.iter().map(|d| d.params.len()).sum::<usize>() + 1;
+        for _ in 0..rounds {
+            let mut changed = false;
+            for e in 0..self.enums.len() {
+                if self.enums[e].params.is_empty() {
+                    continue;
+                }
+                let payloads: Vec<TypeId> = self.enums[e]
+                    .variants
+                    .iter()
+                    .filter_map(|v| v.payload)
+                    .collect();
+                let mut found = vec![Variance::Bivariant; self.enums[e].params.len()];
+                let mut seen: HashSet<(TypeId, Variance)> = HashSet::new();
+                let mut work: Vec<(TypeId, Variance)> = payloads
+                    .into_iter()
+                    .map(|t| (t, Variance::Covariant))
+                    .collect();
+                while let Some((t, pol)) = work.pop() {
+                    if pol == Variance::Bivariant || !seen.insert((t, pol)) || !self.burn() {
+                        continue;
+                    }
+                    if let Ty::Param(p) = self.get(t)
+                        && let Some(i) = self.enums[e].params.iter().position(|q| q == p)
+                    {
+                        found[i] = found[i].join(pol);
+                        continue;
+                    }
+                    for (inner, v) in self.parts(t) {
+                        work.push((inner, pol.compose(v)));
+                    }
+                }
+                if found != self.enums[e].variance {
+                    self.enums[e].variance = found;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    /// Whether the inference variable `v` occurs in `t` (through bindings too): binding `v` to
+    /// such a type would make an infinite type.
+    pub(crate) fn occurs(&mut self, v: VarId, t: TypeId) -> bool {
+        let mut seen: HashSet<TypeId> = HashSet::new();
+        let mut work = vec![t];
+        while let Some(x) = work.pop() {
+            if !self.has_vars(x) || !seen.insert(x) {
+                continue;
+            }
+            if !self.burn() {
+                return true;
+            }
+            if let Ty::Var(w) = self.get(x)
+                && *w == v
+            {
+                return true;
+            }
+            work.extend(self.parts(x).into_iter().map(|(p, _)| p));
+        }
+        false
     }
 
     /// Spends one unit of work; `false` once the budget is gone.

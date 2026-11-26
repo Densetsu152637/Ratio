@@ -1,10 +1,11 @@
-// expect: check-error C0004 at 10:3
-// expect: check-error C0004 at 18:5
-// expect: check-error C0004 at 22:3
-// expect: check-error C0004 at 26:3
-// expect: check-error C0004 at 30:3
-// expect: check-error C0004 at 34:3
-// expect: check-error C0004 at 38:3
+// expect: check-error C0004 at 11:3
+// expect: check-error C0004 at 19:5
+// expect: check-error C0004 at 23:3
+// expect: check-error C0004 at 27:3
+// expect: check-error C0004 at 31:3
+// expect: check-error C0004 at 35:3
+// expect: check-error C0004 at 39:3
+// expect: check-error C0004 at 47:38
 
 fn f() -> Int {
   "a"
@@ -36,4 +37,13 @@ fn option_is_not_value(x: Int?) -> Int {
 
 fn no_width(r: { a: Int, b: Int }) -> { a: Int } {
   r
+}
+
+fn ident<T>(x: T) -> T {
+  x
+}
+
+fn instantiated() -> Int {
+  let g: fn(Untrusted<Str>) -> Str = ident
+  1
 }

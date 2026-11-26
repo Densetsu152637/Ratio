@@ -2,21 +2,23 @@
 //!
 //! The relation is the small one chapter 03 lists: `T <: T?`, `Never <: T`, `T <: Untrusted<T>`,
 //! `UserText <: Str <: Brief <: Untrusted<Str>`, `TrustedPrompt <: Prompt`, a harness is a
-//! function, lists, options, tuples, records, map values, tasks and enum arguments are
-//! covariant, and a function type is contravariant in its parameters and covariant in its
-//! result. A record value has exactly its declared fields (no width subtyping); a required field
+//! function, lists, options, tuples, records, map values and tasks are covariant, an enum's
+//! arguments relate by each parameter's variance (from its payloads), and a function type is
+//! contravariant in its parameters and covariant in its result. A record value has exactly its declared fields (no width subtyping); a required field
 //! may stand where an optional one is declared.
 //!
 //! Inference variables of a generic call are bound here, locally: `A <: ?T` binds `?T` to `A`,
 //! or widens it to a common supertype when it is already bound; `?T <: B` binds `?T` to `B`
-//! when it is still unbound. This is bidirectional local inference, not unification: each call
-//! is solved on its own, so the work is linear in the types involved. Results between types
+//! when it is still unbound; a variable is never bound to a type that contains it. Widening can
+//! invalidate an earlier argument, so the caller checks every argument again once the type
+//! arguments are final. This is bidirectional local inference, not unification: each call is
+//! solved on its own, so the work is linear in the types involved. Results between types
 //! without variables are memoised, and every step spends the table's fuel, so no input makes
-//! the relation exponential.
+//! the relation exponential; out of fuel, the relation fails closed.
 
 use std::collections::HashMap;
 
-use crate::types::{Field, Ty, TypeId, Types, VarId};
+use crate::types::{Field, Ty, TypeId, Types, VarId, Variance};
 
 /// The position of a text type in the chain `UserText <: Str <: Brief <: Untrusted<Str>`.
 fn text_rank(ty: &Ty) -> Option<u8> {
@@ -41,8 +43,9 @@ impl Types {
         if a == b || a == TypeId::ERROR || b == TypeId::ERROR || a == TypeId::NEVER {
             return true;
         }
+        // Out of budget, the relation fails closed; the checker reports `C0022`.
         if !self.burn() {
-            return true;
+            return false;
         }
         let plain = !self.has_vars(a) && !self.has_vars(b);
         if plain && let Some(&known) = memo.sub.get(&(a, b)) {
@@ -61,11 +64,16 @@ impl Types {
             if let Some(bound) = self.vars[v.0 as usize].binding {
                 return self.subtype(memo, bound, b);
             }
+            if self.occurs(v, b) {
+                return false;
+            }
             self.bind_var(v, b);
             return true;
         }
         if let Ty::Var(v) = tb {
-            return match self.vars[v.0 as usize].binding {
+            let binding = self.vars[v.0 as usize].binding;
+            return match binding {
+                None if self.occurs(v, a) => false,
                 None => {
                     self.bind_var(v, a);
                     true
@@ -75,6 +83,7 @@ impl Types {
                         return true;
                     }
                     match self.join(memo, a, bound) {
+                        Some(wider) if self.occurs(v, wider) => false,
                         Some(wider) => {
                             self.bind_var(v, wider);
                             true
@@ -113,11 +122,20 @@ impl Types {
                     })
             }
             (Ty::Enum(e1, xs), Ty::Enum(e2, ys)) => {
+                let variance = self.enum_def(*e1).variance.clone();
                 e1 == e2
                     && xs
                         .iter()
                         .zip(ys.iter())
-                        .all(|(x, y)| self.subtype(memo, *x, *y))
+                        .zip(variance)
+                        .all(|((x, y), v)| match v {
+                            Variance::Bivariant => true,
+                            Variance::Covariant => self.subtype(memo, *x, *y),
+                            Variance::Contravariant => self.subtype(memo, *y, *x),
+                            Variance::Invariant => {
+                                self.subtype(memo, *x, *y) && self.subtype(memo, *y, *x)
+                            }
+                        })
             }
             (Ty::Fn(p1, r1) | Ty::Harness(p1, r1), Ty::Fn(p2, r2))
             | (Ty::Harness(p1, r1), Ty::Harness(p2, r2)) => {
@@ -144,7 +162,7 @@ impl Types {
             return Some(a);
         }
         if !self.burn() {
-            return Some(TypeId::ERROR);
+            return None;
         }
         let (ta, tb) = (self.get(a).clone(), self.get(b).clone());
         match (&ta, &tb) {
@@ -190,9 +208,15 @@ impl Types {
                 Some(self.record(fields))
             }
             (Ty::Enum(e1, xs), Ty::Enum(e2, ys)) if e1 == e2 => {
+                let variance = self.enum_def(*e1).variance.clone();
                 let mut args = Vec::with_capacity(xs.len());
-                for (x, y) in xs.iter().zip(ys.iter()) {
-                    args.push(self.join(memo, *x, *y)?);
+                for ((x, y), v) in xs.iter().zip(ys.iter()).zip(variance) {
+                    args.push(match v {
+                        Variance::Covariant => self.join(memo, *x, *y)?,
+                        Variance::Bivariant => *x,
+                        _ if x == y => *x,
+                        _ => return None,
+                    });
                 }
                 Some(self.enum_type(*e1, args))
             }

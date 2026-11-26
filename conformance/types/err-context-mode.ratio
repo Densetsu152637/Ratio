@@ -1,0 +1,8 @@
+// expect: check-error C0009 at 4:3
+
+fn opt(c: ContextMode?) -> Int {
+  match c {
+    none => 0,
+    fresh | fork | main => 2,
+  }
+}

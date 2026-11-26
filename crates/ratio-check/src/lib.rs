@@ -100,10 +100,25 @@ fn check_on(loaded: &Loaded, max_depth: usize) -> Checked {
     checker.declare_enums();
     checker.lower_payloads();
     checker.lower_aliases();
+    checker.types.compute_variance();
     checker.signatures();
     checker.bodies();
     checker.effects();
     checker.finish_tables();
+    // A budget spent after the last report still refuses the package.
+    if checker.types.fuel == 0
+        && !checker.fuel_reported
+        && let Some(entry) = loaded.entry
+    {
+        let span = loaded.modules[entry.0].ast.span;
+        checker.report(
+            tables::Origin::Module(entry),
+            Code::TooComplex,
+            span,
+            "the program's types are too large to check within the checker's work budget"
+                .to_owned(),
+        );
+    }
     let mut diagnostics = checker.diags;
     diagnostics.sort_by_key(|d| (d.module, d.span.start, d.span.end));
     Checked {

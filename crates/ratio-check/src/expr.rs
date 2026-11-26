@@ -14,7 +14,7 @@ use ratio_syntax::ast::{
 use crate::body::{Body, FnCx, LoopCx, Ret, Warn};
 use crate::check::Checker;
 use crate::diag::Code;
-use crate::exhaust::{Exhaust, Outcome};
+use crate::exhaust::Outcome;
 use crate::pattern::{Binder, PatCx, quote};
 use crate::tables::{Coercion, Key};
 use crate::types::{Field, Ty, TypeId};
@@ -102,21 +102,23 @@ impl Checker<'_> {
                 b.push_scope();
                 let elem = self.iterated(b, iter);
                 self.irrefutable_binding(b, pattern, elem);
-                self.loop_body(b, body, false);
+                self.loop_body(b, body, false, None);
                 b.pop_scope();
                 TypeId::UNIT
             }
             ExprKind::While { cond, body } => {
                 b.push_scope();
                 self.condition(b, cond);
-                self.loop_body(b, body, false);
+                self.loop_body(b, body, false, None);
                 b.pop_scope();
                 TypeId::UNIT
             }
-            ExprKind::Loop(body) => self.loop_body(b, body, true).unwrap_or(TypeId::NEVER),
+            ExprKind::Loop(body) => self
+                .loop_body(b, body, true, expected)
+                .unwrap_or(TypeId::NEVER),
             ExprKind::Repeat { count, body } => {
                 self.expect(b, count, TypeId::INT);
-                self.loop_body(b, body, false);
+                self.loop_body(b, body, false, None);
                 TypeId::UNIT
             }
             ExprKind::Try { body, catch } => self.try_expr(b, body, catch, expected, e.span),
@@ -215,7 +217,7 @@ impl Checker<'_> {
             Lit::None => {
                 // Where an enum with a `none` variant (`ContextMode`) is expected, `none` is
                 // that variant, as a contextual variant would be.
-                if let Some(target) = expected.map(|t| self.strip_option(t))
+                if let Some(target) = expected
                     && let Some(id) = self.types.as_enum(target)
                     && let Some(index) = self.types.enum_def(id).variant("none")
                 {
@@ -597,7 +599,13 @@ impl Checker<'_> {
     fn field_expectation(&mut self, declared: Option<&[Field]>, name: &str) -> Option<TypeId> {
         let fields = declared?;
         let f = &fields[crate::types::field_index(fields, name)?];
-        Some(if f.optional {
+        // An optional field of an enum with a `none` variant (`context?: ContextMode`) expects
+        // the enum, so `context: none` is the variant; omitting the field leaves it absent.
+        let none_variant = self
+            .types
+            .as_enum(f.ty)
+            .is_some_and(|id| self.types.enum_def(id).variant("none").is_some());
+        Some(if f.optional && !none_variant {
             self.types.option(f.ty)
         } else {
             f.ty
@@ -914,8 +922,7 @@ impl Checker<'_> {
             found.push((self.expr(b, &arm.body, expected), arm.body.span));
             b.pop_scope();
         }
-        let depth = self.max_depth * 4;
-        match Exhaust::new(&mut self.types, depth).check(shapes, st) {
+        match self.exhaustive(shapes, st) {
             Outcome::Exhaustive => {}
             Outcome::Missing(case) => self.report(
                 b.origin(),
@@ -967,8 +974,18 @@ impl Checker<'_> {
     }
 
     /// A loop body; returns the common type of `break` values for `loop`.
-    fn loop_body(&mut self, b: &mut Body, body: &ast::Block, value: bool) -> Option<TypeId> {
-        b.fn_cx().loops.push(LoopCx { value, brk: None });
+    fn loop_body(
+        &mut self,
+        b: &mut Body,
+        body: &ast::Block,
+        value: bool,
+        expected: Option<TypeId>,
+    ) -> Option<TypeId> {
+        b.fn_cx().loops.push(LoopCx {
+            value,
+            brk: None,
+            expected,
+        });
         self.block(b, body, None);
         b.fn_cx().loops.pop().and_then(|l| l.brk)
     }
@@ -1050,7 +1067,12 @@ impl Checker<'_> {
     }
 
     fn break_expr(&mut self, b: &mut Body, value: Option<&Expr>, span: Span) {
-        let Some(&LoopCx { value: takes, brk }) = b.fns.last().and_then(|f| f.loops.last()) else {
+        let Some(&LoopCx {
+            value: takes,
+            brk,
+            expected,
+        }) = b.fns.last().and_then(|f| f.loops.last())
+        else {
             if let Some(v) = value {
                 self.expr(b, v, None);
             }
@@ -1064,7 +1086,7 @@ impl Checker<'_> {
         };
         let t = match value {
             Some(v) => {
-                let t = self.expr(b, v, brk);
+                let t = self.expr(b, v, brk.or(expected));
                 if !takes {
                     self.report(
                         b.origin(),
