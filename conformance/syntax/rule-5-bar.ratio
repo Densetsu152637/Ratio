@@ -1,0 +1,14 @@
+// expect: parse-ok
+
+// Rule 5: `|` begins a closure in primary position and separates patterns in a pattern.
+
+fn bar(xs: [Int]) {
+  map(xs, |x| x)
+  map(xs, || 1)
+  match x { 1 | 2 | 3 => "small", _ => "big" }
+  let 1 | 2 = n
+  map(xs, |(a, b)| a)
+  map(xs, |a, b| a)
+  let f = |x| x |> g
+  match x { A | B { n: 1 | 2 } => 1, _ => 2 }
+}

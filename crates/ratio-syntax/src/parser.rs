@@ -17,10 +17,10 @@
 //! or item), `,` (a list) or closing delimiter.
 
 use crate::ast::{
-    Arg, Arm, AssignOp, Attribute, BinaryOp, Block, Catch, ClosureParam, Condition, ConstDecl,
-    Doc, Else, EnumDecl, Expr, ExprKind, FieldInit, FieldPattern, FieldType, FnDecl, HarnessDecl,
-    Ident, Import, ImportPath, Item, ItemKind, ListItem, ListPattern, Lit, Meta, Module, Param,
-    Pattern, PatternKind, PromptBody, PromptDecl, RecordLit, RecordPattern, Section, SectionKind,
+    Arg, Arm, AssignOp, Attribute, BinaryOp, Block, Catch, ClosureParam, Condition, ConstDecl, Doc,
+    Else, EnumDecl, Expr, ExprKind, FieldInit, FieldPattern, FieldType, FnDecl, HarnessDecl, Ident,
+    Import, ImportPath, Item, ItemKind, ListItem, ListPattern, Lit, Meta, Module, Param, Pattern,
+    PatternKind, PromptBody, PromptDecl, RecordLit, RecordPattern, Section, SectionKind,
     SourceName, StateDecl, Stmt, StmtKind, StrPart, StringLit, TestDecl, Type, TypeDecl, TypeKind,
     UnaryOp, Variant,
 };
@@ -61,6 +61,7 @@ pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
     let max_depth = options.max_nesting.min(MAX_NESTING);
     let max_diagnostics = options.max_diagnostics.min(MAX_DIAGNOSTICS);
     let whole = whole_span(source, lexed.tokens.last().map(|t| t.span));
+    let eof_start = lexed.tokens.last().map_or(source.len(), |t| t.span.start);
     let stopped = lexed.diagnostics.iter().any(|d| {
         matches!(
             d.code,
@@ -78,16 +79,71 @@ pub fn parse_with(source: &str, options: &LexOptions) -> Parsed {
         };
     }
     let budget = max_diagnostics.saturating_sub(lexed.diagnostics.len());
-    let mut parser = Parser::new(lexed.tokens, max_depth, budget);
-    let mut module = parser.module();
+    let (mut module, parser_diagnostics) =
+        run_parser(Parser::new(lexed.tokens, max_depth, budget), whole);
     module.span = whole;
     let mut diagnostics = lexed.diagnostics;
-    diagnostics.extend(parser.diags);
+    // One diagnostic per problem: the token reader already complained about a token it flagged
+    // (a stray `]`, say), and about an opener that is never closed, so the parser stays quiet
+    // about the same token and about reaching the end of the file inside that opener.
+    let flagged: Vec<usize> = diagnostics.iter().map(|d| d.span.start).collect();
+    let unclosed = diagnostics
+        .iter()
+        .any(|d| d.code == Code::UnbalancedDelimiter);
+    diagnostics.extend(parser_diagnostics.into_iter().filter(|d| {
+        d.code == Code::ParseTooManyErrors
+            || !(flagged.contains(&d.span.start) || (unclosed && d.span.start >= eof_start))
+    }));
     // Source order; a "too many errors" marker stays last, where reporting stopped.
     diagnostics.sort_by_key(|d| (d.code == Code::ParseTooManyErrors, d.span.start));
     Parsed {
         module,
         diagnostics,
+    }
+}
+
+/// The stack the parser runs on. Recursive descent costs about a dozen frames per level of
+/// nesting (one per level of the precedence ladder), and a debug build's frames are large, so a
+/// source at the nesting limit (256 levels) needs more than the 2 MiB a test thread gets and, on
+/// Windows, than the 1 MiB of a main thread. The parser therefore always runs on a thread of its
+/// own with this much stack: the limit bounds the depth, this bounds the stack for that depth
+/// with a wide margin (`tests/parser.rs` measures the need). The memory is address space until
+/// touched.
+const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+/// Reads the module on a thread with [`PARSER_STACK_BYTES`] of stack; reads it on the caller's
+/// thread if no thread can be started. A panic in the parser (a bug) is passed on to the caller.
+fn run_parser(parser: Parser, whole: Span) -> (Module, Vec<Diagnostic>) {
+    fn work(slot: &std::sync::Mutex<Option<Parser>>) -> Option<(Module, Vec<Diagnostic>)> {
+        let mut parser = slot.lock().ok()?.take()?;
+        let module = parser.module();
+        Some((module, parser.diags))
+    }
+    let slot = std::sync::Mutex::new(Some(parser));
+    let spawned = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(PARSER_STACK_BYTES)
+            .name("ratio-parser".to_owned())
+            .spawn_scoped(scope, || work(&slot))
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+    });
+    match spawned {
+        Ok(Some(done)) => done,
+        // No thread could be started: the parser is still in the slot.
+        _ => work(&slot).unwrap_or_else(|| {
+            (
+                Module {
+                    meta: None,
+                    items: Vec::new(),
+                    span: whole,
+                },
+                Vec::new(),
+            )
+        }),
     }
 }
 
@@ -543,7 +599,10 @@ impl Parser {
 
     fn expected(&mut self, what: &str) {
         let found = describe(self.kind());
-        self.error_here(Code::UnexpectedToken, format!("expected {what}, found {found}"));
+        self.error_here(
+            Code::UnexpectedToken,
+            format!("expected {what}, found {found}"),
+        );
     }
 
     fn expect(&mut self, kind: &TokenKind, what: &str) -> bool {
@@ -735,25 +794,22 @@ impl Parser {
             self.bump();
             return true;
         }
-        match self.kind() {
-            TokenKind::LBrace(kind) => {
-                let kind = *kind;
-                if kind != want {
-                    self.error_here(
-                        Code::WrongBrace,
-                        format!(
-                            "expected {what}, but this `{{` starts {} here (rule 1 of chapter 02)",
-                            brace_name(kind)
-                        ),
-                    );
-                }
-                self.bump();
-                true
+        if let TokenKind::LBrace(kind) = self.kind() {
+            let kind = *kind;
+            if kind != want {
+                self.error_here(
+                    Code::WrongBrace,
+                    format!(
+                        "expected {what}, but this `{{` starts {} here (rule 1 of chapter 02)",
+                        brace_name(kind)
+                    ),
+                );
             }
-            _ => {
-                self.expected(&format!("`{{` starting {what}"));
-                false
-            }
+            self.bump();
+            true
+        } else {
+            self.expected(&format!("`{{` starting {what}"));
+            false
         }
     }
 
@@ -1552,11 +1608,7 @@ impl Parser {
     }
 
     fn range(&mut self) -> Expr {
-        self.non_assoc(
-            Self::add,
-            range_op,
-            "ranges do not chain; add parentheses",
-        )
+        self.non_assoc(Self::add, range_op, "ranges do not chain; add parentheses")
     }
 
     fn add(&mut self) -> Expr {
@@ -1602,7 +1654,8 @@ impl Parser {
             | TokenKind::LBracket => true,
             // A call override starts on the line of the call (rule 7).
             TokenKind::Keyword(Keyword::With) => {
-                matches!(self.nth(1), TokenKind::LBrace(_)) && self.span().line == self.prev.end_line
+                matches!(self.nth(1), TokenKind::LBrace(_))
+                    && self.span().line == self.prev.end_line
             }
             // A variant literal: a type name, then a `{` the reader read as a record (rule 1).
             TokenKind::LBrace(BraceKind::Record) => as_path(expr)
@@ -1767,9 +1820,7 @@ impl Parser {
                     ExprKind::Par(branches)
                 }
             }
-            TokenKind::Ident(_) | TokenKind::Contextual(_) => {
-                ExprKind::Name(self.ident("a name"))
-            }
+            TokenKind::Ident(_) | TokenKind::Contextual(_) => ExprKind::Name(self.ident("a name")),
             TokenKind::LParen => self.paren_or_tuple(),
             TokenKind::LBracket => {
                 self.bump();

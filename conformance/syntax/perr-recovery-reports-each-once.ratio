@@ -1,0 +1,17 @@
+// expect: parse-error P0001 at 6:14
+// expect: parse-error P0001 at 10:19
+// expect: parse-error P0005 at 13:17
+
+fn first() {
+  let a = (1 2)
+  a
+}
+
+fn second() { f(1 2) }
+
+fn third() {
+  let b = 1 < 2 < 3
+  b
+}
+
+fn fine() { 1 }

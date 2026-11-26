@@ -1,0 +1,28 @@
+// expect: parse-ok
+
+/// The root agent.
+/// Second line.
+@turn
+@allow(read_file, grep)
+pub harness turn(t: Turn) -> Reply {
+  t
+}
+
+@one @two(x: 1)
+fn attributed() { 1 }
+
+type Report = {
+  /// The path.
+  path: Str,
+  @hidden
+  secret: Str "not shown",
+  @a @b(1)
+  other?: Int,
+}
+
+/// Documented enum.
+enum E {
+  /// A variant.
+  A,
+  B { n: Int },
+}

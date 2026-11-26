@@ -1,0 +1,34 @@
+// expect: parse-ok
+
+prompt everything(path: Str, body: Untrusted<Str>) {
+  system "You review code."
+  instruct "Summarise this file."
+  task "Look at {path}"
+  data body
+  data body as path
+  image shot
+  image shot as "screenshot"
+  example "input" -> "output"
+  format FileNote
+  format [Int]
+  steps "Think step by step."
+  context context.main()
+  note "Be brief."
+  include other(path)
+  if verbose { note "More detail." }
+  if verbose { note "More." } else { note "Less." }
+  for f in files { data f }
+  for (a, b) in pairs { note a }
+}
+
+fn inline() {
+  let p = prompt { task "x"; instruct "y" }
+  let q = prompt { }
+  let r = prompt {
+    task "z"
+    context context.main()
+  }
+  context.main()
+  data = 1
+  note + 1
+}

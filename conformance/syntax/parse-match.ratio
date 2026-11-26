@@ -1,0 +1,25 @@
+// expect: parse-ok
+
+fn matches() {
+  match x { 1 => "one", _ => "other" }
+  match x {
+    0 => "zero",
+    n if n < 0 => "negative",
+    n => "positive",
+  }
+  match verdict {
+    Pass => 1,
+    Fail { reason } => 2,
+    Verdict.Other { value: v, .. } => 3,
+  }
+  match pair { (a, b) => a, }
+  match items { [] => 0, [x] => 1, [first, ..rest] => 2, [.., last] => 3, [a, .., z] => 4 }
+  match name { "a" | "b" => 1, _ => 2 }
+  match r { { a, b: 1 } => 1, { a, .. } => 2, { } => 3 }
+  match m { all @ { a } => 1, n @ 1 => 2 }
+  match e { Denied => 1 }
+  let y = match x {
+    1 => { 2 },
+    _ => do { 3 },
+  }
+}

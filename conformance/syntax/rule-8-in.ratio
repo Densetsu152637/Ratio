@@ -1,0 +1,13 @@
+// expect: parse-ok
+
+// Rule 8: `in` inside `for … in` is the loop keyword, not the membership operator.
+
+fn membership(xs: [Int]) {
+  for x in xs { 1 }
+  for x in ys { x in xs }
+  if x in xs { 1 }
+  let b = x in xs
+  while x in xs { 1 }
+  for x in xs.filter(|y| y in zs) { 1 }
+  prompt { for x in xs { data x } }
+}

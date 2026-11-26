@@ -1,0 +1,19 @@
+// expect: parse-ok
+
+// Rule 7: `x with { … }` binds tighter than any binary operator and starts on the call's line.
+
+fn override(x: Int) {
+  f(x) with { effort: low }
+  f(x) with { effort: low, budget: { tokens: 10k } }
+  let a = f(x) with { effort: low } + 1
+  let b = 1 + f(x) with { effort: low }
+  let c = reviewer(diff, focus: "style") with { effort: low }
+  f(x) with { a: 1 } |> g
+  f(x) with { a: 1 } ?? none
+  x.y(1) with { a: 1 }
+  f(x)
+  with { effort: low } { work() }
+  f(x) with {
+    effort: low,
+  }
+}

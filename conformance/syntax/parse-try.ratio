@@ -1,0 +1,15 @@
+// expect: parse-ok
+
+fn tries() {
+  try { risky() } catch e { handle(e) }
+  let report = try {
+    tools.run_command("cargo test -q", check: true)
+  } catch {
+    e if e.kind is ToolFailed => json.decode::<CommandResult>(e.data),
+    e if e.kind is Denied => raise fail("no-tests", "refused"),
+    Invalid { message } => message,
+    _ => raise e,
+  }
+  try { a() }
+  catch err { b(err) }
+}

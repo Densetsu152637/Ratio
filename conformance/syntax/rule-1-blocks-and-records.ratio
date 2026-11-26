@@ -1,0 +1,66 @@
+// expect: parse-ok
+
+// Rule 1: what a `{` opens.
+
+fn head_keywords(c: Bool, xs: [Int], n: Int, d: Duration) {
+  if c { 1 } else { 2 }
+  for x in xs { x }
+  while c { 1 }
+  loop { break }
+  repeat n { 1 }
+  try { 1 } catch e { 2 }
+  defer { 1 }
+  do { 1 }
+  with timeout d { 1 }
+}
+
+fn arm_lists(x: Int) {
+  match x { _ => 1 }
+  try { 1 } catch { _ => 2 }
+}
+
+enum Body { A, B { n: Int } }
+
+/// `with` and a record: the first `{` is the configuration, the next the block.
+fn with_and_a_record() {
+  with { effort: low } { work() }
+  with { } { work() }
+  with {
+    tools: [grep],
+  } {
+    work()
+  }
+  call(x) with { budget: { tokens: 1k } }
+}
+
+harness h() -> Int with { effort: high } { 1 }
+
+/// Variant literals in expression position, shorthand included.
+fn variants() {
+  Denied { by: user }
+  Denied { by }
+  Verdict.Fail { reason: "x" }
+  let v = Ok { value: 1 }
+}
+
+/// Records: `}` or `..` first, or an identifier followed by `:` or `,`; otherwise a block.
+fn records_and_blocks() {
+  let a = {}
+  let b = { ..base }
+  let c = { x: 1 }
+  let d = { x, }
+  let e = { x, y }
+  let f = { x }
+  let g = { let y = 1; y }
+  map(xs, |c| { steps: c.steps })
+  map(xs, |c| { x })
+  map(xs, |c| { x, })
+  map(xs, |c| {})
+}
+
+/// A record in a head is parenthesised.
+fn parenthesised_heads(xs: [Int]) {
+  if ({ a: 1 }).a == 1 { 1 }
+  for x in ({ a: 1 }).a { x }
+  match ({ a: 1 }) { _ => 1 }
+}

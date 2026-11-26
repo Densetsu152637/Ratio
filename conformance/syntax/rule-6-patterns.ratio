@@ -1,0 +1,15 @@
+// expect: parse-ok
+
+// Rule 6: a qualified name or a name with a payload is a variant pattern; a bare name binds
+// (the checker decides whether a bare name is a variant).
+
+fn patterns(v: Verdict) {
+  match v {
+    Pass => 1,
+    Verdict.Pass => 2,
+    Fail { reason } => 3,
+    Verdict.Fail { reason: r, .. } => 4,
+    other => 5,
+  }
+  try { 1 } catch { Denied { by } => 1, ToolFailed => 2, e => 3 }
+}

@@ -1,0 +1,5 @@
+// expect: parse-error P0005 at 4:17
+
+fn chain() {
+  let a = 1 < 2 < 3
+}

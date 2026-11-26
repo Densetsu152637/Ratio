@@ -1,0 +1,4 @@
+// expect: parse-error P0003 at 4:14
+// expect: parse-error P0001 at 4:20
+
+type Wrong = { Int }
