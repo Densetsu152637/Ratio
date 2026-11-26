@@ -370,7 +370,7 @@ pub(crate) fn json_equal(a: &Value, b: &Value) -> bool {
                     .iter()
                     .map(|(k, v)| (k.as_text().unwrap_or(""), v))
                     .collect();
-                for (k, u) in p.iter() {
+                for (k, u) in p {
                     match index.get(k.as_text().unwrap_or("")) {
                         Some(v) => work.push((u.clone(), (*v).clone())),
                         None => return false,
@@ -400,7 +400,7 @@ enum Step {
     /// Object keys, compared before the values under them.
     Keys(Value, Value),
     /// The lengths of two arrays or objects, compared after their common prefix.
-    Lengths(usize, usize),
+    Lengths(u64, u64),
 }
 
 /// The natural order of JSON nodes: `null`, booleans, numbers by value, text by code point,
@@ -431,7 +431,7 @@ pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
                     p.as_str().cmp(q.as_str())
                 }
                 (Some(Json::Array(p)), Some(Json::Array(q))) => {
-                    work.push(Step::Lengths(p.len() as usize, q.len() as usize));
+                    work.push(Step::Lengths(p.len(), q.len()));
                     let pairs: Vec<(Value, Value)> =
                         p.cursor_values().zip(q.cursor_values()).collect();
                     for (u, v) in pairs.into_iter().rev() {
@@ -448,7 +448,7 @@ pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
                         v
                     };
                     let (sp, sq) = (sorted(p), sorted(q));
-                    work.push(Step::Lengths(sp.len(), sq.len()));
+                    work.push(Step::Lengths(sp.len() as u64, sq.len() as u64));
                     for ((k1, v1), (k2, v2)) in sp.into_iter().zip(sq).rev() {
                         work.push(Step::Pair(v1, v2));
                         work.push(Step::Keys(k1, k2));

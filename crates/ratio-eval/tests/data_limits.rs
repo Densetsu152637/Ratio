@@ -5,6 +5,12 @@
 //! 256 KiB stack; long built-ins stop when cancelled; results are charged to the heap before
 //! they are built.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    reason = "test programs and models name values briefly, and a corpus runner reads best whole"
+)]
+
 mod support;
 
 use std::sync::Arc;

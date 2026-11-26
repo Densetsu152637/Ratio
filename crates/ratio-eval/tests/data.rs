@@ -25,6 +25,12 @@
 //! Every `json`, `list` and `map` row of `spec/06-stdlib/data.md` must be named by exactly one
 //! file (the test reads the tables), and every name must be a built-in the interpreter has.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    reason = "test programs and models name values briefly, and a corpus runner reads best whole"
+)]
+
 mod support;
 
 use std::collections::BTreeMap;
