@@ -240,7 +240,10 @@ the checker drops. The type-parameter names `S`
 
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
 (`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
-`meta`, `agents`), a few dozen of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. A standard name it lacks is
+`meta`, `agents`); stages 7 to 12 extend it module by module. `list`, `map` and `json` are
+complete since stage 8 (47, 15 and 14 built-ins, with `repeat_` for `list.repeat`), and the
+prelude gained `JsonType` (`json.type_of`) and `Violation` (`{ pointer, message }`, both
+untrusted text; `json.validate`), which the chapter names without a shape. A standard name it lacks is
 reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
 that does not exist (`C0001`).
 

@@ -150,7 +150,7 @@ pub(super) fn merge(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (a, b) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     json_of(cx, a)?;
     json_of(cx, b)?;
-    merge_nodes(cx.heap, Some(a), b, 0).map_err(|f| cx.fault(f, a.quick() | b.quick()))
+    merge_nodes(cx.heap, Some(a), b).map_err(|f| cx.fault(f, a.quick() | b.quick()))
 }
 
 pub(super) fn patch(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {

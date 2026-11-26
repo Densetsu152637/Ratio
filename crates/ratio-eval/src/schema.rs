@@ -205,6 +205,8 @@ fn refine(schema: &mut J, m: &Meta) {
 
 struct Writer<'a> {
     p: &'a Prepared,
+    /// How deep the walk may nest: the most the stack it runs on takes.
+    nest: usize,
     /// Enums that contain themselves, with their `$defs` name.
     defs: Vec<(EnumKey, String)>,
     size: usize,
@@ -358,7 +360,7 @@ impl Writer<'_> {
     }
 
     fn schema(&mut self, t: u32, env: &Env, depth: usize) -> Result<J, Fault> {
-        if depth > MAX_SCHEMA_DEPTH {
+        if depth > self.nest {
             return Err(too_large());
         }
         self.grow(16)?;
@@ -544,8 +546,21 @@ impl Writer<'_> {
 ///
 /// `Invalid`, when the type is not schema-able or its schema is over the bounds.
 pub(crate) fn schema_text(p: &Prepared, t: u32) -> Result<String, Fault> {
+    // The walks recurse over the type's nesting (at most 256); they run on a thread with a
+    // large stack, as the preparation pass does, so a small caller's stack is safe.
+    crate::stack::run(|max_depth| schema_on(p, t, MAX_SCHEMA_DEPTH.min(max_depth))).unwrap_or_else(
+        || {
+            Err(Fault::Invalid(
+                "the schema's worker could not start".to_owned(),
+            ))
+        },
+    )
+}
+
+fn schema_on(p: &Prepared, t: u32, nest: usize) -> Result<String, Fault> {
     let mut w = Writer {
         p,
+        nest,
         defs: Vec::new(),
         size: 0,
         fuel: FUEL,

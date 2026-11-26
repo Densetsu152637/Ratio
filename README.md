@@ -42,9 +42,9 @@ belong to which repository).
 | [`crates/ratio-names/`](crates/ratio-names/README.md) | Package and library `ratio-names`: modules and names (stage 3): sources, imports, source-qualified names, the `Registry` trait and name resolution |
 | [`crates/ratio-check/`](crates/ratio-check/README.md) | Package and library `ratio-check`: the type checker (stage 4) with schemas and taint (stage 5): types, subtyping, inference, exhaustiveness, constants, sinks, trust sites, secrets, schemas, type digests and `harnesses.check`, and the side tables later stages read |
 | [`crates/ratio-ir/`](crates/ratio-ir/README.md) | Package and library `ratio-ir`: the Core IR (stage 6): lowering, site ids, the canonical form and the IR hash |
-| [`crates/ratio-eval/`](crates/ratio-eval/README.md) | Package and library `ratio-eval`: the core interpreter (stage 6): the prepared form, labelled values, the evaluator and its limits |
+| [`crates/ratio-eval/`](crates/ratio-eval/README.md) | Package and library `ratio-eval`: the core interpreter (stage 6): the prepared form, labelled values, the evaluator and its limits; with the `json`, `list` and `map` built-ins of chapter 06 (stage 8) |
 | `std/` | The built-in packages' sources (`std:default` and the rest), embedded by the `ratio` library; it arrives with stage 23 |
-| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/` and `eval/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
+| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/`, `eval/` and `data/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` is the built-in list (a stub until stage 7) |
 | `scripts/` | The checks CI runs: `check-rust.sh`, and `ci/check-links.py` and `ci/check-license.py` |
 | `.github/workflows/` | `ci.yml` (every pull request and `main`) and `release.yml` (every `v*` tag) |
 

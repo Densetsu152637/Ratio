@@ -1,7 +1,8 @@
 # ratio-eval
 
 Ratio's core interpreter: the second half of stage 6 of the
-[implementation plan](../../spec/10-implementation.md). Hosts reach it through the
+[implementation plan](../../spec/10-implementation.md), with the `json`, `list` and `map`
+built-ins of stage 8 ([below](#stage-8-json-list-and-map)). Hosts reach it through the
 [`ratio` facade](../ratio/README.md) (`ratio::prepare`, `ratio::evaluate`, `ratio::interp`).
 
 ```rust
@@ -94,14 +95,76 @@ being evaluated per call, for at most `call_depth` calls). `Budget` and `Cancell
 `catch`; `defer` blocks run on every exit, in reverse order (the first error wins when one
 raises).
 
-`builtins::implemented()` lists the built-ins this stage carries, one or more per cost class:
+`builtins::implemented()` lists the built-ins the interpreter carries, with their cost classes:
 the pure functions of the checker's table, among them `text.repeat` (`output`: a negative count
 or a result over 16 MiB is refused before anything is built, with checked arithmetic) and
 `text.similarity` (`product`: two rows over the shorter text, charged to the heap, checking
 cancellation every checkpoint's worth of cells).
 
+## Stage 8: `json`, `list` and `map`
+
+Every `json.*`, `list.*` and `map.*` built-in of chapter 06 (`data`): 14, 47 and 15 rows, in
+`src/builtins/` (`json.rs`, `list.rs`, `map.rs`; `util.rs` holds what they share, `validate.rs`
+and `nfa.rs` the schema validator and its pattern matcher), on stage 6's persistent lists
+(`plist.rs`) and maps (`pmap.rs`, with `probe` and `from_sorted` added), `Json` with labels
+(`json.rs`) and the charging framework. `jsonedit.rs` edits JSON (pointers, `set`, `merge`,
+`patch`, `diff`, rendering, equality and order); `schema.rs` derives `json.schema::<T>()`.
+
+**Charges** (the class's work `w`, charged `1 + ⌈w / 64⌉`, debited before the built-in runs
+from the arguments' sizes, with saturating arithmetic; `n` is a length, `W` a weight, `|k|` a
+key's weight, `L = ⌈log2(n + 1)⌉`):
+
+| Class | Built-ins and their `w` |
+| --- | --- |
+| `const` | `list.is_empty`, `list.last`, `map.len`, `map.is_empty`, `json.type_of` |
+| `log` | `list.insert`, `remove_at`, `drop`, `slice`: `L`; `list.concat`: `L` over both lengths; `map.has`, `remove`, `update`: `L · \|k\|` |
+| `nlogn` | `list.sort`, `unique`, `map.from`: `W · L` over the whole list (elements are compared whole); `list.unique_by`, `group_by`, `map.count_by`: `n · L`, then `W_keys · L` once the keys are known, as `list.sort_by` does |
+| `output` | `list.range`, `list.repeat`: the number of elements the arguments fix (at most 1,000,000, else `Invalid` before anything is built) |
+| `linear` | everything else; `n` is the length, or the weight where values are compared or walked (`list.flatten`, `index_of`, `min`, `max`, `map.merge`, `json.stringify`, `set`, `merge`, `equal`), and for `list.window` `n + windows · (L + 64)` since each window is a slice |
+| `product` | `json.diff` and, **as the specification's `linear` is unsound for them**, `json.validate` (the product of the instance's and the schema's weights: each pair of nodes may be visited) and `json.patch` (`(W_doc + W_ops) · W_ops`: each operation may copy a path through the document) |
+
+`json.schema::<T>()` has no arguments to size: its work is bounded by the type (an output of
+at most 1 MiB and a work budget) and its output is charged on return.
+
+**Labels.** Every result carries the labels of everything that decided it: a lookup or update
+the labels of every key on its path (`Map::probe`), a scan the labels of every callback result it
+examined (`find`, `any`, `take_while`, `partition`, ...), an order-dependent result (`sort`,
+`unique`, `min`, `index_of`, `json.diff`, `json.validate`) the labels anywhere in its inputs, a
+rebuilt JSON container its old labels, the pointer's or patch's, and its keys'. A failure's
+message carries the same labels.
+
+**Resources.** Every buffer proportional to an input is charged to the heap when it is made
+(`util::Gather`: one slot per element, charged up front when the size is known, at most
+1,000,000 elements); sorting uses a stable merge sort that cannot panic on an odd order;
+long loops check for cancellation every checkpoint's worth of work (`util::Pace`).
+`json.parse`, JSON equality and order, `merge`, `set`, `patch`, `diff` and rendering keep their
+nesting on an explicit stack; the recursive walks that remain (`json.validate`'s, and the
+derivation of `json.schema`) are bounded (192 levels, 256 levels) and run on the large-stack
+worker the preparation pass uses. `json.stringify` stops writing at 16 MiB and is charged for
+what it wrote. In debug builds `work::add` counts the units of work the structures, comparisons
+and built-ins do (`work::reset`, `work::total`).
+
+**What the specification leaves open, and this stage decided.** `json.validate` reads the
+keywords `$ref` (into the same schema only), `type`, `enum`, `const`, the numeric, string, array
+and object keywords, `allOf`, `anyOf`, `oneOf`, `not` and `if/then/else`, and ignores the rest
+(`format`, `unevaluated*`, annotations); `pattern` runs on a small linear-time matcher over the
+subset chapter 03 allows in `@pattern`. A pointer is strict RFC 6901 (`~` is followed by `0` or
+`1`) and names at most 257 tokens. `list.insert` takes an index in `0..=len` and `remove_at` one in
+`0..len`: negative indexes are `Invalid`. `list.unique`, `unique_by`, `group_by`, `count_by` and
+`map.from` take keys equal when the natural order says so (so every `NaN` is one key).
+`json.keys` and `json.stringify` give an object's keys in the order the IR keeps (a record's
+fields are in name order). `json.stringify` returns `Untrusted<Str>`, as `text.show` does.
+
 ## Tests
 
+`tests/data.rs` runs `conformance/data/`, one file per `json`, `list` and `map` row (values,
+failures, steps, and label propagation for each argument: `labels NAME: args`), and checks that
+the files cover the chapter's tables; `tests/data_limits.rs` holds the debug-build work counters
+against each built-in's charge, the refusal without running (`Budget { which: steps }`), the
+O(N log N) loops of pushes and sets, hostile nesting on a 256 KiB stack, cancellation and the
+heap; `tests/data_props.rs` compares the built-ins with `Vec` and `BTreeMap` models and
+round-trips random JSON through `diff`, `patch`, `set` and `get`; `tests/schema.rs` compares
+`json.schema` with the checker's own derivation byte for byte.
 `tests/conformance.rs` runs `conformance/eval/` (`ok`, `value`, `runtime-error` and `steps`
 expectations); `tests/labels.rs` covers label propagation for every operator and built-in,
 `Json`, `declassify` and the sink check; `src/properties.rs` checks the persistent structures

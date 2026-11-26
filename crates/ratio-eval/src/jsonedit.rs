@@ -468,63 +468,132 @@ pub(crate) fn json_order(a: &Value, b: &Value) -> Ordering {
 
 // ---- merge ----
 
-/// RFC 7396: `patch` merged onto `target` (absent when there is nothing there). A patch that
-/// is not an object replaces the target; an object patch merges key by key, a `null` removes.
-/// The result of an object patch carries the labels of both, of every key of both, and of every
-/// patch value (whether it is `null` decided what was kept).
-pub(crate) fn merge(
-    heap: &Heap,
-    target: Option<&Value>,
-    patch: &Value,
-    depth: u32,
-) -> Result<Value, Fault> {
-    if depth > MAX_DEPTH {
-        return Err(Fault::Depth);
+/// One object being merged: the patch's entries and what has been built so far.
+struct Merging {
+    patch: Value,
+    /// For each patch entry, the target entry with the same key.
+    at: Vec<Option<usize>>,
+    /// The target's entries, `None` once removed; new keys are appended.
+    out: Vec<Option<(Value, Value)>>,
+    own: Labels,
+    next: usize,
+    /// The entry waiting for the nested merge in progress: its slot (or none, for a new key)
+    /// and its key.
+    waiting: Option<(Option<usize>, Value)>,
+    _charge: Charge,
+}
+
+impl Merging {
+    fn new(heap: &Heap, target: Option<&Value>, patch: &Value) -> Result<Merging, Fault> {
+        let patch_entries = object(patch).unwrap_or(&[]);
+        let target_entries: &[(Value, Value)] = target.and_then(object).unwrap_or(&[]);
+        crate::work::add(2 * (target_entries.len() + patch_entries.len()) as u64 + 1);
+        let mut own = patch.labels | key_labels(patch_entries) | key_labels(target_entries);
+        if let Some(t) = target {
+            own |= t.labels;
+        }
+        // The index of the target's keys and the entries being built are charged first.
+        let charge = pre_charge(
+            heap,
+            4 * target_entries.len() as u64 + 3 * patch_entries.len() as u64,
+        )?;
+        let at = {
+            let index: HashMap<&str, usize> = target_entries
+                .iter()
+                .enumerate()
+                .map(|(i, (k, _))| (k.as_text().unwrap_or(""), i))
+                .collect();
+            patch_entries
+                .iter()
+                .map(|(k, _)| index.get(k.as_text().unwrap_or("")).copied())
+                .collect()
+        };
+        Ok(Merging {
+            patch: patch.clone(),
+            at,
+            out: target_entries.iter().cloned().map(Some).collect(),
+            own,
+            next: 0,
+            waiting: None,
+            _charge: charge,
+        })
     }
-    let Some(patch_entries) = object(patch) else {
-        return Ok(patch.clone());
-    };
-    let target_entries: &[(Value, Value)] = target.and_then(object).unwrap_or(&[]);
-    crate::work::add(2 * (target_entries.len() + patch_entries.len()) as u64 + 1);
-    let mut own = patch.labels | key_labels(patch_entries) | key_labels(target_entries);
-    if let Some(t) = target {
-        own |= t.labels;
-    }
-    // An index of the target's keys, and the entries being built, charged first.
-    let _charge = pre_charge(
-        heap,
-        4 * target_entries.len() as u64 + 2 * patch_entries.len() as u64,
-    )?;
-    let index: HashMap<&str, usize> = target_entries
-        .iter()
-        .enumerate()
-        .map(|(i, (k, _))| (k.as_text().unwrap_or(""), i))
-        .collect();
-    let mut out: Vec<Option<(Value, Value)>> = target_entries.iter().cloned().map(Some).collect();
-    for (pk, pv) in patch_entries {
-        crate::work::add(1);
-        own |= pv.labels;
-        let name = pk.as_text().unwrap_or("");
-        let at = index.get(name).copied();
-        if is_null(pv) {
-            if let Some(i) = at {
-                out[i] = None;
+
+    /// Stores `merged` as the value of the key (`slot`, if the target had it).
+    fn set(&mut self, slot: Option<usize>, key: Value, merged: Value) {
+        match slot {
+            Some(i) => {
+                let key = self.out[i].as_ref().map_or(key, |(k, _)| k.clone());
+                self.out[i] = Some((key, merged));
             }
+            None => self.out.push(Some((key, merged))),
+        }
+    }
+}
+
+/// RFC 7396: `patch` merged onto `target`. A patch that is not an object replaces the target;
+/// an object patch merges key by key, a `null` removes. The result of an object patch carries
+/// the labels of both, of every key of both, and of every patch value (whether it is `null`
+/// decided what was kept). Nested objects are merged with an explicit stack.
+///
+/// # Errors
+///
+/// Heap, depth and size limits.
+pub(crate) fn merge(heap: &Heap, target: Option<&Value>, patch: &Value) -> Result<Value, Fault> {
+    if object(patch).is_none() {
+        return Ok(patch.clone());
+    }
+    let mut stack = vec![Merging::new(heap, target, patch)?];
+    let mut finished: Option<Value> = None;
+    loop {
+        let Some(top) = stack.last_mut() else {
+            return finished.ok_or_else(|| invalid("a merge ended without a result"));
+        };
+        if let Some(merged) = finished.take()
+            && let Some((slot, key)) = top.waiting.take()
+        {
+            top.set(slot, key, merged);
+        }
+        let patch = top.patch.clone();
+        let entries = object(&patch).unwrap_or(&[]);
+        let mut descend: Option<Merging> = None;
+        while let Some((pk, pv)) = entries.get(top.next) {
+            let slot = top.at[top.next];
+            top.next += 1;
+            crate::work::add(1);
+            top.own |= pv.labels;
+            if is_null(pv) {
+                if let Some(i) = slot {
+                    top.out[i] = None;
+                }
+            } else if object(pv).is_some() {
+                let current = slot.and_then(|i| top.out[i].as_ref().map(|(_, v)| v.clone()));
+                top.waiting = Some((slot, pk.clone()));
+                descend = Some(Merging::new(heap, current.as_ref(), pv)?);
+                break;
+            } else {
+                top.set(slot, pk.clone(), pv.clone());
+            }
+        }
+        if let Some(child) = descend {
+            if stack.len() as u32 > MAX_DEPTH {
+                return Err(Fault::Depth);
+            }
+            stack.push(child);
             continue;
         }
-        let current = at.and_then(|i| out[i].as_ref().map(|(_, v)| v.clone()));
-        let merged = merge(heap, current.as_ref(), pv, depth + 1)?;
-        match at {
-            Some(i) => {
-                let key = out[i]
-                    .as_ref()
-                    .map_or_else(|| pk.clone(), |(k, _)| k.clone());
-                out[i] = Some((key, merged));
-            }
-            None => out.push(Some((pk.clone(), merged))),
+        let Some(done) = stack.pop() else {
+            continue;
+        };
+        finished = Some(object_node(
+            heap,
+            done.own,
+            done.out.into_iter().flatten().collect(),
+        )?);
+        if stack.is_empty() {
+            return Ok(finished.take().unwrap_or_else(Value::unit));
         }
     }
-    object_node(heap, own, out.into_iter().flatten().collect())
 }
 
 // ---- patch ----
