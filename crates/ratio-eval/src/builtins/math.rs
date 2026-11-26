@@ -429,8 +429,19 @@ pub(super) fn mode(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     }
     // The elements and the index permutation are two buffers of `n` slots.
     let _charge = charged(cx, cost::SLOT.saturating_mul(n).saturating_mul(2))?;
-    let items = l.to_vec();
-    let mut order: Vec<u32> = (0..u32::try_from(items.len()).unwrap_or(u32::MAX)).collect();
+    let mut items: Vec<Value> = Vec::with_capacity(usize::try_from(n).unwrap_or(0));
+    let mut cur = l.cursor();
+    let mut copy_ticker = Ticker::default();
+    while let Some(v) = cur.next() {
+        items.push(v);
+        copy_ticker.tick(cx, 1)?;
+    }
+    let mut order: Vec<u32> = Vec::with_capacity(items.len());
+    for chunk_start in (0..items.len()).step_by(CHUNK) {
+        poll(cx)?;
+        let end = (chunk_start + CHUNK).min(items.len());
+        order.extend((chunk_start..end).map(|i| u32::try_from(i).unwrap_or(u32::MAX)));
+    }
     sort_polled(cx, &mut order, |&a, &b| {
         work::add(items[a as usize].weight().min(items[b as usize].weight()));
         cmp_natural(&items[a as usize], &items[b as usize]).then(a.cmp(&b))

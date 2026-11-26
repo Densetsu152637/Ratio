@@ -1,0 +1,12 @@
+// builtin: list.group_by
+// case main: value {"1": ["a", "c"], "2": ["bb", "dd"]}
+// case empty: value {}
+// case raises: error User
+// labels group(xs): ["a", "bb", "c"] ; inner 0
+fn main() -> Map<Int, [Str]> { list.group_by(["a", "bb", "c", "dd"], |s| text.len(s)) }
+fn empty() -> Map<Int, [Str]> {
+  let xs: [Str] = []
+  xs.group_by(|s| text.len(s))
+}
+fn raises() -> Map<Int, [Str]> { ["a"].group_by(|s| raise fail("boom", "key")) }
+fn group(xs: [Str]) -> Map<Int, [Str]> { list.group_by(xs, |s| text.len(s)) }

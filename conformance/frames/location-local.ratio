@@ -1,0 +1,25 @@
+// expect: value ["local", "denied"]
+
+// A caller confined to local models cannot reach a hosted one through a callee.
+harness anywhere() -> Location with { permissions: { location: any } } {
+  meta.frame().location
+}
+
+harness hosted() -> Location with { permissions: { location: cloud } } {
+  meta.frame().location
+}
+
+harness local() -> [Str] with { permissions: { location: local } } {
+  let a = if anywhere() is local { "local" } else { "wider" }
+  let b = try {
+    hosted()
+    "reached"
+  } catch e {
+    if e.kind is Denied { "denied" } else { "other" }
+  }
+  [a, b]
+}
+
+fn main() -> [Str] {
+  local()
+}

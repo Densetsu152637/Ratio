@@ -1,0 +1,11 @@
+// expect: runtime-error Budget
+
+// Each harness call is one frame deeper; past the turn's depth limit (8) the call raises
+// `Budget { which: depth }`, which no code inside the turn can catch.
+harness down(n: Int) -> Int {
+  try { down(n + 1) } catch e { -1 }
+}
+
+fn main() -> Int {
+  down(0)
+}

@@ -1,0 +1,32 @@
+// builtin: map.set, map.remove
+// case main: value [{"a": 1, "b": 2, "c": 3}, {"a": 9, "b": 2}, {"b": 2}, {"a": 1, "b": 2}]
+// case persistent: value [{"a": 1}, {"a": 1, "b": 2}]
+// labels set(k, v): "c" | 3
+// labels replace(k, v): "a" | 9
+// labels remove(k): "a"
+// labels remove_absent(k): "zz"
+fn main() -> (Map<Str, Int>, Map<Str, Int>, Map<Str, Int>, Map<Str, Int>) {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  (map.set(m, "c", 3), m.set("a", 9), map.remove(m, "a"), m.remove("zz"))
+}
+fn persistent() -> (Map<Str, Int>, Map<Str, Int>) {
+  let m: Map<Str, Int> = { a: 1 }
+  let n = m.set("b", 2)
+  (m, n)
+}
+fn set(k: Str, v: Int) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.set(m, k, v)
+}
+fn replace(k: Str, v: Int) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.set(m, k, v)
+}
+fn remove(k: Str) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.remove(m, k)
+}
+fn remove_absent(k: Str) -> Map<Str, Int> {
+  let m: Map<Str, Int> = { a: 1, b: 2 }
+  map.remove(m, k)
+}

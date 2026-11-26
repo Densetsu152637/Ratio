@@ -46,13 +46,21 @@ fn rank(v: &Value) -> u8 {
 pub(crate) fn key_cmp(a: &Value, b: &Value) -> Ordering {
     match (&a.repr, &b.repr) {
         (Repr::Str(x), Repr::Str(y)) => {
-            // A comparison walks the common prefix: the work counters count it.
-            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64 + 1);
+            crate::work::add(1 + x.as_str().len().min(y.as_str().len()) as u64);
             x.as_str().cmp(y.as_str())
         }
-        (Repr::Int(x), Repr::Int(y)) => x.cmp(y),
-        (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
-        (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
+        (Repr::Int(x), Repr::Int(y)) => {
+            crate::work::add(1);
+            x.cmp(y)
+        }
+        (Repr::Bool(x), Repr::Bool(y)) => {
+            crate::work::add(1);
+            x.cmp(y)
+        }
+        (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => {
+            crate::work::add(1);
+            (e1, i1).cmp(&(e2, i2))
+        }
         // Keys the checker accepts beyond the four kinds (variants with payloads, tuples):
         // the natural order, which is total on them.
         _ if rank(a) == rank(b) => crate::ops::cmp_natural(a, b),
@@ -71,6 +79,7 @@ fn mk(
     left: Option<Arc<MNode>>,
     right: Option<Arc<MNode>>,
 ) -> Result<Arc<MNode>, Fault> {
+    crate::work::add(1);
     let mut meta = Meta {
         summary: Labels::NONE,
         weight: 0,
@@ -202,13 +211,31 @@ fn insert(
         }
         // The key keeps the labels of both writes.
         Ordering::Equal => {
-            let key = key.with_labels(n.key.labels);
+            let key = key.with_labels(n.key.quick());
             mk(heap, key, value, n.left.clone(), n.right.clone())
         }
     }
 }
 
 type Entry = (Value, Value);
+
+/// A perfectly balanced tree of the next `n` entries of `it` (its depth is log n).
+fn build_sorted(
+    heap: &Heap,
+    it: &mut dyn Iterator<Item = Entry>,
+    n: usize,
+) -> Result<Option<Arc<MNode>>, Fault> {
+    if n == 0 {
+        return Ok(None);
+    }
+    let left_n = (n - 1) / 2;
+    let left = build_sorted(heap, it, left_n)?;
+    let (key, value) = it
+        .next()
+        .ok_or_else(|| Fault::Invalid("too few entries".to_owned()))?;
+    let right = build_sorted(heap, it, n - 1 - left_n)?;
+    mk(heap, key, value, left, right).map(Some)
+}
 
 fn remove_min(heap: &Heap, n: &Arc<MNode>) -> Result<(Entry, Option<Arc<MNode>>), Fault> {
     match &n.left {
@@ -348,6 +375,44 @@ impl Map {
         None
     }
 
+    /// As [`Map::get_entry`], with the union of the own labels of every key the probe was
+    /// compared with (the whole path, found or not): what a hit or a miss depended on.
+    #[must_use]
+    pub fn probe(&self, key: &Value) -> (Option<(&Value, &Value)>, Labels) {
+        // A key's labels are all the labels inside it: a composite key (a tuple) is compared by
+        // its parts.
+        let mut seen = key.quick();
+        let mut n = self.root.as_deref();
+        while let Some(node) = n {
+            seen |= node.key.quick();
+            match key_cmp(key, &node.key) {
+                Ordering::Less => n = node.left.as_deref(),
+                Ordering::Greater => n = node.right.as_deref(),
+                Ordering::Equal => return (Some((&node.key, &node.value)), seen),
+            }
+        }
+        (None, seen)
+    }
+
+    /// A map of the next `n` entries of `entries`, which must be in strictly increasing key
+    /// order, built in O(n) into a balanced tree.
+    ///
+    /// # Errors
+    ///
+    /// Over the heap, element or depth limits, or fewer than `n` entries.
+    pub fn from_sorted(
+        heap: &Heap,
+        n: usize,
+        entries: &mut dyn Iterator<Item = (Value, Value)>,
+    ) -> Result<Map, Fault> {
+        if n as u64 > MAX_ELEMS {
+            return Err(Fault::TooLarge("a map of more than 1,000,000 entries"));
+        }
+        Ok(Map {
+            root: build_sorted(heap, entries, n)?,
+        })
+    }
+
     /// The map with `key` set to `value`.
     ///
     /// # Errors
@@ -359,33 +424,6 @@ impl Map {
         }
         Ok(Map {
             root: Some(insert(heap, self.root.as_ref(), key, value)?),
-        })
-    }
-
-    /// A map of entries already in strictly ascending key order, built balanced in one pass
-    /// with no comparison of keys (the caller sorted them once, and a thousand maps over the
-    /// same keys need no sorting each).
-    ///
-    /// # Errors
-    ///
-    /// Over the heap, element or depth limits.
-    pub(crate) fn from_sorted(heap: &Heap, entries: &[Entry]) -> Result<Map, Fault> {
-        fn build(heap: &Heap, e: &[Entry]) -> Result<Option<Arc<MNode>>, Fault> {
-            if e.is_empty() {
-                return Ok(None);
-            }
-            // Halves differ in size by at most one, so in height by at most one: balanced.
-            let mid = e.len() / 2;
-            let left = build(heap, &e[..mid])?;
-            let right = build(heap, &e[mid + 1..])?;
-            let (k, v) = &e[mid];
-            Ok(Some(mk(heap, k.clone(), v.clone(), left, right)?))
-        }
-        if entries.len() as u64 > MAX_ELEMS {
-            return Err(Fault::TooLarge("a map of more than 1,000,000 entries"));
-        }
-        Ok(Map {
-            root: build(heap, entries)?,
         })
     }
 

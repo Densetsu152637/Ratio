@@ -1,0 +1,49 @@
+// builtin: json.encode, json.decode
+// case round_trip: value [{"name": "a", "n": 2, "tags": ["x"]}, "a", 2]
+// case encoded: value {"n": 2, "name": "a", "tags": []}
+// case mismatch: value ["/n: the wrong kind of value", "/name: the wrong kind of value"]
+// case missing_field: error SchemaMismatch
+// case wrong_kind: error SchemaMismatch
+// case unit_only_enum: value ["high", "low"]
+// case enum_payload: value [{"kind": "bug", "line": 3}, 3]
+// case option_null: value [null, 4]
+// labels encode(n): 5
+// labels decode(n): 5
+// labels decode_text(s): "a"
+type Item = { name: Str, n: Int, tags: [Str] }
+enum Level { low, high }
+enum Finding { Bug { line: Int }, Clean }
+
+fn round_trip() -> (Untrusted<Item>, Untrusted<Str>, Int) {
+  let it: Item = { name: "a", n: 2, tags: ["x"] }
+  let back = json.decode::<Item>(json.encode(it))
+  (back, back.name, back.n)
+}
+fn encoded() -> Json {
+  let it: Item = { name: "a", n: 2, tags: [] }
+  json.encode(it)
+}
+fn mismatch() -> Json {
+  try {
+    let it = json.decode::<Item>(json.parse(r"""{"n": "x", "name": 5, "tags": []} """))
+    json.parse("[]")
+  } catch e {
+    e.data
+  }
+}
+fn missing_field() -> Int { json.decode::<Item>(json.parse(r"""{"n": 1} """)).n }
+fn wrong_kind() -> Int { json.decode::<Item>(json.parse("[1]")).n }
+fn unit_only_enum() -> (Json, Untrusted<Level>) {
+  (json.encode(Level.high), json.decode::<Level>(json.parse(r""""low" """)))
+}
+fn enum_payload() -> (Json, Int) {
+  let f = Finding.Bug { line: 3 }
+  let back = json.decode::<Finding>(json.encode(f))
+  (json.encode(f), if back is Bug { 3 } else { 0 })
+}
+fn option_null() -> (Untrusted<Int?>, Untrusted<Int?>) {
+  (json.decode::<Int?>(json.parse("null")), json.decode::<Int?>(json.parse("4")))
+}
+fn encode(n: Int) -> Json { json.encode(n) }
+fn decode(n: Int) -> Int { json.decode::<Int>(json.encode(n)) }
+fn decode_text(s: Str) -> Untrusted<Str> { json.decode::<Str>(json.encode(s)) }

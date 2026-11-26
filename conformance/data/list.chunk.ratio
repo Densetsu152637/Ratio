@@ -1,0 +1,18 @@
+// builtin: list.chunk
+// case main: value [[1, 2], [3, 4], [5]]
+// case one_chunk: value [[1, 2]]
+// case empty: value []
+// case zero: error Invalid
+// case negative: error Invalid
+// labels chunk(xs, size): [1, 2, 3] | 2 ; inner 0
+// labels refused(xs, size): [1, 2, 3] | 0
+fn main() -> [[Int]] { list.chunk([1, 2, 3, 4, 5], 2) }
+fn one_chunk() -> [[Int]] { [1, 2].chunk(10) }
+fn empty() -> [[Int]] {
+  let xs: [Int] = []
+  xs.chunk(2)
+}
+fn zero() -> [[Int]] { list.chunk([1], 0) }
+fn negative() -> [[Int]] { list.chunk([1], -1) }
+fn chunk(xs: [Int], size: Int) -> [[Int]] { list.chunk(xs, size) }
+fn refused(xs: [Int], size: Int) -> [[Int]] { list.chunk(xs, size) }

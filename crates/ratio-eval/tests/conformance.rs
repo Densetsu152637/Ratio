@@ -26,6 +26,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ratio_eval::{Outcome, Value, to_json_text};
+use support::{J, normal};
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/eval")
@@ -136,120 +137,6 @@ fn header(text: &str, file: &str) -> Result<Case, String> {
         return Err(format!("{file}: no expectation"));
     }
     Ok(case)
-}
-
-// ---- JSON normalisation for comparing values ----
-
-#[derive(Debug, PartialEq)]
-enum J {
-    Null,
-    Bool(bool),
-    Num(String),
-    Str(String),
-    Arr(Vec<J>),
-    Obj(Vec<(String, J)>),
-}
-
-struct P<'a> {
-    s: &'a [u8],
-    i: usize,
-}
-
-impl P<'_> {
-    fn ws(&mut self) {
-        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
-            self.i += 1;
-        }
-    }
-
-    fn string(&mut self) -> String {
-        self.i += 1;
-        let mut out = Vec::new();
-        while self.s[self.i] != b'"' {
-            if self.s[self.i] == b'\\' {
-                out.push(self.s[self.i]);
-                self.i += 1;
-            }
-            out.push(self.s[self.i]);
-            self.i += 1;
-        }
-        self.i += 1;
-        String::from_utf8(out).unwrap()
-    }
-
-    fn value(&mut self) -> J {
-        self.ws();
-        match self.s[self.i] {
-            b'n' => {
-                self.i += 4;
-                J::Null
-            }
-            b't' => {
-                self.i += 4;
-                J::Bool(true)
-            }
-            b'f' => {
-                self.i += 5;
-                J::Bool(false)
-            }
-            b'"' => J::Str(self.string()),
-            b'[' => {
-                self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    if self.s[self.i] == b']' {
-                        self.i += 1;
-                        return J::Arr(items);
-                    }
-                    items.push(self.value());
-                    self.ws();
-                    if self.s[self.i] == b',' {
-                        self.i += 1;
-                    }
-                }
-            }
-            b'{' => {
-                self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    if self.s[self.i] == b'}' {
-                        self.i += 1;
-                        items.sort_by(|a: &(String, J), b| a.0.cmp(&b.0));
-                        return J::Obj(items);
-                    }
-                    let k = self.string();
-                    self.ws();
-                    self.i += 1;
-                    let v = self.value();
-                    items.push((k, v));
-                    self.ws();
-                    if self.s[self.i] == b',' {
-                        self.i += 1;
-                    }
-                }
-            }
-            _ => {
-                let start = self.i;
-                while self.i < self.s.len() && b"+-.0123456789eE".contains(&self.s[self.i]) {
-                    self.i += 1;
-                }
-                let text = std::str::from_utf8(&self.s[start..self.i]).unwrap();
-                // Compare numbers by value: `1.0` and `1.00` are the same.
-                let n: f64 = text.parse().unwrap();
-                J::Num(format!("{n:?}"))
-            }
-        }
-    }
-}
-
-fn normal(text: &str) -> J {
-    P {
-        s: text.as_bytes(),
-        i: 0,
-    }
-    .value()
 }
 
 fn run_file(path: &Path, failures: &mut Vec<String>) -> Case {
@@ -386,7 +273,14 @@ fn files(dir: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn the_data_corpus_runs_as_expected() {
-    let paths = files(&data_corpus());
+    // Stage 8's files (`json.*`, `list.*`, `map.*`) are run by `data_ii.rs`.
+    let paths: Vec<PathBuf> = files(&data_corpus())
+        .into_iter()
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            name.starts_with("text-") || name.starts_with("re-")
+        })
+        .collect();
     let mut failures = Vec::new();
     for path in &paths {
         let case = run_file(path, &mut failures);
@@ -457,6 +351,42 @@ fn the_eval_corpus_runs_as_expected() {
         }
     }
     assert!(steps >= 6, "one `steps` file per cost class");
+    assert!(
+        failures.is_empty(),
+        "{} problem(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ---- frames (stage 10) ----
+
+/// The frames corpus (`conformance/frames/`): harness calls, configuration and overrides,
+/// attenuation in every dimension a program can observe, scoped budgets, context modes,
+/// questions crossing frames, `meta` and frame paths. Same directives as `conformance/eval/`.
+#[test]
+fn the_frames_corpus_runs_as_expected() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/frames");
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ratio"))
+        .collect();
+    paths.sort();
+    assert!(paths.len() >= 15, "expected the stage 10 corpus");
+    let mut failures = Vec::new();
+    let mut kinds = std::collections::BTreeSet::new();
+    for path in &paths {
+        if let Some(k) = run_file(path, &mut failures).error {
+            kinds.insert(k);
+        }
+    }
+    for kind in ["Denied", "Budget", "Question"] {
+        if !kinds.contains(kind) {
+            failures.push(format!("no frames file expects runtime-error {kind}"));
+        }
+    }
     assert!(
         failures.is_empty(),
         "{} problem(s):\n{}",

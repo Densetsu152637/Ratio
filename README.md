@@ -27,7 +27,9 @@ Specification draft 0.14. Stages 1 to 7 of the [implementation plan](spec/10-imp
 are built: the token reader, the parser, modules and names, the type checker, schemas and
 taint, the IR with the core interpreter (the pure language, with run-time secrecy labels;
 effects arrive with stage 11's host), and the first data built-ins (`text`, and `re` on a
-linear-time engine) with their cost classes and the bounded pool large built-ins run on. Ratio is a language in its own right: this repository holds its specification,
+linear-time engine) with their cost classes and the bounded pool large built-ins run on.
+Stage 10, frames, is built too: harness calls, entries and `with` blocks open frames
+attenuated in every dimension, with budget ledgers that admit effects by reservation. Ratio is a language in its own right: this repository holds its specification,
 its implementation, its conformance suite and its releases. Imperium is a host: it depends on a
 release of the `ratio` library and implements its `Host` trait against the agent engine
 ([chapter 10](spec/10-implementation.md#the-repository-split-and-the-boundary) says which stages
@@ -43,9 +45,9 @@ belong to which repository).
 | [`crates/ratio-names/`](crates/ratio-names/README.md) | Package and library `ratio-names`: modules and names (stage 3): sources, imports, source-qualified names, the `Registry` trait and name resolution |
 | [`crates/ratio-check/`](crates/ratio-check/README.md) | Package and library `ratio-check`: the type checker (stage 4) with schemas and taint (stage 5): types, subtyping, inference, exhaustiveness, constants, sinks, trust sites, secrets, schemas, type digests and `harnesses.check`, and the side tables later stages read |
 | [`crates/ratio-ir/`](crates/ratio-ir/README.md) | Package and library `ratio-ir`: the Core IR (stage 6): lowering, site ids, the canonical form and the IR hash |
-| [`crates/ratio-eval/`](crates/ratio-eval/README.md) | Package and library `ratio-eval`: the core interpreter (stage 6): the prepared form, labelled values, the evaluator and its limits; the `text` and `re` built-ins, the regex engine and the offload pool (stage 7); `math`, `hash`, `diff`, `template`, `vec`, `path`, `url` and `codec` (stage 9) |
+| [`crates/ratio-eval/`](crates/ratio-eval/README.md) | Package and library `ratio-eval`: the core interpreter (stage 6): the prepared form, labelled values, the evaluator and its limits; the `text` and `re` built-ins (stage 7), the `json`, `list` and `map` built-ins (stage 8), the regex engine and the offload pool (stage 7); `math`, `hash`, `diff`, `template`, `vec`, `path`, `url` and `codec` (stage 9) |
 | `std/` | The built-in packages' sources (`std:default` and the rest), embedded by the `ratio` library; it arrives with stage 23 |
-| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/`, `eval/` and `data/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` lists every built-in of chapter 06 with its signature, Needs and cost class, generated from the chapter (regenerate with `RATIO_BLESS=1 cargo test -p ratio-lang --test spec builtins`) |
+| `conformance/` | The conformance corpus, by chapter (`syntax/`, `names/`, `types/`, `taint/`, `eval/`, `data/` and `frames/` so far); `spec-map.txt` names the chapters each directory tests; `builtins.txt` lists every built-in of chapter 06 with its signature, Needs and cost class, generated from the chapter (regenerate with `RATIO_BLESS=1 cargo test -p ratio-lang --test spec builtins`) |
 | `scripts/` | The checks CI runs: `check-rust.sh`, and `ci/check-links.py` and `ci/check-license.py` |
 | `.github/workflows/` | `ci.yml` (every pull request and `main`) and `release.yml` (every `v*` tag) |
 

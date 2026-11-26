@@ -410,7 +410,8 @@ pub(super) fn csv_parse(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> 
             .iter()
             .map(|i| (ks[*i].clone(), fields[*i].clone()))
             .collect();
-        let m = Map::from_sorted(cx.heap, &entries).map_err(|f| cx.fault(f, labels))?;
+        let m = Map::from_sorted(cx.heap, entries.len(), &mut entries.into_iter())
+            .map_err(|f| cx.fault(f, labels))?;
         rows_charge
             .grow(cx.heap, cost::SLOT)
             .map_err(|_| cx.fault(Fault::Heap, Labels::NONE))?;

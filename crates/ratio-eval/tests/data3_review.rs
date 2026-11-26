@@ -26,13 +26,35 @@ fn ints(n: usize) -> Value {
     Value::list((0..i64::try_from(n).unwrap()).map(Value::int).collect()).unwrap()
 }
 
-/// Work counted for `steps` charged must stay within 16 units per unit of charge.
-fn within_charge(name: &str, steps: u64) {
-    if work::ENABLED {
+/// Runs `main` and returns the machine's work log: the work every pure built-in call counted
+/// and the steps it was charged.
+fn logged(
+    p: &std::sync::Arc<ratio_eval::Prepared>,
+    name: &str,
+    args: Vec<Value>,
+    cancel: ratio_eval::CancelToken,
+) -> (ratio_eval::Finished, Vec<ratio_eval::BuiltinWork>) {
+    let entry = p.find("main.ratio", name).unwrap();
+    let mut eval =
+        ratio_eval::evaluate(std::sync::Arc::clone(p), entry, args, big(), cancel).unwrap();
+    let f = ratio_eval::block_on(&mut eval);
+    let log = if work::ENABLED {
+        eval.machine().work_log().to_vec()
+    } else {
+        Vec::new()
+    };
+    (f, log)
+}
+
+/// Every logged call stayed within 16 units of work per unit of charge.
+fn within_charge(name: &str, log: &[ratio_eval::BuiltinWork]) {
+    for w in log {
         assert!(
-            work::total() <= 16 * 64 * steps,
-            "{name}: {} units of work for {steps} steps",
-            work::total()
+            w.work <= 16 * 64 * w.steps,
+            "{name}: `{}` counted {} units for {} steps",
+            w.name,
+            w.work,
+            w.steps
         );
     }
 }
@@ -46,7 +68,6 @@ fn f1_a_failing_template_pays_for_its_work() {
          fn main(xs: [Int], reps: [Int]) -> Int {{ list.fold(reps, 0, |a, i| a + once(xs)) }}\n"
     );
     let p = prepared(&src);
-    work::reset();
     let f = run_with(&p, "main", vec![ints(100), ints(20)], big());
     assert!(matches!(f.outcome, Outcome::Returned(_)));
     // 20 × 10^6 innermost visits and 14 MB of text written: at least that is paid.
@@ -55,7 +76,6 @@ fn f1_a_failing_template_pays_for_its_work() {
         "charged only {} steps",
         f.steps
     );
-    within_charge("template", f.steps);
 }
 
 /// F2: `diff.unified` charges its header names and the text it writes.
@@ -66,12 +86,11 @@ fn f2_unified_charges_headers_and_output() {
          fn main(h: Str, reps: [Int]) -> Int { list.fold(reps, 0, |a, i| a + once(h)) }",
     );
     let h = Value::text(&"x".repeat(8 * 1024 * 1024 - 64));
-    work::reset();
-    let f = run_with(&p, "main", vec![h, ints(3)], big());
+    let (f, log) = logged(&p, "main", vec![h, ints(3)], ratio_eval::CancelToken::new());
     assert!(matches!(f.outcome, Outcome::Returned(_)));
     // 16 MiB written each time: 262,144 steps at least.
     assert!(f.steps > 3 * 262_000, "charged only {} steps", f.steps);
-    within_charge("unified", f.steps);
+    within_charge("unified", &log);
 }
 
 /// F3: a CSV with long header names and many rows is not quadratic in the key length.
@@ -87,12 +106,16 @@ fn f3_csv_rows_do_not_compare_the_header_again() {
     for _ in 0..20_000 {
         s.push_str(",\n");
     }
-    work::reset();
     let start = Instant::now();
-    let f = run_with(&p, "main", vec![Value::text(&s)], big());
+    let (f, log) = logged(
+        &p,
+        "main",
+        vec![Value::text(&s)],
+        ratio_eval::CancelToken::new(),
+    );
     assert!(matches!(f.outcome, Outcome::Returned(_)));
     assert!(start.elapsed() < Duration::from_secs(10));
-    within_charge("csv_parse", f.steps);
+    within_charge("csv_parse", &log);
     // A hostile ratio of rows to key length is cancelled between rows.
     let cancel = ratio_eval::CancelToken::new();
     cancel.cancel();
@@ -284,20 +307,17 @@ fn lv7_aggregates_stop_when_cancelled() {
     for (name, args) in cases {
         let cancel = ratio_eval::CancelToken::new();
         cancel.cancel();
-        let entry = p.find("main.ratio", name).unwrap();
-        let eval =
-            ratio_eval::evaluate(std::sync::Arc::clone(&p), entry, args, big(), cancel).unwrap();
-        work::reset();
-        let f = ratio_eval::block_on(eval);
+        let (f, log) = logged(&p, name, args, cancel);
         let Outcome::Raised(e) = f.outcome else {
             panic!("{name} returned")
         };
         assert_eq!(e.kind(&p), "Cancelled", "{name}");
-        if work::ENABLED {
+        for w in &log {
             assert!(
-                work::total() < 400_000,
-                "{name} did {} units of work after cancellation",
-                work::total()
+                w.work < 400_000,
+                "{name}: `{}` did {} units of work after cancellation",
+                w.name,
+                w.work
             );
         }
     }

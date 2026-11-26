@@ -58,6 +58,11 @@ impl Default for Thresholds {
 
 type Job = Box<dyn FnOnce() + Send>;
 
+/// A session's job: its body runs and returns what finishes it (filling its result slot, which
+/// wakes whoever waits). The session gives the job's place back **between** the two, so a waiter
+/// that sees the result also sees the place released.
+type Body = Box<dyn FnOnce() -> Box<dyn FnOnce() + Send> + Send>;
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -188,7 +193,7 @@ impl Drop for Pool {
 #[derive(Default)]
 struct SessionState {
     in_flight: usize,
-    waiting: VecDeque<Job>,
+    waiting: VecDeque<Body>,
 }
 
 /// One session's use of a [`Pool`]: at most [`JOBS_IN_FLIGHT`] jobs in flight. Clones share
@@ -233,15 +238,15 @@ impl PoolSession {
     ) -> JobHandle<T> {
         let slot = Arc::new(Slot::default());
         let done = Arc::clone(&slot);
-        let job: Job = Box::new(move || {
+        let job: Body = Box::new(move || {
             let result = catch_unwind(AssertUnwindSafe(f)).map_err(|_| Panicked);
-            done.fill(result);
+            Box::new(move || done.fill(result))
         });
         self.dispatch(job);
         JobHandle { slot }
     }
 
-    fn dispatch(&self, job: Job) {
+    fn dispatch(&self, job: Body) {
         let mut s = lock(&self.state);
         if s.in_flight < JOBS_IN_FLIGHT {
             s.in_flight += 1;
@@ -253,13 +258,17 @@ impl PoolSession {
     }
 
     /// The job, then its release of the session's place (and the next waiting job's start).
-    fn wrap(&self, job: Job) -> Job {
+    fn wrap(&self, job: Body) -> Job {
         let session = self.clone();
         Box::new(move || {
-            // Everything the job holds (its arguments, its heap charge, its result if nobody
-            // waits for it any more) is dropped here, before its place is given back.
-            job();
+            // Everything the body holds (its arguments, its heap charge) is dropped when it
+            // returns; then the place is given back (and the next waiting job started); only
+            // then is the result delivered and the waiter woken. Whoever sees the result
+            // therefore sees the place released, on every exit path: the body panicking is
+            // caught inside it, a cancelled job returns early through the same path.
+            let complete = job();
             session.finish();
+            complete();
         })
     }
 
@@ -455,6 +464,40 @@ mod tests {
         // After shutdown a job runs where it is submitted.
         let late = session.submit(|| 7);
         assert_eq!(late.try_take().unwrap().unwrap(), 7);
+    }
+
+    /// The place is released before the result is delivered: whoever sees a result sees the
+    /// session's count already down, however short the job (the race that failed a pooled run on
+    /// Windows).
+    #[test]
+    fn a_result_is_seen_only_after_its_place_is_released() {
+        let pool = Pool::new(4);
+        let session = pool.session();
+        for round in 0..3000u32 {
+            let h = session.submit(move || round);
+            h.waiter().wait();
+            assert_eq!(session.in_flight(), 0, "round {round}");
+            assert_eq!(h.try_take().unwrap().unwrap(), round);
+        }
+        // Two at a time, and a panicking job among them.
+        for round in 0..1000u32 {
+            let a = session.submit(move || round);
+            let b = session.submit(move || -> u32 {
+                assert!(round % 7 != 0, "boom");
+                round
+            });
+            a.waiter().wait();
+            b.waiter().wait();
+            assert_eq!(session.in_flight(), 0, "round {round}");
+            assert_eq!(b.try_take().unwrap().is_err(), round % 7 == 0);
+        }
+        // Queued jobs: when the last one's result is in, nothing is in flight.
+        let hs: Vec<_> = (0..50u32).map(|i| session.submit(move || i)).collect();
+        for h in &hs {
+            h.waiter().wait();
+        }
+        assert_eq!(session.in_flight(), 0);
+        assert_eq!(session.queued(), 0);
     }
 
     #[test]

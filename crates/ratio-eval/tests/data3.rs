@@ -23,7 +23,11 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ratio_eval::{Outcome, Value, to_json_text};
+use std::sync::Arc;
+
+use ratio_eval::{
+    CancelToken, Labels, Limits, Outcome, PoolSession, Prepared, Value, block_on, to_json_text,
+};
 
 /// The modules of stage 9.
 const MODULES: [&str; 8] = [
@@ -45,6 +49,11 @@ struct Case {
 
 /// A JSON scalar argument, with the secret label.
 fn argument(text: &str) -> Option<Value> {
+    argument_with(text, true)
+}
+
+/// A JSON scalar argument, labelled secret or not.
+fn argument_with(text: &str, secret: bool) -> Option<Value> {
     let t = text.trim();
     let v = if t.starts_with('"') {
         match normal(t) {
@@ -58,7 +67,11 @@ fn argument(text: &str) -> Option<Value> {
     } else {
         Value::float(t.parse().ok()?)
     };
-    Some(v.with_labels(support::SECRET))
+    Some(if secret {
+        v.with_labels(support::SECRET)
+    } else {
+        v
+    })
 }
 
 /// The JSON escapes a header string may use.
@@ -404,4 +417,93 @@ fn every_stage_9_built_in_has_its_file() {
     }
     assert!(count >= 64, "the stage 9 built-ins: {count}");
     assert!(missing.is_empty(), "{}", missing.join("\n"));
+}
+
+/// Runs `main`, on `session` if given: what it observably does, and how many calls ran on the
+/// pool. Value, per-element labels, steps, heap peak and the work log (name, steps, counted
+/// work of every pure built-in call) must not depend on where a call ran.
+type Seen = (String, Vec<Labels>, u64, u64, Vec<(&'static str, u64, u64)>);
+
+fn run_on(p: &Arc<Prepared>, args: Vec<Value>, session: Option<&PoolSession>) -> (Seen, usize) {
+    let entry = p.find("main.ratio", "main").expect("a main");
+    let mut eval = ratio_eval::evaluate(
+        Arc::clone(p),
+        entry,
+        args,
+        Limits::default(),
+        CancelToken::new(),
+    )
+    .unwrap();
+    if let Some(s) = session {
+        eval = eval.offload_to(s.clone());
+    }
+    let f = block_on(&mut eval);
+    let log: Vec<ratio_eval::BuiltinWork> = if cfg!(debug_assertions) {
+        eval.machine().work_log().to_vec()
+    } else {
+        Vec::new()
+    };
+    let offloaded = log.iter().filter(|w| w.offloaded).count();
+    let work = log.iter().map(|w| (w.name, w.steps, w.work)).collect();
+    let (shown, labels) = match &f.outcome {
+        Outcome::Returned(v) => (
+            to_json_text(p, v),
+            v.elements()
+                .map_or_else(|| vec![v.scan()], |es| es.iter().map(Value::scan).collect()),
+        ),
+        Outcome::Raised(e) => (e.kind(p), Vec::new()),
+    };
+    ((shown, labels, f.steps, f.heap_peak, work), offloaded)
+}
+
+/// Every stage 9 built-in that can go to the pool does so at a threshold of 0 and gives the
+/// same value, labels, steps, heap peak and counted work as inline, for every file of the
+/// corpus, with its arguments labelled and not.
+#[test]
+fn pooled_runs_of_the_data_iii_corpus_match_inline_runs() {
+    let pool = ratio_eval::Pool::with_thresholds(
+        2,
+        ratio_eval::Thresholds {
+            text_bytes: 0,
+            elements: 0,
+            steps: 0,
+        },
+    );
+    let session = pool.session();
+    let mut failures = Vec::new();
+    let mut offloaded = 0;
+    for path in files() {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = fs::read_to_string(&path).unwrap();
+        let p = support::prepared(&text);
+        for secret in [true, false] {
+            let args: Vec<Value> = text
+                .lines()
+                .filter_map(|l| l.strip_prefix("// arg: "))
+                .map(|a| argument_with(a, secret).unwrap())
+                .collect();
+            let (inline, _) = run_on(&p, args.clone(), None);
+            let (pooled, n) = run_on(&p, args, Some(&session));
+            offloaded += n;
+            if inline != pooled {
+                failures.push(format!(
+                    "{name} (secret {secret}): inline and pooled runs differ
+  inline {inline:?}
+  pooled {pooled:?}"
+                ));
+            }
+        }
+    }
+    if cfg!(debug_assertions) {
+        assert!(offloaded > 300, "only {offloaded} calls ran on the pool");
+    }
+    assert_eq!(session.in_flight(), 0);
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
 }

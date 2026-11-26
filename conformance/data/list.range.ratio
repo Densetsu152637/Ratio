@@ -1,0 +1,17 @@
+// builtin: list.range
+// case main: value [0, 1, 2, 3]
+// case stepped: value [1, 4, 7]
+// case descending: value [5, 3, 1]
+// case empty: value []
+// case zero_step: error Invalid
+// case too_many: error Invalid
+// case steps: steps 11
+// labels range(start, end, step): 0 | 4 | 1
+fn main() -> [Int] { list.range(0, 4) }
+fn stepped() -> [Int] { list.range(1, 8, 3) }
+fn descending() -> [Int] { list.range(5, 0, -2) }
+fn empty() -> [Int] { list.range(3, 3) }
+fn zero_step() -> [Int] { list.range(0, 5, 0) }
+fn too_many() -> [Int] { list.range(0, 1000001) }
+fn steps() -> Int { list.range(0, 100).len() }
+fn range(start: Int, end: Int, step: Int) -> [Int] { list.range(start, end, step) }

@@ -581,10 +581,22 @@ fn work_stays_within_a_fixed_multiple_of_the_charge() {
     let mut problems = Vec::new();
     let mut table = Vec::new();
     for row in work_rows() {
+        // The three task built-ins are not in the machine's log (it records pure calls); their
+        // charges are checked by the steps they must pay.
+        if matches!(row.name, "template.render" | "hash.stable" | "hash.short") {
+            continue;
+        }
         let p = prepared(&row.source);
-        work::reset();
-        let f = run(&p, "main", row.args);
-        let counted = work::total();
+        let entry = p.find("main.ratio", "main").unwrap();
+        let mut eval = ratio_eval::evaluate(
+            std::sync::Arc::clone(&p),
+            entry,
+            row.args,
+            Limits::default(),
+            ratio_eval::CancelToken::new(),
+        )
+        .unwrap();
+        let f = ratio_eval::block_on(&mut eval);
         if let Outcome::Raised(e) = &f.outcome {
             problems.push(format!(
                 "{}: raised {} ({:?})",
@@ -594,15 +606,26 @@ fn work_stays_within_a_fixed_multiple_of_the_charge() {
             ));
             continue;
         }
-        let ratio = counted as f64 / (64.0 * f.steps as f64);
+        // The built-in's own entry of the log: its counted work against its charge.
+        let Some(w) = eval
+            .machine()
+            .work_log()
+            .iter()
+            .find(|w| w.name == row.name)
+            .copied()
+        else {
+            problems.push(format!("{}: not in the work log", row.name));
+            continue;
+        };
+        let ratio = w.work as f64 / (64.0 * w.steps as f64);
         table.push(format!(
             "{:<22} {:>9} steps {:>10} units {ratio:>6.2}",
-            row.name, f.steps, counted
+            row.name, w.steps, w.work
         ));
-        if counted > MULTIPLE * 64 * f.steps {
+        if w.work > MULTIPLE * 64 * w.steps {
             problems.push(format!(
-                "{}: {counted} units of work for {} steps",
-                row.name, f.steps
+                "{}: {} units of work for {} steps",
+                row.name, w.work, w.steps
             ));
         }
     }

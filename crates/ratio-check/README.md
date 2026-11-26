@@ -238,9 +238,23 @@ the checker drops. The type-parameter names `S`
 (any text, normalised to `Str` or `Untrusted<Str>`) and `Num` (`Int`, `Float`, `Duration`,
 `Money`) carry chapter 06's bounds.
 
+The frames block at the end of `src/builtins.rs` (`FRAME_PRELUDE`, `FRAME_MODULES`, stage 10)
+adds `question` to `control`, `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` and
+`meta.permissions`, and the provisional types they return (`FrameInfo`, `CallerInfo`,
+`FrameLimits`, `PermissionView`, `Rule`); a module named in more than one table has its sources
+joined in table order, so the block grows without touching the tables of other stages.
+`FrameInfo` and `CallerInfo` name the harness `name`, since `harness` is a keyword. A
+harness's parameter defaults are checked under the same rule as its declared configuration
+(both run before its frame opens): no effects, and no calls of function values, since a
+parameter's value may be the caller's closure (`C0016`). A built-in named twice across the
+joined tables is an internal error, and a check with internal errors is never clean.
+
 **Scope cut**: the table is deliberately partial. It holds what the conformance programs use
 (`control`, `list`, `text`, `map`, `json`, `math`, `model`, `tools`, `session`, `context`,
-`meta`, `agents`, and stage 9's `hash`, `diff`, `template`, `vec`, `path`, `url` and `codec`, with all of `math`), a few hundred of chapter 06's 478 built-ins; stages 7 to 12 extend it module by module. Stage 9 also declares the shapes `diff`, `url` and `vec` return in `std/prelude.ratio` (`DiffOp`, `DiffLine<T>`, `Diff<T>`, `DiffStats`, `Url<T>`, `Vector`); they are provisional, chapter 06 names them without declaring them, and generic in the text type (`Str` or `Untrusted<Str>`) so that what comes out of untrusted text is untrusted. A standard name it lacks is
+`meta`, `agents`, and stage 9's `hash`, `diff`, `template`, `vec`, `path`, `url` and `codec`, with all of `math`); stages 7 to 12 extend it module by module. `list`, `map` and `json` are
+complete since stage 8 (47, 15 and 14 built-ins, with `repeat_` for `list.repeat`), and the
+prelude gained `JsonType` (`json.type_of`) and `Violation` (`{ pointer, message }`, both
+untrusted text; `json.validate`), which the chapter names without a shape. A standard name it lacks is
 reported with its own code, `C0034` ("no signature yet"), so it is never confused with a name
 that does not exist (`C0001`).
 

@@ -1,0 +1,25 @@
+// expect: check-error C0016 at 7:35
+// expect: check-error C0016 at 14:68
+// expect: check-error C0016 at 18:57
+
+// A harness's parameter defaults and its configuration are evaluated before its frame opens,
+// so they must be effect-free: an effect there would run with the caller's authority.
+harness reads(x: Untrusted<Str> = tools.read_file("/etc/passwd").text) -> Untrusted<Str>
+  with { tools: [grep] }
+{
+  x
+}
+
+// Calling a function-valued parameter could make the caller's effects.
+harness via_default(f: fn() -> Untrusted<Str>, s: Untrusted<Str> = f()) -> Untrusted<Str> {
+  s
+}
+
+harness via_config(f: fn() -> Str) -> Str with { title: f() } {
+  "t"
+}
+
+// Pure defaults and configuration are fine, and so is calling a parameter in the body.
+harness fine(n: Int, m: Int = n + 1, f: fn() -> Int = || 1) -> Int with { budget: { steps: m * 100 } } {
+  f() + m
+}

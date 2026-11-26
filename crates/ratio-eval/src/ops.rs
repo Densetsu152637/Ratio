@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use ratio_ir::BinOp;
 
 use crate::prepare::Prepared;
-use crate::value::{Json, Repr, Value};
+use crate::value::{Repr, Value};
 
 /// The steps a cost-class charge of work `w` costs: `1 + ⌈w / 64⌉` (chapter 06, `data`).
 pub(crate) fn steps_for(w: u64) -> u64 {
@@ -62,6 +62,7 @@ pub(crate) fn is_scalar(v: &Value) -> bool {
 /// IEEE 754 (`NaN != NaN`); functions compare by identity; a record's absent optional field
 /// equals `none`; JSON objects compare regardless of key order.
 pub(crate) fn eq(a: &Value, b: &Value) -> bool {
+    crate::work::add(1);
     match (&a.repr, &b.repr) {
         (Repr::Unit, Repr::Unit) | (Repr::None, Repr::None) => true,
         (Repr::Bool(x), Repr::Bool(y)) => x == y,
@@ -73,7 +74,10 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
             reason = "IEEE 754 equality is the specified semantics"
         )]
         (Repr::Float(x), Repr::Float(y)) => x == y,
-        (Repr::Str(x), Repr::Str(y)) | (Repr::Tool(x), Repr::Tool(y)) => x.as_str() == y.as_str(),
+        (Repr::Str(x), Repr::Str(y)) | (Repr::Tool(x), Repr::Tool(y)) => {
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
+            x.as_str() == y.as_str()
+        }
         (Repr::Range(x), Repr::Range(y)) => {
             (x.start, x.end, x.inclusive) == (y.start, y.end, y.inclusive)
         }
@@ -86,7 +90,13 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
             let get = |r: &crate::value::RecordData, n: &str| {
                 r.layout.index(n).and_then(|i| r.items.get(i)).cloned()
             };
-            x.layout.names.iter().chain(y.layout.names.iter()).all(|n| {
+            // Each field is compared once: x's names, then the names only y has.
+            let only_y = y
+                .layout
+                .names
+                .iter()
+                .filter(|n| x.layout.index(n).is_none());
+            x.layout.names.iter().chain(only_y).all(|n| {
                 eq(
                     &get(x, n).unwrap_or_else(|| none.clone()),
                     &get(y, n).unwrap_or_else(|| none.clone()),
@@ -124,7 +134,7 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
         (Repr::Item(x), Repr::Item(y)) => x == y,
         (Repr::Builtin(x), Repr::Builtin(y)) => x == y,
         (Repr::Closure(x), Repr::Closure(y)) => std::sync::Arc::ptr_eq(x, y),
-        (Repr::Json(x), Repr::Json(y)) => json_eq(&x.node, &y.node),
+        (Repr::Json(_), Repr::Json(_)) => crate::jsonedit::json_equal(a, b),
         (Repr::Prompt(x), Repr::Prompt(y)) => {
             x.sections.len() == y.sections.len()
                 && x.sections.iter().zip(y.sections.iter()).all(|(s, t)| {
@@ -132,36 +142,6 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
                         && s.format == t.format
                         && s.values.len() == t.values.len()
                         && s.values.iter().zip(t.values.iter()).all(|(p, q)| eq(p, q))
-                })
-        }
-        _ => false,
-    }
-}
-
-fn json_eq(a: &Json, b: &Json) -> bool {
-    match (a, b) {
-        (Json::Null, Json::Null) => true,
-        (Json::Bool(x), Json::Bool(y)) => x == y,
-        (Json::Int(x), Json::Int(y)) => x == y,
-        #[allow(clippy::float_cmp, reason = "numbers compare by value")]
-        (Json::Float(x), Json::Float(y)) => x == y,
-        #[allow(clippy::cast_precision_loss, reason = "numbers compare by value")]
-        (Json::Int(x), Json::Float(y)) | (Json::Float(y), Json::Int(x)) => (*x as f64) == *y,
-        (Json::Str(x), Json::Str(y)) => x.as_str() == y.as_str(),
-        (Json::Array(x), Json::Array(y)) => {
-            let (vx, vy) = (x.to_vec(), y.to_vec());
-            vx.len() == vy.len() && vx.iter().zip(vy.iter()).all(|(p, q)| eq(p, q))
-        }
-        (Json::Object(x), Json::Object(y)) => {
-            let index: std::collections::HashMap<&str, &Value> = y
-                .iter()
-                .map(|(k, v)| (k.as_text().unwrap_or(""), v))
-                .collect();
-            x.len() == y.len()
-                && x.iter().all(|(k, v)| {
-                    index
-                        .get(k.as_text().unwrap_or(""))
-                        .is_some_and(|v2| eq(v, v2))
                 })
         }
         _ => false,
@@ -201,6 +181,7 @@ fn float_cmp(x: f64, y: f64) -> Ordering {
 /// payload, tuples and lists lexicographically, records field by field in name order.
 #[allow(clippy::cast_precision_loss, reason = "Int and Float compare by value")]
 pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
+    crate::work::add(1);
     match (&a.repr, &b.repr) {
         (Repr::Int(x), Repr::Int(y))
         | (Repr::Duration(x), Repr::Duration(y))
@@ -209,7 +190,11 @@ pub(crate) fn cmp_natural(a: &Value, b: &Value) -> Ordering {
         (Repr::Int(x), Repr::Float(y)) => float_cmp(*x as f64, *y),
         (Repr::Float(x), Repr::Int(y)) => float_cmp(*x, *y as f64),
         (Repr::Bool(x), Repr::Bool(y)) => x.cmp(y),
-        (Repr::Str(x), Repr::Str(y)) => x.as_str().cmp(y.as_str()),
+        (Repr::Str(x), Repr::Str(y)) => {
+            crate::work::add(x.as_str().len().min(y.as_str().len()) as u64);
+            x.as_str().cmp(y.as_str())
+        }
+        (Repr::Json(_), Repr::Json(_)) => crate::jsonedit::json_order(a, b),
         (Repr::Variant(e1, i1, _), Repr::Variant(e2, i2, _)) => (e1, i1).cmp(&(e2, i2)),
         (Repr::VariantP(x), Repr::VariantP(y)) => (x.enum_, x.index)
             .cmp(&(y.enum_, y.index))

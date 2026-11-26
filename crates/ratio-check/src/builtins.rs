@@ -61,6 +61,42 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn sort_by<T, K>(xs: [T], key: fn(T) -> K, descending: Bool = false) -> [T] {}
 @pure fn take<T>(xs: [T], n: Int) -> [T] {}
 @pure fn sum<Num>(xs: [Num]) -> Num {}
+// stage 8: the rest of `list` (chapter 06, data)
+@pure fn is_empty<T>(xs: [T]) -> Bool {}
+@pure fn last<T>(xs: [T]) -> T? {}
+@pure fn insert<T>(xs: [T], i: Int, x: T) -> [T] {}
+@pure fn remove_at<T>(xs: [T], i: Int) -> [T] {}
+@pure fn concat<T>(xs: [T], ys: [T]) -> [T] {}
+@pure fn flatten<T>(xss: [[T]]) -> [T] {}
+@pure fn range(start: Int, end: Int, step: Int = 1) -> [Int] {}
+@pure fn repeat_<T>(x: T, n: Int) -> [T] {}
+@pure fn map_indexed<T, U>(xs: [T], f: fn(Int, T) -> U) -> [U] {}
+@pure fn flat_map<T, U>(xs: [T], f: fn(T) -> [U]) -> [U] {}
+@pure fn reduce<T>(xs: [T], f: fn(T, T) -> T) -> T? {}
+@pure fn find<T>(xs: [T], f: fn(T) -> Bool) -> T? {}
+@pure fn find_index<T>(xs: [T], f: fn(T) -> Bool) -> Int? {}
+@pure fn index_of<T>(xs: [T], x: T) -> Int? {}
+@pure fn any<T>(xs: [T], f: fn(T) -> Bool) -> Bool {}
+@pure fn all<T>(xs: [T], f: fn(T) -> Bool) -> Bool {}
+@pure fn count<T>(xs: [T], f: fn(T) -> Bool) -> Int {}
+@pure fn min<T>(xs: [T]) -> T? {}
+@pure fn max<T>(xs: [T]) -> T? {}
+@pure fn min_by<T, K>(xs: [T], key: fn(T) -> K) -> T? {}
+@pure fn max_by<T, K>(xs: [T], key: fn(T) -> K) -> T? {}
+@pure fn sort<T>(xs: [T]) -> [T] {}
+@pure fn reverse<T>(xs: [T]) -> [T] {}
+@pure fn unique<T>(xs: [T]) -> [T] {}
+@pure fn unique_by<T, K>(xs: [T], key: fn(T) -> K) -> [T] {}
+@pure fn group_by<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, [T]> {}
+@pure fn partition<T>(xs: [T], f: fn(T) -> Bool) -> ([T], [T]) {}
+@pure fn chunk<T>(xs: [T], size: Int) -> [[T]] {}
+@pure fn window<T>(xs: [T], size: Int) -> [[T]] {}
+@pure fn zip<A, B>(xs: [A], ys: [B]) -> [(A, B)] {}
+@pure fn unzip<A, B>(ps: [(A, B)]) -> ([A], [B]) {}
+@pure fn enumerate<T>(xs: [T]) -> [(Int, T)] {}
+@pure fn drop<T>(xs: [T], n: Int) -> [T] {}
+@pure fn take_while<T>(xs: [T], f: fn(T) -> Bool) -> [T] {}
+@pure fn slice<T>(xs: [T], start: Int, end: Int? = none) -> [T] {}
 ",
     ),
     (
@@ -133,6 +169,19 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure fn get<K, V>(m: Map<K, V>, k: K) -> V? {}
 @pure fn set<K, V>(m: Map<K, V>, k: K, v: V) -> Map<K, V> {}
 @pure fn keys<K, V>(m: Map<K, V>) -> [K] {}
+// stage 8: the rest of `map` (chapter 06, data)
+@pure fn from<K, V>(pairs: [(K, V)]) -> Map<K, V> {}
+@pure fn len<K, V>(m: Map<K, V>) -> Int {}
+@pure fn is_empty<K, V>(m: Map<K, V>) -> Bool {}
+@pure fn has<K, V>(m: Map<K, V>, k: K) -> Bool {}
+@pure fn remove<K, V>(m: Map<K, V>, k: K) -> Map<K, V> {}
+@pure fn update<K, V>(m: Map<K, V>, k: K, f: fn(V) -> V, default: V) -> Map<K, V> {}
+@pure fn values<K, V>(m: Map<K, V>) -> [V] {}
+@pure fn entries<K, V>(m: Map<K, V>) -> [(K, V)] {}
+@pure fn merge<K, V>(a: Map<K, V>, b: Map<K, V>) -> Map<K, V> {}
+@pure fn map_values<K, V, W>(m: Map<K, V>, f: fn(V) -> W) -> Map<K, W> {}
+@pure fn filter<K, V>(m: Map<K, V>, f: fn(K, V) -> Bool) -> Map<K, V> {}
+@pure fn count_by<T, K>(xs: [T], key: fn(T) -> K) -> Map<K, Int> {}
 ",
     ),
     (
@@ -142,6 +191,17 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
 @pure @schema(T) fn decode<T>(j: Json) -> Untrusted<T> {}
 @pure fn get(j: Json, pointer: Str) -> Json? {}
 @pure @schema(T) fn encode<T>(v: T) -> Json {}
+// stage 8: the rest of `json` (chapter 06, data)
+@pure @schema(T) fn stringify<T>(v: T, pretty: Bool = false) -> Untrusted<Str> {}
+@pure @schema(T) fn schema<T>() -> Json {}
+@pure fn validate(j: Json, schema: Json) -> [Violation] {}
+@pure fn set(j: Json, pointer: Str, v: Json) -> Json {}
+@pure fn keys(j: Json) -> [Untrusted<Str>] {}
+@pure fn type_of(j: Json) -> JsonType {}
+@pure fn merge(a: Json, b: Json) -> Json {}
+@pure fn patch(j: Json, ops: Json) -> Json {}
+@pure fn diff(a: Json, b: Json) -> Json {}
+@pure fn equal(a: Json, b: Json) -> Bool {}
 ",
     ),
     (
@@ -538,3 +598,44 @@ pub(crate) fn primitive(name: &str) -> Option<Primitive> {
     };
     Some(Primitive::Plain(plain))
 }
+
+// ---- frames (stage 10) ----
+//
+// The frame built-ins and the shared types `meta` reports with. Entries here are merged into the
+// module of the same name above (and these types into the prelude), so this block can grow
+// without touching the tables other stages extend.
+
+/// The shared types of the frame built-ins (chapter 06, `meta`). Their shapes are provisional:
+/// chapter 06 names them without spelling out every field.
+pub(crate) const FRAME_PRELUDE: &str = r"
+type FrameInfo = {
+  name: Str, title: Str, depth: Int, path: Str, model: ModelRef, effort?: Effort,
+  mode: PermissionMode, location: Location, attended: Bool, context: ContextMode, tools: Int,
+}
+type CallerInfo = { name: Str, site: Site }
+type FrameLimits = { budget: Budget, depth: Int, width: Int, heap: Int }
+type PermissionView = { mode: PermissionMode, location: Location, paths?: [Str], extra_rules: [Rule], tools: [Str] }
+type Rule = { action: RuleAction, rule: Str }
+enum RuleAction { deny, ask }
+";
+
+/// The frame built-ins, by module. `meta`'s readers answer from the frame alone (`@local`: they
+/// send nothing anywhere); they are not `@pure`, since what they return depends on the frame.
+pub(crate) const FRAME_MODULES: &[(&str, &str)] = &[
+    (
+        "control",
+        r"
+@pure fn question(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error {}
+",
+    ),
+    (
+        "meta",
+        r"
+@local fn frame() -> FrameInfo {}
+@local fn caller() -> CallerInfo? {}
+@local fn depth() -> Int {}
+@local fn limits() -> FrameLimits {}
+@local fn permissions() -> PermissionView {}
+",
+    ),
+];

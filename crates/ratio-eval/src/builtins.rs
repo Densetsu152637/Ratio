@@ -20,8 +20,14 @@
 
 use std::fmt::Debug;
 
+mod ecma;
+mod json;
+mod list;
+mod map;
 mod regex;
 mod text;
+mod util;
+mod validate;
 
 pub(crate) use regex::{Compiled, ReCache};
 
@@ -91,7 +97,9 @@ pub(crate) fn pre_work(class: Class, s: Sizes) -> u64 {
         Class::Const => 1,
         // A map's key comparisons walk the key: `n2` is its weight (0 when there is none).
         Class::Log => crate::ops::log_work(s.n).saturating_mul(s.n2.max(1)),
-        Class::NLogN => s.n.saturating_mul(crate::ops::log_work(s.n)),
+        // A comparison walks the values it compares: built-ins that compare whole elements give
+        // their weight in `n2`, and the charge is that weight times `⌈log2(n + 1)⌉`.
+        Class::NLogN => s.n.max(s.n2).saturating_mul(crate::ops::log_work(s.n)),
         Class::Product => s.n.saturating_mul(s.n2).saturating_add(s.c),
         Class::Output => s.m,
         Class::Linear => s.n,
@@ -169,6 +177,7 @@ const REGEX_ITER: u8 = 4 | REGEX;
 /// Sizing the arguments reads them (a diff counts lines): the characters read are debited
 /// first, as `linear`, so a refusal never leaves unpaid work.
 const SCANS: u8 = 8;
+const SCANS_OFFLOAD: u8 = SCANS | OFFLOAD;
 const NONE: u8 = 0;
 
 impl Builtin {
@@ -421,73 +430,134 @@ table! {
     "json.decode", Linear, A(s_weight_first), NONE, Imp::Pure(json_decode);
     "json.get", Linear, A(s_two), NONE, Imp::Pure(json_get);
     "json.encode", Linear, A(s_weight_first), NONE, Imp::Pure(json_encode);
+    // ---- stage 8 (data II): the rest of json, list and map (chapter 06, data) ----
+    "list.is_empty", Const, A(s_none), OFFLOAD, Imp::Pure(list::is_empty);
+    "list.last", Const, A(s_none), OFFLOAD, Imp::Pure(list::last);
+    "list.insert", Log, A(s_first), OFFLOAD, Imp::Pure(list::insert);
+    "list.remove_at", Log, A(s_first), OFFLOAD, Imp::Pure(list::remove_at);
+    "list.concat", Log, A(s_two), OFFLOAD, Imp::Pure(list::concat);
+    "list.flatten", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::flatten);
+    "list.range", Output, A(list::s_range), OFFLOAD, Imp::Pure(list::range);
+    "list.repeat", Output, A(list::s_repeat), OFFLOAD, Imp::Pure(list::repeat);
+    "list.map_indexed", Linear, A(s_first), NONE, Imp::Task(list::map_indexed);
+    "list.flat_map", Linear, A(s_first), NONE, Imp::Task(list::flat_map);
+    "list.reduce", Linear, A(s_first), NONE, Imp::Task(list::reduce);
+    "list.find", Linear, A(s_first), NONE, Imp::Task(list::find);
+    "list.find_index", Linear, A(s_first), NONE, Imp::Task(list::find_index);
+    "list.index_of", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(list::index_of);
+    "list.any", Linear, A(s_first), NONE, Imp::Task(list::any);
+    "list.all", Linear, A(s_first), NONE, Imp::Task(list::all);
+    "list.count", Linear, A(s_first), NONE, Imp::Task(list::count);
+    "list.min", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::min);
+    "list.max", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(list::max);
+    "list.min_by", Linear, A(s_first), NONE, Imp::Task(list::min_by);
+    "list.max_by", Linear, A(s_first), NONE, Imp::Task(list::max_by);
+    "list.sort", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(list::sort);
+    "list.reverse", Linear, A(s_first), OFFLOAD, Imp::Pure(list::reverse);
+    "list.unique", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(list::unique);
+    "list.unique_by", NLogN, A(s_first), NONE, Imp::Task(list::unique_by);
+    "list.group_by", NLogN, A(s_first), NONE, Imp::Task(list::group_by);
+    "list.partition", Linear, A(s_first), NONE, Imp::Task(list::partition);
+    "list.chunk", Linear, A(s_first), OFFLOAD, Imp::Pure(list::chunk);
+    "list.window", Linear, A(list::s_window), OFFLOAD, Imp::Pure(list::window);
+    "list.zip", Linear, A(s_two), OFFLOAD, Imp::Pure(list::zip);
+    "list.unzip", Linear, A(s_first), OFFLOAD, Imp::Pure(list::unzip);
+    "list.enumerate", Linear, A(s_first), OFFLOAD, Imp::Pure(list::enumerate);
+    "list.drop", Log, A(s_first), OFFLOAD, Imp::Pure(list::take_rest);
+    "list.take_while", Linear, A(s_first), NONE, Imp::Task(list::take_while);
+    "list.slice", Log, A(s_first), OFFLOAD, Imp::Pure(list::slice);
+    "map.from", NLogN, A(list::s_compare), OFFLOAD, Imp::Pure(map::from);
+    "map.len", Const, A(s_none), OFFLOAD, Imp::Pure(map::len);
+    "map.is_empty", Const, A(s_none), OFFLOAD, Imp::Pure(map::is_empty);
+    "map.has", Log, A(s_map_key), OFFLOAD, Imp::Pure(map::has);
+    "map.remove", Log, A(s_map_key), OFFLOAD, Imp::Pure(map::remove);
+    "map.update", Log, A(s_map_key), NONE, Imp::Task(map::update);
+    "map.values", Linear, A(s_first), OFFLOAD, Imp::Pure(map::values);
+    "map.entries", Linear, A(s_first), OFFLOAD, Imp::Pure(map::entries);
+    "map.merge", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(map::merge);
+    "map.map_values", Linear, A(s_first), NONE, Imp::Task(map::map_values);
+    "map.filter", Linear, A(s_first), NONE, Imp::Task(map::filter);
+    "map.count_by", NLogN, A(s_first), NONE, Imp::Task(map::count_by);
+    "json.stringify", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(json::stringify);
+    "json.schema", Linear, A(s_none), OFFLOAD, Imp::Pure(json::schema);
+    "json.validate", Product, A(s_product), OFFLOAD, Imp::Pure(json::validate_);
+    "json.set", Linear, A(s_two), OFFLOAD, Imp::Pure(json::set);
+    "json.keys", Linear, A(s_first), OFFLOAD, Imp::Pure(json::keys);
+    "json.type_of", Const, A(s_none), OFFLOAD, Imp::Pure(json::type_of);
+    "json.merge", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(json::merge);
+    "json.patch", Product, A(json::s_patch), OFFLOAD, Imp::Pure(json::patch);
+    "json.diff", Product, A(s_product), OFFLOAD, Imp::Pure(json::diff_);
+    "json.equal", Linear, A(s_weight_two), OFFLOAD, Imp::Pure(json::equal);
+    // ---- end of stage 8 ----
     "math.abs", Const, A(s_none), NONE, Imp::Pure(math_abs);
     "math.min", Const, A(s_none), NONE, Imp::Pure(math_min);
     "math.max", Const, A(s_none), NONE, Imp::Pure(math_max);
     // ---- stage 9: math (the scalar built-ins are `const`; abs, min and max are above) ----
-    "math.sign", Const, A(s_none), NONE, Imp::Pure(math::sign);
-    "math.clamp", Const, A(s_none), NONE, Imp::Pure(math::clamp);
-    "math.floor", Const, A(s_none), NONE, Imp::Pure(math::floor);
-    "math.ceil", Const, A(s_none), NONE, Imp::Pure(math::ceil);
-    "math.round", Const, A(s_none), NONE, Imp::Pure(math::round);
-    "math.trunc", Const, A(s_none), NONE, Imp::Pure(math::trunc);
-    "math.to_float", Const, A(s_none), NONE, Imp::Pure(math::to_float);
-    "math.sqrt", Const, A(s_none), NONE, Imp::Pure(math::sqrt);
-    "math.pow", Const, A(s_none), NONE, Imp::Pure(math::pow);
-    "math.exp", Const, A(s_none), NONE, Imp::Pure(math::exp);
-    "math.ln", Const, A(s_none), NONE, Imp::Pure(math::ln);
-    "math.log2", Const, A(s_none), NONE, Imp::Pure(math::log2);
-    "math.log10", Const, A(s_none), NONE, Imp::Pure(math::log10);
-    "math.is_nan", Const, A(s_none), NONE, Imp::Pure(math::is_nan);
-    "math.mean", Linear, A(s_list), NONE, Imp::Pure(math::mean);
-    "math.variance", Linear, A(s_list), NONE, Imp::Pure(math::variance);
-    "math.stdev", Linear, A(s_list), NONE, Imp::Pure(math::stdev);
-    "math.softmax", Linear, A(s_list), NONE, Imp::Pure(math::softmax);
-    "math.argmax", Linear, A(s_list), NONE, Imp::Pure(math::argmax);
-    "math.argmin", Linear, A(s_list), NONE, Imp::Pure(math::argmin);
-    "math.entropy", Linear, A(s_list), NONE, Imp::Pure(math::entropy);
-    "math.median", NLogN, A(s_list), NONE, Imp::Pure(math::median);
-    "math.percentile", NLogN, A(s_list), NONE, Imp::Pure(math::percentile);
-    "math.mode", NLogN, A(s_list), NONE, Imp::Pure(math::mode);
+    "math.sign", Const, A(s_none), OFFLOAD, Imp::Pure(math::sign);
+    "math.clamp", Const, A(s_none), OFFLOAD, Imp::Pure(math::clamp);
+    "math.floor", Const, A(s_none), OFFLOAD, Imp::Pure(math::floor);
+    "math.ceil", Const, A(s_none), OFFLOAD, Imp::Pure(math::ceil);
+    "math.round", Const, A(s_none), OFFLOAD, Imp::Pure(math::round);
+    "math.trunc", Const, A(s_none), OFFLOAD, Imp::Pure(math::trunc);
+    "math.to_float", Const, A(s_none), OFFLOAD, Imp::Pure(math::to_float);
+    "math.sqrt", Const, A(s_none), OFFLOAD, Imp::Pure(math::sqrt);
+    "math.pow", Const, A(s_none), OFFLOAD, Imp::Pure(math::pow);
+    "math.exp", Const, A(s_none), OFFLOAD, Imp::Pure(math::exp);
+    "math.ln", Const, A(s_none), OFFLOAD, Imp::Pure(math::ln);
+    "math.log2", Const, A(s_none), OFFLOAD, Imp::Pure(math::log2);
+    "math.log10", Const, A(s_none), OFFLOAD, Imp::Pure(math::log10);
+    "math.is_nan", Const, A(s_none), OFFLOAD, Imp::Pure(math::is_nan);
+    "math.mean", Linear, A(s_list), OFFLOAD, Imp::Pure(math::mean);
+    "math.variance", Linear, A(s_list), OFFLOAD, Imp::Pure(math::variance);
+    "math.stdev", Linear, A(s_list), OFFLOAD, Imp::Pure(math::stdev);
+    "math.softmax", Linear, A(s_list), OFFLOAD, Imp::Pure(math::softmax);
+    "math.argmax", Linear, A(s_list), OFFLOAD, Imp::Pure(math::argmax);
+    "math.argmin", Linear, A(s_list), OFFLOAD, Imp::Pure(math::argmin);
+    "math.entropy", Linear, A(s_list), OFFLOAD, Imp::Pure(math::entropy);
+    "math.median", NLogN, A(s_list), OFFLOAD, Imp::Pure(math::median);
+    "math.percentile", NLogN, A(s_list), OFFLOAD, Imp::Pure(math::percentile);
+    "math.mode", NLogN, A(s_list), OFFLOAD, Imp::Pure(math::mode);
     // ---- end of stage 9's math ----
     // ---- stage 9, continued: hash, diff, template, vec, path, url and codec ----
-    "hash.sha256", Linear, A(s_first), NONE, Imp::Pure(hash::sha256);
-    "hash.blake3", Linear, A(s_first), NONE, Imp::Pure(hash::blake3);
+    "hash.sha256", Linear, A(s_first), OFFLOAD, Imp::Pure(hash::sha256);
+    "hash.blake3", Linear, A(s_first), OFFLOAD, Imp::Pure(hash::blake3);
     "hash.stable", Linear, A(s_weight_first), NONE, Imp::Task(hash::stable);
     "hash.short", Linear, A(s_weight_first), NONE, Imp::Task(hash::short);
-    "diff.lines", Product, A(s_lines), SCANS, Imp::Pure(diff::lines);
-    "diff.words", Product, A(s_words), SCANS, Imp::Pure(diff::words);
-    "diff.unified", Product, A(s_unified), SCANS, Imp::Pure(diff::unified);
-    "diff.apply", Linear, A(s_two), NONE, Imp::Pure(diff::apply);
-    "diff.stats", Linear, A(s_weight_first), NONE, Imp::Pure(diff::stats);
+    "diff.lines", Product, A(s_lines), SCANS_OFFLOAD, Imp::Pure(diff::lines);
+    "diff.words", Product, A(s_words), SCANS_OFFLOAD, Imp::Pure(diff::words);
+    "diff.unified", Product, A(s_unified), SCANS_OFFLOAD, Imp::Pure(diff::unified);
+    "diff.apply", Linear, A(s_two), OFFLOAD, Imp::Pure(diff::apply);
+    "diff.stats", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(diff::stats);
     "template.render", Linear, A(s_template), NONE, Imp::Task(template::render);
-    "template.names", Linear, A(s_first), NONE, Imp::Pure(template::names);
-    "vec.dot", Linear, A(s_weight_two_lists), NONE, Imp::Pure(vec::dot);
-    "vec.norm", Linear, A(s_vec), NONE, Imp::Pure(vec::norm);
-    "vec.normalize", Linear, A(s_vec), NONE, Imp::Pure(vec::normalize);
-    "vec.cosine", Linear, A(s_weight_two_lists), NONE, Imp::Pure(vec::cosine);
-    "vec.add", Linear, A(s_weight_two_lists), NONE, Imp::Pure(vec::add);
-    "vec.mean", Linear, A(s_vec), NONE, Imp::Pure(vec::mean);
-    "vec.top_k", NLogN, A(s_top_k), NONE, Imp::Pure(vec::top_k);
-    "path.join", Linear, A(s_weight_first), NONE, Imp::Pure(path::join);
-    "path.parent", Linear, A(s_first), NONE, Imp::Pure(path::parent);
-    "path.name", Linear, A(s_first), NONE, Imp::Pure(path::name);
-    "path.stem", Linear, A(s_first), NONE, Imp::Pure(path::stem);
-    "path.ext", Linear, A(s_first), NONE, Imp::Pure(path::ext);
-    "path.normalize", Linear, A(s_first), NONE, Imp::Pure(path::normalize);
-    "path.is_absolute", Linear, A(s_first), NONE, Imp::Pure(path::is_absolute);
-    "path.relative_to", Linear, A(s_two), NONE, Imp::Pure(path::relative_to);
-    "url.parse", Linear, A(s_first), NONE, Imp::Pure(url::parse);
-    "url.host", Linear, A(s_first), NONE, Imp::Pure(url::host);
-    "url.with_query", Linear, A(s_with_query), NONE, Imp::Pure(url::with_query);
-    "url.encode", Linear, A(s_first), NONE, Imp::Pure(url::encode);
-    "url.decode", Linear, A(s_first), NONE, Imp::Pure(url::decode);
-    "codec.base64_encode", Linear, A(s_first), NONE, Imp::Pure(codec::base64_encode);
-    "codec.base64_decode", Linear, A(s_first), NONE, Imp::Pure(codec::base64_decode);
-    "codec.hex_encode", Linear, A(s_first), NONE, Imp::Pure(codec::hex_encode);
-    "codec.hex_decode", Linear, A(s_first), NONE, Imp::Pure(codec::hex_decode);
-    "codec.csv_parse", Linear, A(s_first), NONE, Imp::Pure(codec::csv_parse);
-    "codec.csv_write", Linear, A(s_weight_first), NONE, Imp::Pure(codec::csv_write);
+    "template.names", Linear, A(s_first), OFFLOAD, Imp::Pure(template::names);
+    "vec.dot", Linear, A(s_weight_two_lists), OFFLOAD, Imp::Pure(vec::dot);
+    "vec.norm", Linear, A(s_vec), OFFLOAD, Imp::Pure(vec::norm);
+    "vec.normalize", Linear, A(s_vec), OFFLOAD, Imp::Pure(vec::normalize);
+    "vec.cosine", Linear, A(s_weight_two_lists), OFFLOAD, Imp::Pure(vec::cosine);
+    "vec.add", Linear, A(s_weight_two_lists), OFFLOAD, Imp::Pure(vec::add);
+    "vec.mean", Linear, A(s_vec), OFFLOAD, Imp::Pure(vec::mean);
+    "vec.top_k", NLogN, A(s_top_k), OFFLOAD, Imp::Pure(vec::top_k);
+    "path.join", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(path::join);
+    "path.parent", Linear, A(s_first), OFFLOAD, Imp::Pure(path::parent);
+    "path.name", Linear, A(s_first), OFFLOAD, Imp::Pure(path::name);
+    "path.stem", Linear, A(s_first), OFFLOAD, Imp::Pure(path::stem);
+    "path.ext", Linear, A(s_first), OFFLOAD, Imp::Pure(path::ext);
+    "path.normalize", Linear, A(s_first), OFFLOAD, Imp::Pure(path::normalize);
+    "path.is_absolute", Linear, A(s_first), OFFLOAD, Imp::Pure(path::is_absolute);
+    "path.relative_to", Linear, A(s_two), OFFLOAD, Imp::Pure(path::relative_to);
+    "url.parse", Linear, A(s_first), OFFLOAD, Imp::Pure(url::parse);
+    "url.host", Linear, A(s_first), OFFLOAD, Imp::Pure(url::host);
+    "url.with_query", Linear, A(s_with_query), OFFLOAD, Imp::Pure(url::with_query);
+    "url.encode", Linear, A(s_first), OFFLOAD, Imp::Pure(url::encode);
+    "url.decode", Linear, A(s_first), OFFLOAD, Imp::Pure(url::decode);
+    "codec.base64_encode", Linear, A(s_first), OFFLOAD, Imp::Pure(codec::base64_encode);
+    "codec.base64_decode", Linear, A(s_first), OFFLOAD, Imp::Pure(codec::base64_decode);
+    "codec.hex_encode", Linear, A(s_first), OFFLOAD, Imp::Pure(codec::hex_encode);
+    "codec.hex_decode", Linear, A(s_first), OFFLOAD, Imp::Pure(codec::hex_decode);
+    "codec.csv_parse", Linear, A(s_first), OFFLOAD, Imp::Pure(codec::csv_parse);
+    "codec.csv_write", Linear, A(s_weight_first), OFFLOAD, Imp::Pure(codec::csv_write);
+    // ---- frames (stage 10) ----
+    "question", Const, A(s_none), NONE, Imp::Pure(crate::frame::meta::question);
 }
 
 /// The table index of the built-in a program calls `name`.
@@ -980,17 +1050,22 @@ impl Task for SortTask {
                 weight.saturating_mul(crate::ops::log_work(n)).div_ceil(64),
             ));
         }
-        let mut order: Vec<usize> = (0..self.items.len()).collect();
         let keys = &self.keys.items;
-        if self.descending {
-            order.sort_by(|a, b| cmp_natural(&keys[*b], &keys[*a]));
-        } else {
-            order.sort_by(|a, b| cmp_natural(&keys[*a], &keys[*b]));
-        }
+        let descending = self.descending;
+        let order = util::merge_sort(cx, self.items.len(), &|i| keys[i].weight(), &mut |a, b| {
+            if descending {
+                cmp_natural(&keys[b], &keys[a])
+            } else {
+                cmp_natural(&keys[a], &keys[b])
+            }
+        })?;
         // The order depends on every key.
         let decided = self.keys.items.iter().fold(self.own, |l, k| l | k.quick());
-        let items = order.into_iter().map(|i| self.items[i].clone()).collect();
-        Ok(TaskStep::Done(new_list(cx, items, decided)?))
+        let mut out = util::Gather::with_capacity(cx, order.indexes.len() as u64, decided)?;
+        for &i in &order.indexes {
+            out.push(cx, self.items[i].clone())?;
+        }
+        Ok(TaskStep::Done(out.finish(cx, decided)?))
     }
 }
 
@@ -1230,7 +1305,7 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k) = (arg(cx, args, 0)?, arg(cx, args, 1)?);
     let labels = m.labels | k.labels;
     Ok(match map(cx, m)?.get_entry(k) {
-        Some((stored, v)) => v.clone().with_labels(labels | stored.labels),
+        Some((stored, v)) => v.clone().with_labels(labels | stored.quick() | k.quick()),
         // A miss depends on every key the probe was compared with.
         None => Value::none().with_labels(labels | m.quick()),
     })
@@ -1238,8 +1313,9 @@ fn map_get(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 
 fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let (m, k, v) = (arg(cx, args, 0)?, arg(cx, args, 1)?, arg(cx, args, 2)?);
-    // Whether the key set grew depends on the key.
-    let labels = m.labels | k.labels;
+    // Whether the key set grew depends on the key, and on the keys it was compared with.
+    let (_, path) = map(cx, m)?.probe(k);
+    let labels = m.labels | k.labels | path;
     let out = map(cx, m)?
         .insert(cx.heap, k.clone(), v.clone())
         .map_err(|f| cx.fault(f, labels))?;
@@ -1249,8 +1325,12 @@ fn map_set(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
 fn map_keys(cx: &mut Cx<'_>, args: &Args) -> Result<Value, RtError> {
     let m = arg(cx, args, 0)?;
     let mut keys = Vec::new();
-    map(cx, m)?.for_each(&mut |k, _| keys.push(k.clone().with_labels(m.labels)));
-    new_list(cx, keys, m.labels)
+    let mut own = m.labels;
+    map(cx, m)?.for_each(&mut |k, _| {
+        own |= k.quick();
+        keys.push(k.clone().with_labels(m.labels));
+    });
+    new_list(cx, keys, own)
 }
 
 // ---- json ----

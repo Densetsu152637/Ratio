@@ -1,0 +1,14 @@
+// expect: value ["read_file"]
+
+// `want` tools the caller lacks are dropped; `need` tools are kept.
+harness inner() -> [Str] with { tools: { need: [read_file], want: [web_fetch, grep] } } {
+  meta.permissions().tools
+}
+
+harness reader() -> [Str] with { tools: [read_file, glob] } {
+  inner()
+}
+
+fn main() -> [Str] {
+  reader()
+}

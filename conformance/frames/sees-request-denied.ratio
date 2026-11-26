@@ -1,0 +1,12 @@
+// expect: runtime-error Denied
+
+// A fresh frame sees nothing unless it asks, and it can only ask for what its caller sees.
+harness planner() -> Int with { sees: { plan: true } } { 1 }
+
+harness isolated() -> Int {
+  planner()
+}
+
+fn main() -> Int {
+  isolated()
+}

@@ -1,0 +1,33 @@
+// builtin: json.parse
+// case main: value [1, 2.5, "a", true, null, {"k": [1]}]
+// case duplicate_keys: value {"a": 2, "b": 3}
+// case numbers: value [9223372036854775807, -3, 1.5e3, 0.25]
+// case escapes: value "a\"b\\c\ndA"
+// case error_position: value "invalid JSON at 2:8: expected a value"
+// case truncated: error Invalid
+// case trailing: error Invalid
+// case bad_number: error Invalid
+// case max_depth: value 128
+// case too_deep: error Invalid
+// labels parse(s): "[1, 2]"
+fn main() -> Json { json.parse(r"""[1, 2.5, "a", true, null, {"k": [1]}] """) }
+fn duplicate_keys() -> Json { json.parse(r"""{"a": 1, "b": 3, "a": 2} """) }
+fn numbers() -> Json { json.parse("[9223372036854775807, -3, 1.5e3, 0.25]") }
+fn escapes() -> Json { json.parse("\"a\\\"b\\\\c\\nd\\u0041\"") }
+fn error_position() -> Untrusted<Str> {
+  try {
+    let j = json.parse("\{\n  \"a\": x\n\}")
+    "no error"
+  } catch e {
+    e.message
+  }
+}
+fn truncated() -> Json { json.parse("[1,") }
+fn trailing() -> Json { json.parse("[1] 2") }
+fn bad_number() -> Json { json.parse("[01]") }
+fn max_depth() -> Int {
+  let j = json.parse(text.repeat("[", 128) + text.repeat("]", 128))
+  128
+}
+fn too_deep() -> Json { json.parse(text.repeat("[", 129) + text.repeat("]", 129)) }
+fn parse(s: Str) -> Json { json.parse(s) }

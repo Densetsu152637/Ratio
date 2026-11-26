@@ -1,0 +1,10 @@
+// builtin: list.slice
+// case main: value [[2, 3], [3, 4], [2, 3], [], [1, 2, 3, 4], [4]]
+// labels slice(xs, start, end): [1, 2, 3, 4] | 1 | 3 ; inner-inert 0
+// labels open_end(xs, start): [1, 2, 3, 4] | 1
+fn main() -> ([Int], [Int], [Int], [Int], [Int], [Int]) {
+  let xs = [1, 2, 3, 4]
+  (list.slice(xs, 1, 3), xs.slice(-2), xs.slice(1, -1), xs.slice(3, 1), xs.slice(-10, 10), xs.slice(3, none))
+}
+fn slice(xs: [Int], start: Int, end: Int) -> [Int] { list.slice(xs, start, end) }
+fn open_end(xs: [Int], start: Int) -> [Int] { list.slice(xs, start) }

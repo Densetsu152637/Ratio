@@ -1,0 +1,19 @@
+// builtin: json.equal
+// case main: value [true, true, true, false, false, false, true, false]
+// labels equal(n): 5
+// labels equal_in(xs): [1, 2] ; inner 0
+fn e(a: Str, b: Str) -> Bool { json.equal(json.parse(a), json.parse(b)) }
+fn main() -> [Bool] {
+  [
+    e("1", "1.0"),
+    e(r"""{"a":1,"b":[1,2]} """, r"""{"b":[1,2],"a":1} """),
+    e("null", "null"),
+    e("[1,2]", "[2,1]"),
+    e(r"""{"a":1} """, r"""{"a":2} """),
+    e("1", r""""1" """),
+    e(r"""[{"a":[1.5]}] """, r"""[{"a":[1.5]}] """),
+    e(r"""{"a":1} """, r"""{"a":1,"b":2} """),
+  ]
+}
+fn equal(n: Int) -> Bool { json.equal(json.encode(n), json.parse("5")) }
+fn equal_in(xs: [Int]) -> Bool { json.equal(json.encode(xs), json.parse("[1, 2]")) }

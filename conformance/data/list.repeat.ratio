@@ -1,0 +1,11 @@
+// builtin: list.repeat
+// case main: value ["x", "x", "x"]
+// case zero: value []
+// case negative: error Invalid
+// case too_many: error Invalid
+// labels copies(x, n): "x" | 2
+fn main() -> [Str] { list.repeat("x", 3) }
+fn zero() -> [Str] { list.repeat("x", 0) }
+fn negative() -> [Str] { list.repeat("x", -1) }
+fn too_many() -> [Int] { list.repeat(1, 1000001) }
+fn copies(x: Str, n: Int) -> [Str] { list.repeat(x, n) }

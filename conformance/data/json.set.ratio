@@ -1,0 +1,35 @@
+// builtin: json.set
+// case replace: value {"a": {"b": 9, "c": 2}, "d": [1, 2]}
+// case add_key: value {"a": {"b": 1, "c": 2}, "d": [1, 2], "e": 0}
+// case array: value [{"a": {"b": 1, "c": 2}, "d": [7, 2]}, {"a": {"b": 1, "c": 2}, "d": [1, 2, 7]}, {"a": {"b": 1, "c": 2}, "d": [1, 2, 7]}]
+// case root: value [[9]]
+// case persistent: value [{"a": 1}, {"a": 2}]
+// case missing_parent: error Invalid
+// case past_end: error Invalid
+// case bad_pointer: error Invalid
+// case through_scalar: error Invalid
+// case too_deep: error Invalid
+// labels set(p, v): "/a" | 5
+// labels set_doc(xs, p): [1, 2] | "/1" ; inner 0
+// labels refused(p): "/x/y"
+fn doc() -> Json { json.parse(r"""{"a": {"b": 1, "c": 2}, "d": [1, 2]} """) }
+fn replace() -> Json { json.set(doc(), "/a/b", json.encode(9)) }
+fn add_key() -> Json { doc().set("/e", json.encode(0)) }
+fn array() -> [Json] {
+  let seven = json.encode(7)
+  [json.set(doc(), "/d/0", seven), json.set(doc(), "/d/2", seven), json.set(doc(), "/d/-", seven)]
+}
+fn root() -> [Json] { [json.set(doc(), "", json.parse("[9]"))] }
+fn persistent() -> [Json] {
+  let d = json.parse(r"""{"a": 1} """)
+  let e = json.set(d, "/a", json.encode(2))
+  [d, e]
+}
+fn missing_parent() -> Json { json.set(doc(), "/x/y", json.encode(1)) }
+fn past_end() -> Json { json.set(doc(), "/d/5", json.encode(1)) }
+fn bad_pointer() -> Json { json.set(doc(), "a", json.encode(1)) }
+fn through_scalar() -> Json { json.set(doc(), "/a/b/c", json.encode(1)) }
+fn too_deep() -> Json { json.set(doc(), text.repeat("/a", 300), json.encode(1)) }
+fn set(p: Str, v: Int) -> Json { json.set(json.parse(r"""{"a": 1} """), p, json.encode(v)) }
+fn set_doc(xs: [Int], p: Str) -> Json { json.set(json.encode(xs), p, json.parse("null")) }
+fn refused(p: Str) -> Json { json.set(json.parse(r"""{"a": 1} """), p, json.parse("null")) }

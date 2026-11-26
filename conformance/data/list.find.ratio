@@ -1,0 +1,25 @@
+// builtin: list.find, list.find_index, list.any, list.all, list.count
+// case main: value [2, 1, true, false, 2]
+// case misses: value [null, null, false, true, 0]
+// case stops_early: value true
+// case raises: error User
+// labels find(xs, t): [1, 2, 3] | 1 ; inner 0
+// labels find_index(xs, t): [1, 2, 3] | 1 ; inner 0
+// labels any(xs, t): [1, 2, 3] | 1 ; inner 0
+// labels all(xs, t): [1, 2, 3] | 0 ; inner 0
+// labels count(xs, t): [1, 2, 3] | 1 ; inner 0
+fn main() -> (Int?, Int?, Bool, Bool, Int) {
+  let xs = [1, 2, 3]
+  (xs.find(|x| x > 1), xs.find_index(|x| x > 1), xs.any(|x| x > 2), xs.all(|x| x > 1), xs.count(|x| x > 1))
+}
+fn misses() -> (Int?, Int?, Bool, Bool, Int) {
+  let empty: [Int] = []
+  (empty.find(|x| x > 1), empty.find_index(|x| x > 1), empty.any(|x| x > 1), empty.all(|x| x > 1), empty.count(|x| x > 1))
+}
+fn stops_early() -> Bool { [1, 2].any(|x| if x == 1 { true } else { raise fail("never", "reached") }) }
+fn raises() -> Bool { [1].all(|x| raise fail("boom", "all")) }
+fn find(xs: [Int], t: Int) -> Int? { list.find(xs, |x| x > t) }
+fn find_index(xs: [Int], t: Int) -> Int? { list.find_index(xs, |x| x > t) }
+fn any(xs: [Int], t: Int) -> Bool { list.any(xs, |x| x > t) }
+fn all(xs: [Int], t: Int) -> Bool { list.all(xs, |x| x > t) }
+fn count(xs: [Int], t: Int) -> Int { list.count(xs, |x| x > t) }
