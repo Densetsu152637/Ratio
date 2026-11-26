@@ -242,8 +242,9 @@ draft when it merges, one at a time, and the files each slice owns are listed in
 - **P2/P2b** (interpreter speed-ups LV-1 to LV-5 and LV-8): after 11a; never open beside 11b.
 - **F** (syntax: comprehensions, `_`, `|> .method`, `then`/`compose`, `where`, postfix `?`,
   `do` chains, C0039 rules): after D4, C and 10, before stage L.
-- **Q2** (optional; `if`/`match` values carry their condition's labels): after 11a, only if the
-  user adopts it; never open beside P2.
+- **Q2** (`if`, `if let`, `while let` and `match` values carry their condition's labels, by the
+  rule in the design; adopted by the user as hardening, not a guarantee): after 11a; never open
+  beside P2.
 - Status: design accepted (critic converged after four revisions); slices pending.
 
 ## Stage L: `.ratio` text linter
