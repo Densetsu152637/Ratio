@@ -1,0 +1,6 @@
+// expect: parse-error P0001 at 5:3
+
+fn broken() {
+  let x = 1 +
+  let y = (1 2)
+}

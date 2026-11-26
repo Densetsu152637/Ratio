@@ -1,0 +1,24 @@
+// expect: parse-ok
+
+fn postfix() {
+  f()
+  f(1, 2)
+  f(1, 2,)
+  f(a: 1)
+  f(1, a: 2, b: 3,)
+  f::<Plan>(j)
+  json.decode::<Plan>(j)
+  g::<Int, Str>(1)
+  x.name
+  x?.name
+  x.loop
+  x.if
+  x?.fn
+  xs[0]
+  xs[i + 1]
+  xs[0][1]
+  a.b.c(d).e[f]
+  model.generate_as::<Note>(p)
+  call(x) with { budget: { tokens: 1k } }
+  call(x) with { }
+}

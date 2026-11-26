@@ -1,0 +1,27 @@
+// expect: parse-ok
+
+fn statements() {
+  let a = 1
+  let b: Int = 2
+  let (c, d) = (3, 4)
+  let { x, y } = point
+  let [first, ..rest] = items
+  var n = 0
+  var m: Int = 1
+  n = n + 1
+  n += 1
+  n -= 1
+  n *= 2
+  n /= 2
+  point.x = 1
+  items[0] = 2
+  deep.a.b[1].c = 3
+  m.loop = 1
+  defer { cleanup() }
+  let e = 1;
+  a
+}
+
+fn semicolons() { a; b; c; }
+fn empty() { }
+fn one_line() { let a = 1; a }

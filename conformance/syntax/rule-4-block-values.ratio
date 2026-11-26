@@ -1,0 +1,20 @@
+// expect: parse-ok
+
+// Rule 4: a block's value is its last statement when that is an expression.
+
+fn block_values() {
+  let a = { 1 }
+  let b = { let x = 1; x + 1 }
+  let c = { let x = 1 }
+  let d = { 1; 2; }
+  let e = do {
+    let x = 1
+    x
+  }
+  let f = if a { 1
+    }
+  let g = {
+    1
+    |> inc
+  }
+}

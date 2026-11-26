@@ -1,0 +1,23 @@
+// expect: parse-ok
+
+fn concurrency() {
+  par { a(); b(); c() }
+  par { a() }
+  par {
+    a()
+    b()
+  }
+  race { a(); b() }
+  let both = par { left(); right(); }
+  par([a, b])
+  race([a, b])
+  let par = 1
+  with timeout 30s { work() }
+  with timeout 5m { work() } else { fallback() }
+  with timeout limit * 2 { work() }
+  with { effort: low } { work() }
+  with { tools: [grep], budget: { tokens: 10k } } { work() } 
+  do { 1 }
+  let x = do { let a = 1; a + 1 }
+  timeout + 1
+}

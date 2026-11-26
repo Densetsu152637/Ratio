@@ -1,0 +1,15 @@
+// expect: parse-ok
+
+// Rule 3: `Name { … }` in expression position constructs a payload variant.
+
+fn variant_literals() {
+  Denied { by: user }
+  Denied { by }
+  Ok { value: v }
+  Verdict.Fail { reason: "no" }
+  Q.Deep.Name { a: 1, b: 2, }
+  Empty { }
+  let r = Err { error: e }
+  [Ok { value: 1 }, Ok { value: 2 }]
+  f(Denied { by: user }, label: Ok { value: 1 })
+}

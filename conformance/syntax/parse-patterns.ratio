@@ -1,0 +1,31 @@
+// expect: parse-ok
+
+// Every pattern form, in let, match, if let and closure parameters.
+
+fn patterns() {
+  let _ = 1
+  let x = 1
+  let (a, b) = pair
+  let (a, (b, c)) = nested
+  let [a, b] = two
+  let [] = none_left
+  let [head, ..tail] = list
+  let [..all] = list
+  let [.., last] = list
+  let { a, b: renamed, c: [d] } = rec
+  let { a, .. } = rec
+  let { a, b, } = rec
+  let {} = rec
+  let all @ [first, ..] = list
+  let n @ 1 = 1
+  let Verdict.Pass = v
+  let Denied { by } = d
+  let Denied { by: who, .. } = d
+  let 1 = 1
+  let "s" = s
+  let true = b
+  let none = o
+  let 2.5 = f
+  let 1 | 2 = n
+  let Pass | Fail { reason: _ } = v
+}

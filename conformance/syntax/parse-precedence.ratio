@@ -1,0 +1,39 @@
+// expect: parse-ok
+
+// The precedence ladder, lowest to highest (chapter 02, operators and precedence).
+
+fn ladder() {
+  x |> f(a) |> g
+  x ?? y ?? z
+  a or b or c
+  a and b and c
+  not a
+  not not a
+  not a and b
+  a == b
+  a != b
+  a < b
+  a <= b
+  a > b
+  a >= b
+  a in xs
+  a is Denied
+  a is Verdict.Fail
+  0..n
+  0..=n
+  0..n + 1
+  a + b - c
+  a * b / c % d
+  -a
+  - -a
+  -a * b
+  a + b * c
+  (a + b) * c
+  a < b and b < c
+  a.b(c)?.d[0]
+  x ?? y |> f
+  a or b and c
+  a..b == c..d
+  1 + 2 == 3
+  a - -b
+}

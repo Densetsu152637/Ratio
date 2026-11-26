@@ -1,0 +1,6 @@
+// expect: parse-error P0008 at 5:3
+
+fn split(c: Bool) {
+  if c
+  { 1 }
+}

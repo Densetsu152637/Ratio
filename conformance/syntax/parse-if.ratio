@@ -1,0 +1,11 @@
+// expect: parse-ok
+
+fn conditionals() {
+  if a { 1 }
+  if a { 1 } else { 2 }
+  if a { 1 } else if b { 2 } else { 3 }
+  if a { 1 } else if b { 2 }
+  if let Ok { value } = opt { value }
+  if let { a, b } = r { a } else { b }
+  let v = if ok { Pass } else { critique(work) }
+}

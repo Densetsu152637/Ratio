@@ -1,0 +1,17 @@
+// expect: parse-ok
+
+// Rule 9: positional arguments first, then named ones; a closure after named ones is named.
+
+fn arguments() {
+  f()
+  f(1)
+  f(1, 2)
+  f(a: 1)
+  f(1, a: 2)
+  f(1, 2, a: 3, b: 4)
+  f(1, a: 2,)
+  par_map(xs, f: |x| x, limit: 4)
+  par_map(xs, |x| x, limit: 4)
+  f(a: g(b: 1), c: 2)
+  f(x: y ?? z)
+}

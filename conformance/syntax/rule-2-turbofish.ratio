@@ -1,0 +1,16 @@
+// expect: parse-ok
+
+// Rule 2: type arguments use the turbofish; a bare `<` is the comparison operator.
+
+fn turbofish() {
+  json.decode::<Plan>(j)
+  model.generate_as::<Note>(p)
+  f::<List<Int> >(x)
+  f::<Map<Str, [Int]>, Str>(x)
+  f::<(Int, Str)>(x)
+  f::<fn(Int) -> Int>(x)
+  f::<Int?>(x)
+  a < b
+  a < b and c > d
+  f(a < b, c > d)
+}

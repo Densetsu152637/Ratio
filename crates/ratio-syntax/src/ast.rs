@@ -418,6 +418,10 @@ pub struct StringLit {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "an interpolation holds its expression inline; boxing it would touch every consumer"
+)]
 pub enum StrPart {
     /// Text with escapes decoded and, in a long string, the indentation removed.
     Text(String),
@@ -590,7 +594,10 @@ pub enum PatternKind {
     /// A bare name: a binding, or a variant of the scrutinee's enum (rule 6 decides later).
     Name(Ident),
     /// `name @ pattern`.
-    Bind { name: Ident, pattern: Box<Pattern> },
+    Bind {
+        name: Ident,
+        pattern: Box<Pattern>,
+    },
     /// A qualified variant (`Verdict.Fail`) or a variant with a payload (`Denied { by }`).
     Variant {
         path: Vec<Ident>,
@@ -643,9 +650,18 @@ pub enum SectionKind {
     System(Expr),
     Instruct(Expr),
     Task(Expr),
-    Data { value: Expr, label: Option<Expr> },
-    Image { value: Expr, label: Option<Expr> },
-    Example { input: Expr, output: Expr },
+    Data {
+        value: Expr,
+        label: Option<Expr>,
+    },
+    Image {
+        value: Expr,
+        label: Option<Expr>,
+    },
+    Example {
+        input: Expr,
+        output: Expr,
+    },
     Format(Type),
     Steps(Expr),
     Context(Expr),
