@@ -36,10 +36,11 @@ mod machine;
 mod ops;
 mod plist;
 mod pmap;
+mod pool;
 mod prepare;
 #[cfg(test)]
 mod properties;
-#[allow(dead_code, reason = "wired up in the next step")]
+
 mod re;
 pub mod sink;
 mod stack;
@@ -53,10 +54,14 @@ pub use heap::{Heap, HeapLedger};
 pub use json::MAX_JSON_DEPTH;
 pub use labels::Labels;
 pub use machine::{
-    CHECKPOINT, CancelToken, EffectRequest, Limits, Machine, Outcome, StartError, Suspend,
+    BuiltinWork, CHECKPOINT, CancelToken, EffectRequest, Limits, Machine, Outcome, StartError,
+    Suspend,
 };
 pub use plist::List;
 pub use pmap::Map;
+pub use pool::{
+    JOBS_IN_FLIGHT, OFFLOAD_ELEMENTS, OFFLOAD_TEXT_BYTES, Pool, PoolSession, Thresholds, Waiter,
+};
 pub use prepare::{Entry, PrepareError, Prepared, prepare};
 pub use value::{Fault, MAX_DEPTH, MAX_ELEMS, MAX_STR_BYTES, Str, Value};
 

@@ -9,7 +9,6 @@ mod compile;
 mod parse;
 mod vm;
 
-pub(crate) use compile::MAX_PROGRAM;
 pub(crate) use vm::{UNSET, Vm, scratch_bytes};
 
 /// The longest pattern accepted, in bytes.
@@ -124,9 +123,16 @@ impl<'a> Matches<'a> {
 /// Appends the replacement `with` for one match to `out`, as Rust's `regex` expands it: `$n`
 /// and `${n}` are group `n`, `$name` and `${name}` a named group (`$name` takes the longest run
 /// of letters, digits and `_`), `$$` is `$`, a group that did not take part or does not exist
-/// is empty, and a `$` that starts none of these is itself. Returns the work: characters read
-/// and written.
-pub(crate) fn expand(re: &Regex, with: &str, hay: &str, slots: &[usize], out: &mut String) -> u64 {
+/// is empty, and a `$` that starts none of these is itself. Returns the work (bytes read and
+/// written), or `Err` with the work done when `out` would pass `limit` bytes (it stops there).
+pub(crate) fn expand(
+    re: &Regex,
+    with: &str,
+    hay: &str,
+    slots: &[usize],
+    out: &mut String,
+    limit: usize,
+) -> Result<u64, u64> {
     let group = |i: u32| -> &str {
         let (a, b) = (2 * i as usize, 2 * i as usize + 1);
         match (slots.get(a), slots.get(b)) {
@@ -141,32 +147,45 @@ pub(crate) fn expand(re: &Regex, with: &str, hay: &str, slots: &[usize], out: &m
         }
     };
     let start = out.len();
+    let work = |out: &String| (with.len() + out.len() - start) as u64;
+    let push = |out: &mut String, s: &str| -> Result<(), ()> {
+        if out.len() + s.len() > limit {
+            return Err(());
+        }
+        out.push_str(s);
+        Ok(())
+    };
     let mut rest = with;
     while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
+        let mut ok = push(out, &rest[..at]);
         rest = &rest[at + 1..];
         if let Some(r) = rest.strip_prefix('$') {
-            out.push('$');
+            ok = ok.and_then(|()| push(out, "$"));
             rest = r;
         } else if let Some(r) = rest.strip_prefix('{')
             && let Some(close) = r.find('}')
         {
-            out.push_str(lookup(&r[..close]));
+            ok = ok.and_then(|()| push(out, lookup(&r[..close])));
             rest = &r[close + 1..];
         } else {
             let len = rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(rest.len());
             if len == 0 {
-                out.push('$');
+                ok = ok.and_then(|()| push(out, "$"));
             } else {
-                out.push_str(lookup(&rest[..len]));
+                ok = ok.and_then(|()| push(out, lookup(&rest[..len])));
                 rest = &rest[len..];
             }
         }
+        if ok.is_err() {
+            return Err(work(out));
+        }
     }
-    out.push_str(rest);
-    (with.len() + out.len() - start) as u64
+    match push(out, rest) {
+        Ok(()) => Ok(work(out)),
+        Err(()) => Err(work(out)),
+    }
 }
 
 /// The text as a literal pattern: every character with a meaning escaped.
@@ -334,7 +353,18 @@ mod tests {
         let mut work = 0;
         let s = vm.search(&re.program, hay, 0, &mut work).unwrap();
         let mut out = String::new();
-        expand(&re, "$2/${y} $$ $y1 $ ${9} $0", hay, &s, &mut out);
+        expand(
+            &re,
+            "$2/${y} $$ $y1 $ ${9} $0",
+            hay,
+            &s,
+            &mut out,
+            usize::MAX,
+        )
+        .unwrap();
+        let mut short = String::new();
+        assert!(expand(&re, "$0$0$0", hay, &s, &mut short, 10).is_err());
+        assert!(short.len() <= 10);
         assert_eq!(out, "05/2024 $  $  2024-05");
     }
 
@@ -379,7 +409,7 @@ mod tests {
         assert!(refused("(?:[a-z]{1000}){100}").contains("larger than the limit"));
         assert!(refused(&r"\w{1000}".repeat(6)).contains("larger than the limit"));
         let ok = Regex::new("a{1000}").unwrap();
-        assert!(ok.weight() <= MAX_PROGRAM);
+        assert!(ok.weight() <= compile::MAX_PROGRAM);
     }
 
     #[test]

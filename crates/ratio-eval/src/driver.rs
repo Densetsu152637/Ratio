@@ -5,7 +5,9 @@
 //! runtime worker back every 1,000 steps (chapter 01). At an effect, stage 11 will await the
 //! host here (`host.call(…).await`, then [`Machine::resume_effect`]); in stage 6 there is no
 //! host, and every effect raises `Unsupported`. No async runtime is needed: [`block_on`] runs
-//! an evaluation on the current thread with the standard library alone.
+//! an evaluation on the current thread with the standard library alone. While a large built-in
+//! runs on the pool ([`crate::Pool`]), the future registers its waker with the job and with
+//! the cancellation token and returns `Pending`, so the thread is free for other sessions.
 
 use std::future::Future;
 use std::pin::{Pin, pin};
@@ -49,6 +51,13 @@ impl Evaluation {
     pub fn machine(&mut self) -> &mut Machine {
         &mut self.machine
     }
+
+    /// Runs large pure built-ins on `session`'s pool ([`crate::Pool`]).
+    #[must_use]
+    pub fn offload_to(mut self, session: crate::PoolSession) -> Evaluation {
+        self.machine.set_offload(Some(session));
+        self
+    }
 }
 
 impl Future for Evaluation {
@@ -61,6 +70,13 @@ impl Future for Evaluation {
                     self.yields += 1;
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
+                }
+                Suspend::Wait(waiter) => {
+                    self.machine.cancel_token().register(cx.waker());
+                    waiter.register(cx.waker());
+                    if !waiter.is_ready() && !self.machine.cancel_token().is_cancelled() {
+                        return Poll::Pending;
+                    }
                 }
                 Suspend::Effect(req) => {
                     let e = raise(
