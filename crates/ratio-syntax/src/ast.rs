@@ -18,6 +18,20 @@ pub struct Module {
     pub span: Span,
 }
 
+impl Module {
+    /// The span-free S-expression of the tree (see [`crate::dump`]).
+    #[must_use]
+    pub fn sexpr(&self) -> String {
+        crate::dump::dump(self)
+    }
+
+    /// The canonical source text of the tree (see [`crate::print`]).
+    #[must_use]
+    pub fn to_source(&self) -> String {
+        crate::printer::print(self)
+    }
+}
+
 /// The file's `meta { … }` header.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Meta {
