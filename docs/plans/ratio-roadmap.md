@@ -227,6 +227,26 @@ PC-4 and PC-9 in 11b).
   robustness properties, fuzzing schedule, limit tests.
 - 27 (optional, resume by replay): depends on 11.
 
+## Loops, vectorised operations and functional syntax (design accepted)
+
+Design: [loops-and-vector-ops.md](../design/loops-and-vector-ops.md), revision 4. Requested by
+the user: compatible and optimised loops and vectorised operations, extra functional syntax,
+`Result` and monadic chains, and a Haskell–Java style. The user adopted comprehensions, `_`
+placeholders, `|> .method` stages, `scan` and `zip_with`. Each slice takes the next free spec
+draft when it merges, one at a time, and the files each slice owns are listed in the design.
+
+- **P0** (equivalence errata and the `conformance/equiv/` corpus): after stages 8, 9 and 10.
+- **P1** (built-in speed-ups in `plist.rs` and `builtins/`): after 8 and 9, alongside 11a.
+- **D4** (the `maybe` and `either` modules, `scan`, `zip_with` and the internal
+  `list.comprehend`): after 8, 9, 10, C, P0 and P1.
+- **P2/P2b** (interpreter speed-ups LV-1 to LV-5 and LV-8): after 11a; never open beside 11b.
+- **F** (syntax: comprehensions, `_`, `|> .method`, `then`/`compose`, `where`, postfix `?`,
+  `do` chains, C0039 rules): after D4, C and 10, before stage L.
+- **Q2** (`if`, `if let`, `while let` and `match` values carry their condition's labels, by the
+  rule in the design; adopted by the user as hardening, not a guarantee): after 11a; never open
+  beside P2.
+- Status: design accepted (critic converged after four revisions); slices pending.
+
 ## Stage L: `.ratio` text linter
 
 - Placement: after the Ratio-side language stages (1–12 and Ratio's parts of 21 and 23). Stages 24
