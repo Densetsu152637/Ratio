@@ -131,7 +131,7 @@ pub enum TokenKind {
     /// `20k`, `1.5M`: the scaled integer value.
     Quantity(i64),
     Float(f64),
-    /// A duration in milliseconds.
+    /// A duration in whole microseconds (chapter 03), the unit of `Duration` values.
     Duration(i64),
     /// An amount of money in millionths of a dollar.
     Money(i64),
@@ -209,7 +209,7 @@ impl TokenKind {
             TokenKind::Int(v) => format!("int:{v}"),
             TokenKind::Quantity(v) => format!("qty:{v}"),
             TokenKind::Float(v) => format!("float:{v:?}"),
-            TokenKind::Duration(v) => format!("dur:{v}ms"),
+            TokenKind::Duration(v) => format!("dur:{v}us"),
             TokenKind::Money(v) => format!("money:{v}u"),
             TokenKind::StringStart { long: false } => "str[".to_owned(),
             TokenKind::StringStart { long: true } => "str3[".to_owned(),

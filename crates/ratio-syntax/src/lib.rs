@@ -11,5 +11,8 @@ mod number;
 mod token;
 
 pub use diag::{Code, Diagnostic};
-pub use lexer::{LexOptions, Lexed, MAX_INTERPOLATION_DEPTH, MAX_NESTING, lex, lex_with};
+pub use lexer::{
+    LexOptions, Lexed, MAX_DIAGNOSTICS, MAX_INTERPOLATION_DEPTH, MAX_NESTING, MAX_SOURCE_BYTES,
+    lex, lex_with,
+};
 pub use token::{BraceKind, Contextual, Keyword, Span, Token, TokenKind};

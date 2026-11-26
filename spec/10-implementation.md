@@ -198,6 +198,12 @@ may change in any release.
   notice and the session runs `native` until they re-select, which shows the diff as any
   re-selection does. Replay refuses a tape whose `IR_VERSION` or `TAPE_VERSION` differs from the
   running library's, naming both.
+- **A version notice for user and plugin pins.** A pinned `user:` or `plugin:` package whose
+  recorded `ratio-lang` version differs from the running one (with the same `IR_VERSION`, so the
+  pin still holds) keeps running, and each session using it gets one notice naming the package,
+  the recorded version and the running one, so the user knows the package now runs on a library
+  it was not selected with and can re-check or re-select it. The notice is per session, at the
+  first turn that runs the package, and never repeats within that session.
 - `ratio::SPEC_DRAFT` names the specification draft and `ratio::STAGE` the stage reached.
 
 ### How Imperium pins Ratio
@@ -222,7 +228,10 @@ may change in any release.
   commit that is never merged.
 - **Imperium's CI checks the source.** A check in Imperium's CI fails when `ratio-lang` resolves
   from anything but a `tag` of this repository: a `path`, a `[patch]` entry or a `branch` fails
-  always, and a `rev` fails on any pull request that is not a draft.
+  always, and a `rev` fails on any pull request that is not a draft. A tag alone is not enough:
+  the check also requires a **GitHub release** for that tag, which only the release workflow
+  creates, and only for a commit on `main` whose CI passed, so a tag pushed by any other route
+  (or a release that failed its checks) never reaches Imperium's build.
 - A language change never starts in Imperium: it is a pull request here first, then a release,
   then a bump there.
 
@@ -267,7 +276,7 @@ review.
 | Secrecy labels on values and their propagation | Owns, alone: no Imperium check can restore a dropped label (residual risk, stage 24 scope) | Labels conversations and engine state; journals labels |
 | Secrecy sinks | Enforces at the guard, from the labels | Enforces at dispatch from the per-call flag, which comes from the same labels: it catches a guard bug, not a propagation bug; owns redaction, the per-session HMAC key, and the declassify and `secrets: true` challenges |
 | Tape secrecy and replay trust | `TapeHost` records every value's labels and restores them on replay; replayed effect results are untrusted exactly as live ones are; effect keys carry no values | Redacts tape files (`--ratio-tape`) like events; journals `ratio_effect` and redacts it when streamed; redacts labelled values and the `harness` field's values in hook payloads |
-| Attenuation (tools, modes, rules, paths, location, budgets, `sees`, depth) | Computes every frame's scope as the meet of its caller's and its request | **The boundary**: `RatioHost::open_frame` verifies independently that the child scope is within the parent's in every dimension (tool set, mode meet, rules, paths, location, budgets, `sees`, depth) and refuses otherwise; dispatch enforces the scope (`CallScope`) before its own checks |
+| Attenuation (tools, modes, rules, paths, location, budgets, `sees`, depth) | Computes every frame's scope as the meet of its caller's and its request | **The boundary**: `RatioHost::open_frame` verifies independently that the child scope is within the parent's in every dimension (tool set, mode meet, rules, paths, location, budgets, `sees`, depth) and refuses otherwise. It checks against **Imperium's own record** of the parent's scope, looked up by the parent's frame id, never against the scope in the `FrameCtx` that Ratio passes in, so a Ratio bug that widens a `FrameCtx` cannot widen a child. Dispatch enforces the scope (`CallScope`) before its own checks |
 | Extension installs (`tools.install_extension`) | No other path: a program can install only through this built-in, and no frame, `with` override or `ratio_approval` can widen or pre-approve it | Owns: the dispatch floor (every install from a program is agent-origin and asks the user per install, in every mode, never remembered, not skipped by allow rules, auto mode or `ratio_approval`; refused in unattended sessions) and load-time withholding (an agent-origin extension stays off until the user approves it in the desktop app) |
 | Interpreter limits (steps, heap, call depth, nesting, interpolation, JSON, strings, collections, branches, tape size) | Owns | Sets configured values within the maxima |
 | Session budgets (tokens, cost, wall clock), approvals, unattended refusals, the permission broker | Debits frame ledgers through the host | Owns: `BudgetGate`, the broker, the unattended rules |
@@ -293,7 +302,7 @@ stages, 26 are committed; 27 is optional and 28 waits on Q9.
 
 | # | Stage | Repo | Delivers | Tests (all in CI) |
 | --- | --- | --- | --- | --- |
-| 1 | Token reader | Ratio | Lexer with the mode stack (code, strings, nested interpolations), quantity, duration and money literals, contextual keywords, semicolon insertion by innermost delimiter | Token corpus: every literal form, nested interpolations, insertion in every delimiter kind, line-start `with` and `else` |
+| 1 | Token reader | Ratio | Lexer with the mode stack (code, strings, nested interpolations), quantity, duration and money literals, contextual keywords, semicolon insertion by innermost delimiter | Token corpus: every literal form, nested interpolations, insertion in every delimiter kind, line-start `with` and `else`, attribute-only lines (no insertion), variant literals across lines |
 | 2 | Parser | Ratio | The whole grammar; AST with spans; diagnostics with file, line, column and a caret; error recovery; nesting limits; a canonical printer | Parse corpus for every production and disambiguation rule; printer round trip as a property test; nesting-limit tests |
 | 3 | Modules and names | Ratio | Source roots, imports by path (no escape, no links), source-qualified names with areas (`authored:session/x`) and trust order, the registry trait (Imperium's daemon registry implements it in stage 18), name resolution, prelude | Resolution corpus; shadowing refused across trust levels; import-trust rules per source |
 | 4 | Type checker | Ratio | Records, enums, options, tuples, generics on functions, subtyping (`Never`, `UserText`, `Brief`, `TrustedPrompt`), contextual variants, variant literals, exhaustiveness, turbofish, constant evaluation rules | `conformance/types/`: accepted and rejected programs with diagnostic codes |
@@ -305,7 +314,7 @@ stages, 26 are committed; 27 is optional and 28 waits on Q9.
 | 10 | Frames | Ratio | Frame model and frame paths; configuration evaluation and merge; attenuation (tools, mode meet, rules, paths, location, budgets, `sees`, depth, width, attended); the budget ledger; context modes; `Question` crossing frames; `meta` | Attenuation monotonicity property; ledger tests; `sees` refusals, including labelled values entering frames without `secrets` |
 | 11 | Host, tape and concurrency | Ratio (spike in Imperium) | The `&self` `Host` trait with `Labelled<T>` values and the sink guard; `HOST_API_VERSION` and `TAPE_VERSION`; the host contract tests and their fixture; the throwaway `RatioHost` spike in Imperium against the candidate commit; `ScriptedHost`; `TapeHost` with effect keys built from frame paths; scheduling choices on the tape; `par`, `par_map`, `race`, `timeout`, cancellation; `rand`, `time`; `control`; `state` | Replay determinism property under random completion orders; record-then-replay gives identical event streams; replayed values keep their labels and are untrusted; divergence tests; real concurrency; every secrecy sink refuses a labelled value at the guard and, in the contract suite, at the unguarded host; the contract suite's frame cases refuse a wider child scope |
 | 12 | Model and think | Ratio | Prompt rendering with the framing rules of chapter 05 and the shared framing vectors (`conformance/framing/`); `model.*` and `think.*`; structured generation and repair; built-in prompt texts in the hash | Scripted-host tests per built-in; prompt rendering snapshots |
-| 13 | Engine host Ia: conversations and models | Imperium | The `ratio-lang` dependency at a release tag; `RatioHost` model calls; the host contract tests and framing vectors run against it; multi-conversation support with handles, forks and rollback; safe points; harness agents and their events; conversation labelling and its journal event. **Needs the turn, multi-conversation, prompts and model-request seams** | Engine tests with the scripted OpenAI-compatible endpoint of `crates/imperium-cli/tests/headless_eval.rs`, extended for `response_format`, `tool_choice`, image parts and logprobs; the host contract suite against `RatioHost`, including `open_frame` refusing a child scope wider than its parent in each dimension (tools, mode, rules, paths, location, budgets, `sees`, depth) |
+| 13 | Engine host Ia: conversations and models | Imperium | The `ratio-lang` dependency at a release tag; `RatioHost` model calls; the host contract tests and framing vectors run against it; multi-conversation support with handles, forks and rollback; safe points; harness agents and their events; conversation labelling and its journal event. **Needs the turn, multi-conversation, prompts and model-request seams** | Engine tests with the scripted OpenAI-compatible endpoint of `crates/imperium-cli/tests/headless_eval.rs`, extended for `response_format`, `tool_choice`, image parts and logprobs; the host contract suite against `RatioHost`, including `open_frame` refusing a child scope wider than its parent in each dimension (tools, mode, rules, paths, location, budgets, `sees`, depth), also when the parent `FrameCtx` passed in has been forged wider than Imperium's record of that frame |
 | 14 | Engine host Ib: dispatch | Imperium | Dispatch on any conversation with `CallScope`, structured outcomes, `tools.refuse`, compaction calls (local-only for labelled conversations), secrecy checks at dispatch from the per-call flag. **Needs the dispatch, outcome and compaction seams** | One test per permission path, each the twin of a native-loop test; dispatch refuses labelled arguments even when the host is bypassed; dispatch refuses a call outside the frame's `CallScope` when a test forges a frame wider than its parent |
 | 15 | Engine host II: agents | Imperium | `agents.*` gated by tool names; per-task budgets carved from frames; cancelling running subagents; writer worktrees and `agent_merge`; secrecy on briefs and questions | Delegation limits and rules refuse as the engine does; budget carving; cancel tests |
 | 16 | Engine host IIIa: memory and session | Imperium | `memory.*` (private entries as a secret source), `session.*` with pseudo-tools, `ratio_approval`, `declassify`, checkpoints, branches, rewinds; the command rule for secret paths (floor-style parsing of command lines) | One engine test per built-in group; pseudo-tool rules apply |
@@ -336,9 +345,50 @@ file starts with expectation lines:
 // fixture: model replies.json                  (scripted model replies for this file)
 ```
 
-A single test runner runs them all with the scripted host. In stage 1 it is the token reader's
+The token reader's expectations (stage 1) are:
+
+```ratio
+// expect: lex-ok                               (read without a diagnostic)
+// expect: lex-error L0004 at 2:7               (a lexical diagnostic and position; one line each, in order)
+// tokens: kw:let ident:x = int:1 ;!            (the tokens, in the notation below; lines join)
+// option: max_nesting 2                        (a reader limit: max_source_bytes, max_nesting,
+//                                                 max_interpolation_depth or max_diagnostics)
+```
+
+The header is every line at the top of the file that starts with `//` and a space; each must be one of these
+directives (a misspelt one fails the file), and the first other line starts the program. Line
+numbers count the header. In the `tokens:` notation a keyword is `kw:let`, a contextual keyword
+`ctx:task`, an identifier `ident:x`, literals `int:1`, `qty:1500`, `float:0.5`, `dur:500000us`
+(microseconds), `money:500000u` (millionths of a dollar), strings `str[ text:"…" interp[ … ]interp
+]str` (`str3[` for a long string, `raw:"…"` and `raw3:"…"` for raw ones, `spec:"…"` for a format
+spec), `doc:"…"` a documentation comment, `{block`, `{record`, `{prompt`, `{enum` and `{match`
+an opening brace and what it opens, `;!` an inserted semicolon, and other punctuation as written.
+
+The lexical diagnostic codes (chapter 02 defines the rules, chapter 07 the limits):
+
+| Code | Diagnostic |
+| --- | --- |
+| `L0001` | A character that starts no token (including `!` and `&`, and a `$` not starting an amount) |
+| `L0002` | A string not closed before the end of its line (short strings) or of the source |
+| `L0003` | An unknown or malformed escape, or a `\` at the end of a line |
+| `L0004` | A carriage return not followed by a line feed, in code, a comment or a string |
+| `L0005` | A lone `}` in string text |
+| `L0006` | A line break inside an interpolation of a short string |
+| `L0007` | An interpolation not closed before the end of the source |
+| `L0008` | Letters after a number that are not a unit, or a misplaced `_` separator |
+| `L0009` | A number outside its range (64-bit signed; a duration in microseconds; a finite float) |
+| `L0010` | A quantity, duration or amount of money that cannot be exact |
+| `L0011` | Interpolations nested deeper than the limit |
+| `L0012` | Brackets, blocks and interpolations nested deeper than the limit; reading stops |
+| `L0013` | A source larger than the limit; nothing is read |
+| `L0014` | A closing delimiter that matches nothing, or an opening one never closed |
+| `L0015` | More diagnostics than the limit (100); it marks where the next one was found, and reading stops |
+| `L0016` | A `{`, `}` or line break in a format spec |
+
+A single test runner runs every file with the scripted host. In stage 1 it is the token reader's
 runner, `crates/ratio-syntax/tests/conformance.rs`, which understands `lex-ok`, `lex-error`,
-`tokens:` and `option:` lines and skips the later stages' expectations.
+`tokens:` and `option:` lines and skips the later stages' expectations; every `L` code has at
+least one `lex-error` file.
 `conformance/spec-map.txt` names the chapters each directory tests (above). Three coverage checks
 keep the suite honest:
 

@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use ratio_syntax::{Lexed, TokenKind};
+use ratio_syntax::{BraceKind, Keyword, Lexed, TokenKind};
 
 /// The conformance corpus. It belongs to the language, not to this crate, so it lives at the
 /// repository root (`conformance/`), next to the specification it tests.
@@ -105,11 +105,14 @@ pub fn check_invariants(src: &str, lexed: &Lexed) -> Result<(), String> {
             Err("an oversized source produced tokens".to_owned())
         };
     }
-    // After too many errors the reader stops where it is; otherwise Eof is at the end.
-    let stopped = lexed
-        .diagnostics
-        .last()
-        .is_some_and(|d| d.code == ratio_syntax::Code::TooManyErrors);
+    // After too many errors, or nesting past the limit, the reader stops where it is; otherwise
+    // Eof is at the end.
+    let stopped = lexed.diagnostics.last().is_some_and(|d| {
+        matches!(
+            d.code,
+            ratio_syntax::Code::TooManyErrors | ratio_syntax::Code::NestingTooDeep
+        )
+    });
     let eof_ok = last.span.start == last.span.end
         && last.span.end <= src.len()
         && (stopped || last.span.end == src.len());
@@ -257,6 +260,77 @@ pub fn check_invariants(src: &str, lexed: &Lexed) -> Result<(), String> {
                     token.kind
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Condition 2 of chapter 02's insertion rule, written out again from the specification.
+fn can_end_a_statement(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Ident(_)
+            | TokenKind::Int(_)
+            | TokenKind::Quantity(_)
+            | TokenKind::Float(_)
+            | TokenKind::Duration(_)
+            | TokenKind::Money(_)
+            | TokenKind::StringEnd
+            | TokenKind::RawString { .. }
+            | TokenKind::RParen
+            | TokenKind::RBracket
+            | TokenKind::RBrace
+            | TokenKind::Question
+            | TokenKind::Keyword(
+                Keyword::Break
+                    | Keyword::Continue
+                    | Keyword::Return
+                    | Keyword::None
+                    | Keyword::True
+                    | Keyword::False
+            )
+    )
+}
+
+/// The insertion property: in a clean read, an inserted `;` appears only where the innermost
+/// open delimiter is a block, a prompt body or the top level of the file (condition 1), and only
+/// after a token that can end a statement (condition 2). Reads with diagnostics are not checked:
+/// recovery may close delimiters the token stream never shows as closed.
+pub fn check_insertions(lexed: &Lexed) -> Result<(), String> {
+    if !lexed.diagnostics.is_empty() {
+        return Ok(());
+    }
+    // `None` stands for a bracket, a parenthesis or an interpolation.
+    let mut open: Vec<Option<BraceKind>> = Vec::new();
+    let mut prev: Option<&TokenKind> = None;
+    for (index, token) in lexed.tokens.iter().enumerate() {
+        match &token.kind {
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::InterpStart => open.push(None),
+            TokenKind::LBrace(kind) => open.push(Some(*kind)),
+            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace | TokenKind::InterpEnd => {
+                open.pop();
+            }
+            TokenKind::Semi { inserted: true } => {
+                let innermost_ok = matches!(
+                    open.last(),
+                    None | Some(Some(BraceKind::Block | BraceKind::PromptBody))
+                );
+                if !innermost_ok {
+                    return Err(format!(
+                        "token {index}: a semicolon inserted inside {:?}",
+                        open.last()
+                    ));
+                }
+                if !prev.is_some_and(can_end_a_statement) {
+                    return Err(format!(
+                        "token {index}: a semicolon inserted after {prev:?}, which cannot end a statement"
+                    ));
+                }
+            }
+            _ => {}
+        }
+        if !matches!(token.kind, TokenKind::DocComment(_)) {
+            prev = Some(&token.kind);
         }
     }
     Ok(())

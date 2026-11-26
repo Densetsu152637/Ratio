@@ -1,0 +1,12 @@
+// expect: lex-ok
+// tokens: kw:fn ident:f ( ) {block kw:let ident:a = ident:Denied {record ident:by } ;! kw:let ident:b = ident:Denied {record ident:by } ;! kw:let ident:c = ident:Verdict . ident:Fail {record ident:reason : ident:r , } ;! ident:c ;! } ;!
+fn f() {
+  let a = Denied { by }
+  let b = Denied {
+    by
+  }
+  let c = Verdict.Fail {
+    reason: r,
+  }
+  c
+}
