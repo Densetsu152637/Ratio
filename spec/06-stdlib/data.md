@@ -43,8 +43,8 @@ does.
 | `const` | 1 | `text.len`, `text.is_empty`, `list.len`, `list.is_empty`, `list.first`, `list.last`, `map.len`, `map.is_empty`, `json.type_of`; every `math` built-in on scalars (`abs`, `sign`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `trunc`, `to_float`, `sqrt`, `pow`, `exp`, `ln`, `log2`, `log10`, `is_nan`); `time.add`, `time.diff`, `time.date`, `time.duration`, `time.seconds`, `time.show` |
 | `log` | ⌈log2(n + 1)⌉; for a map built-in, times the key's size \|k\|, since every comparison walks the key (so are `m[k]`, `k in m` and `m[k] = v`) | `list.push`, `list.get`, `list.insert`, `list.remove_at`, `list.slice`, `list.take`, `list.drop`, `list.concat`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.update` |
 | `nlogn` | n · ⌈log2(n + 1)⌉; `list.sort_by` adds W · ⌈log2(n + 1)⌉ for keys of total weight W | `list.sort`, `list.sort_by`, `list.unique`, `list.unique_by`, `list.group_by`, `map.from`, `map.count_by`, `math.median`, `math.percentile`, `math.mode`, `vec.top_k` |
-| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff` |
-| `output` | m | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
+| `product` | n₁ · n₂ + c₁ + c₂: the product of the sizes of its two inputs (lines for `diff.lines` and `diff.unified`, words for `diff.words`, nodes for `json.diff`, characters for `text.similarity`; for a `re` built-in, the text's characters plus one and the compiled pattern's size, below) plus the character counts c₁ and c₂ of both inputs, all debited before running | `text.similarity`, `diff.lines`, `diff.words`, `diff.unified`, `json.diff`, `re.is_match`, `re.find`, `re.find_all`, `re.captures`, `re.captures_all`, `re.replace`, `re.replace_all`, `re.split` |
+| `output` | m; for `text.pad_start` and `text.pad_end`, plus the fill's characters | `list.range`, `list.repeat`, `text.repeat`, `text.pad_start`, `text.pad_end` |
 | `linear` | n + m | Every other pure built-in of this page (for example `list.map`, `list.filter`, `text.split`, `text.contains`, `text.replace`, `json.parse`, `hash.stable`, `template.render`) |
 
 **Charged before running.** The part of a charge that follows from the arguments (the class's
@@ -95,12 +95,12 @@ Lengths and indexes count Unicode scalar values. Case mapping is Unicode's defau
 | `text.contains` | `(s: S, part: S) -> Bool` | Substring test | — |
 | `text.starts_with` | `(s: S, prefix: S) -> Bool` | Prefix test | — |
 | `text.ends_with` | `(s: S, suffix: S) -> Bool` | Suffix test | — |
-| `text.find` | `(s: S, part: S, from: Int = 0) -> Int?` | Index of the first occurrence at or after `from` | — |
+| `text.find` | `(s: S, part: S, from: Int = 0) -> Int?` | Index of the first occurrence at or after `from` (a negative `from` counts as 0) | — |
 | `text.rfind` | `(s: S, part: S) -> Int?` | Index of the last occurrence | — |
 | `text.count` | `(s: S, part: S) -> Int` | Non-overlapping occurrences | `Invalid` (empty `part`) |
 | `text.slice` | `(s: S, start: Int, end: Int? = none) -> S` | Characters `start..end`; negative indexes count from the end; clamped to the string | — |
 | `text.truncate` | `(s: S, max: Int, marker: Str = "…") -> S` | At most `max` characters including the marker, cut at a character boundary | `Invalid` (`max` < marker length) |
-| `text.split` | `(s: S, sep: S, limit: Int? = none) -> [S]` | Splits on every `sep` (at most `limit` parts) | `Invalid` (empty `sep`) |
+| `text.split` | `(s: S, sep: S, limit: Int? = none) -> [S]` | Splits on every `sep` (at most `limit` parts) | `Invalid` (empty `sep`, `limit` below 1) |
 | `text.split_once` | `(s: S, sep: S) -> (S, S)?` | Splits at the first `sep` | — |
 | `text.lines` | `(s: S) -> [S]` | Splits on `\n` and `\r\n`; no trailing empty line | — |
 | `text.words` | `(s: S) -> [S]` | Splits on Unicode whitespace, dropping empties | — |
@@ -110,8 +110,8 @@ Lengths and indexes count Unicode scalar values. Case mapping is Unicode's defau
 | `text.replace_first` | `(s: S, from: S, to: S) -> S` | Replaces the first occurrence | `Invalid` (empty `from`) |
 | `text.repeat` | `(s: S, n: Int) -> S` | `n` copies (result at most 16 MiB) | `Invalid` |
 | `text.reverse` | `(s: S) -> S` | Characters in reverse order | — |
-| `text.pad_start` | `(s: S, width: Int, fill: Str = " ") -> S` | Left pad to `width` characters | — |
-| `text.pad_end` | `(s: S, width: Int, fill: Str = " ") -> S` | Right pad to `width` characters | — |
+| `text.pad_start` | `(s: S, width: Int, fill: Str = " ") -> S` | Left pad to `width` characters, repeating `fill` (an empty `fill` leaves `s` as it is) | — |
+| `text.pad_end` | `(s: S, width: Int, fill: Str = " ") -> S` | Right pad to `width` characters, as `pad_start` | — |
 | `text.before` | `(s: S, sep: S) -> S` | Text before the first `sep`, or all of `s` | — |
 | `text.after` | `(s: S, sep: S) -> S` | Text after the first `sep`, or empty | — |
 | `text.before_last` | `(s: S, sep: S) -> S` | Text before the last `sep`, or all of `s` | — |
@@ -127,22 +127,36 @@ Lengths and indexes count Unicode scalar values. Case mapping is Unicode's defau
 | `text.parse_int` | `(s: S) -> Int?` | A decimal integer, surrounding whitespace allowed | — |
 | `text.parse_float` | `(s: S) -> Float?` | A decimal or exponent float | — |
 | `text.similarity` | `(a: S, b: S) -> Float` | 1 minus normalised Levenshtein distance, 0..1 | — |
-| `text.extract_json` | `(s: S) -> Json?` | The first complete JSON object or array in the text (code fences tolerated); used by repair loops | — |
-| `text.code_blocks` | `(s: S, lang: Str? = none) -> [CodeBlock]` | Fenced code blocks in Markdown, `{ lang?, code: S }`, optionally only one language | — |
+| `text.extract_json` | `(s: S) -> Json?` | The first complete JSON object or array in the text (code fences tolerated), trying at most the first 32 `{` or `[`; used by repair loops | — |
+| `text.code_blocks` | `(s: S, lang: Str? = none) -> [CodeBlock<S>]` | Fenced code blocks in Markdown, `{ lang?: S, code: S }`, optionally only one language | — |
 | `text.quote` | `(s: S, label: Str = "data") -> Untrusted<Str>` | The text framed and defused exactly as a `data` section would render it, for building framed text by hand; the result is always untrusted | — |
 
 ## `re`
 
-Rust `regex` syntax, which runs in time linear in the input, so no pattern can hang the
-interpreter. Patterns are at most 4 KiB and are compiled once per call site.
+Rust `regex` syntax, in which each search runs in time linear in the input, so no pattern can
+hang the interpreter. Patterns are at most 4 KiB and are compiled once per call site.
+`Match<S>`, `Captures<S>` and `CodeBlock<S>` take the text type of the call, so the parts of
+untrusted text are untrusted. `with` is a keyword, so it is passed by position only.
+
+**Charges.** A `re` built-in is `product`: n₁ is the text's characters plus one and n₂ the
+compiled program's size times one plus the capture slots the search tracks (none for
+`re.is_match`, the match's span for `find`, `find_all` and `split`, every group's for the
+`captures` built-ins and for a replacement that refers to groups); c is the compile work (a few
+units per pattern character and the program's size, charged whether or not the pattern was
+already compiled, and the work of the refusal for a pattern that does not compile) plus the
+characters of the text and of `with`. Iterating (`find_all`, `captures_all`, `replace_all`,
+`split`) searches again from each match's end, which a pathological pattern can make quadratic,
+as in Rust's `regex`: work past a fixed multiple of the charge is debited as it is done, so the
+call raises `Budget { which: steps }` when the steps left cannot pay. The output is debited as it
+is built, one unit per element and per character.
 
 | Built-in | Signature | Semantics | Fails with |
 | --- | --- | --- | --- |
 | `re.is_match` | `(pattern: Str, s: S) -> Bool` | Whether the pattern matches anywhere | `Invalid` (bad pattern) |
-| `re.find` | `(pattern: Str, s: S) -> Match?` | The first match, `{ text: S, start, end }` | `Invalid` |
-| `re.find_all` | `(pattern: Str, s: S, limit: Int = 1000) -> [Match]` | Non-overlapping matches in order | `Invalid` |
-| `re.captures` | `(pattern: Str, s: S) -> Captures?` | Groups of the first match: `{ groups: [S?], named: Map<Str, S> }` | `Invalid` |
-| `re.captures_all` | `(pattern: Str, s: S, limit: Int = 1000) -> [Captures]` | Groups of every match | `Invalid` |
+| `re.find` | `(pattern: Str, s: S) -> Match<S>?` | The first match, `{ text: S, start, end }` (character indexes) | `Invalid` |
+| `re.find_all` | `(pattern: Str, s: S, limit: Int = 1000) -> [Match<S>]` | Non-overlapping matches in order | `Invalid` |
+| `re.captures` | `(pattern: Str, s: S) -> Captures<S>?` | Groups of the first match: `{ groups: [S?], named: Map<Str, S> }` | `Invalid` |
+| `re.captures_all` | `(pattern: Str, s: S, limit: Int = 1000) -> [Captures<S>]` | Groups of every match | `Invalid` |
 | `re.replace` | `(pattern: Str, s: S, with: S) -> S` | Replaces the first match; `$1` and `${name}` refer to groups | `Invalid` |
 | `re.replace_all` | `(pattern: Str, s: S, with: S) -> S` | Replaces every match | `Invalid` |
 | `re.split` | `(pattern: Str, s: S) -> [S]` | Splits on matches | `Invalid` |

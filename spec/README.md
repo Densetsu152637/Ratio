@@ -1,10 +1,29 @@
 # The Ratio specification
 
-Version: draft 0.13 (2026-11-27). Status: design; stages 1 to 6 of the implementation (the
-token reader, the parser, modules and names, the type checker, schemas and taint, and the IR and
-core interpreter) are built in this repository.
+Version: draft 0.14 (2026-11-28). Status: design; stages 1 to 7 of the implementation (the
+token reader, the parser, modules and names, the type checker, schemas and taint, the IR and
+core interpreter, and the `text` and `re` built-ins with the offload pool) are built in this
+repository.
 
-**Changes in draft 0.13.** Errata from stage 6, the IR and the core interpreter. No grammar
+**Changes in draft 0.14.** Errata from stage 7, Data I. No grammar change.
+
+- The `re` built-ins are `product`: the text's characters times the compiled pattern's size
+  (times one plus the capture slots tracked), plus the compile work, charged on a cache hit and
+  for a refused pattern too; an iteration's work past a fixed multiple of the charge is debited
+  as it is done, and the output as it is built (chapter 06, `data`).
+- Each regex search is linear in its input; iterating over matches can be quadratic, as in
+  Rust's `regex`, and is bounded by the step charge (chapters 06, 07).
+- `Match<S>`, `Captures<S>` and `CodeBlock<S>` take the call's text type, so parts of untrusted
+  text stay untrusted; `re` spans count characters (chapter 06).
+- `text.extract_json` tries at most the first 32 `{` or `[` (chapter 06).
+- `text.find` treats a negative `from` as 0, `text.split` refuses a `limit` below 1, and an
+  empty `fill` leaves `pad_start` and `pad_end` text as it is (chapter 06).
+- `re.replace`'s `with` is a keyword, so it is passed by position only (chapter 06).
+- `text.pad_start` and `text.pad_end` are charged for their fill as input (chapter 06).
+- A pure built-in is offloaded by its charge before running as well as by its input size
+  (chapter 01).
+
+**Changes in draft 0.13** (kept for reference). Errata from stage 6, the IR and the core interpreter. No grammar
 change.
 
 - A step is defined: one IR expression, statement or pattern node entered, or one loop

@@ -23,7 +23,7 @@ harness answer(question: Str) -> Str {
 
 ## Status
 
-Specification draft 0.13. Stages 1 to 7 of the [implementation plan](spec/10-implementation.md)
+Specification draft 0.14. Stages 1 to 7 of the [implementation plan](spec/10-implementation.md)
 are built: the token reader, the parser, modules and names, the type checker, schemas and
 taint, the IR with the core interpreter (the pure language, with run-time secrecy labels;
 effects arrive with stage 11's host), and the first data built-ins (`text`, and `re` on a
