@@ -1,11 +1,52 @@
 # The Ratio specification
 
-Version: draft 0.16 (2026-11-26). Status: design; stages 1 to 8 and 10 of the implementation
+Version: draft 0.18 (2026-11-28). Status: design; stages 1 to 8 and 10 of the implementation
 (the token reader, the parser, modules and names, the type checker, schemas and taint, the IR
 and core interpreter, the `text` and `re` built-ins with the offload pool, the `json`, `list`
-and `map` built-ins, and frames) are built in this repository.
+and `map` built-ins, and frames) and stage C (the checker's signatures for every built-in
+outside stage 9's, and `ratio check`) are built in this repository.
 
-**Changes in draft 0.16.** Errata from stage 8, Data II. No grammar change.
+**Changes in draft 0.18.** Errata from stage C, checker-complete, from stage 11a's final review,
+and from the roadmap (Consul). No grammar change.
+
+- An optional callback is written `f: fn(A) -> B = none` (`model.stream`'s and `model.loop`'s
+  `until`, `think.until`'s `score`): `(fn(A) -> B)?` is an option of a one-element tuple
+  (chapter 02), and `fn(T) -> Float?` a function returning an option (chapter 06, README).
+- No field or variant of a shared type has a keyword's name, since a record literal cannot
+  write one: memory's `type` is `kind` (`MemoryHit`, `MemoryEntry`, `NewMemory`, `IndexLine`, and
+  `memory.search`'s parameter), `ScriptedReply.match` and `ScriptedToolReply.match` are `when`,
+  `EvalTask.prompt` is `text`, `SessionInfo.harness` and `AgentFileInfo.harness` are `package`,
+  `AgentInfo`'s role `harness` is `harness_agent`, and `Hypothesis.test` is `check` (chapter 06).
+- A type parameter named `S` is the text bound only: `think.tree_search`, `beam_search` and
+  `mcts` take `<N>`, and the `state` built-ins are written over `State`, the package's declared
+  state type, fixed at each call (chapter 06).
+- `model.classify` returns `Classified<Untrusted<E>>`: the label is the trusted scalar for a
+  unit-only enum and stays untrusted text at any other type, so `classify::<Str>` launders
+  nothing (chapter 06, `model`).
+- `Backoff` and `CacheScope` are shared types, `retry`'s default is the variant literal
+  `Backoff.exponential { start: 1s, factor: 2.0, max: 30s }`, `Countable` is a bound (text, a
+  `Prompt` or a `Conversation`), and `Round` is defined in chapter 05 (chapters 05 and 06).
+- `tools.browser_switch` and `browser_close` take the tab as `Untrusted<Str>`, since a tab id
+  arrives in an untrusted `PageView`; `context.safe_point`'s `steered` texts are untrusted
+  (chapter 06).
+- The built-ins that may only be called are listed whole: the `state` built-ins and the generic
+  secrecy sinks `model.rank` and `think.consensus` join the trust sites, `session.ask` and
+  `meta.harness`; the built-in prompts are changed by writing the built-in in Ratio, not by an
+  `instructions` parameter the rows do not have (chapter 06, README).
+- Chapter 09's examples check clean: `std:self_consistency` no longer shadows its `n`,
+  `tree_of_thought`'s label and `std:tdd_fix`'s metric tag are trusted text, and the loops of
+  `std:plan_execute_verify` and `std:consul_escalation` that act on a model's decisions carry
+  `@allow(model_guard)`.
+- Stage 11a: in replay, user answers and approvals are asked live, never taken from the tape,
+  and every digest over labelled data in a headless tape is keyed (chapter 07, T13); a
+  `budget_left()` or `spent()` reading is a recorded decision (chapter 10, stage 11a).
+- Consul is not a model: Emperor and Consul are two Ratio harnesses over one model, Princeps.
+  `std:consul_escalation` calls a `consul(artifact, goals, kind, prior)` harness on `princeps`
+  to review results and plans and to direct the takeover, which still comes after
+  `TAKEOVER_AFTER = 2` rejections; the debate example's `pro` side runs on `princeps`
+  (chapters 08 and 09). Consul's wording there is illustrative: it is the Harnesses session's.
+
+**Changes in draft 0.16** (kept for reference). Errata from stage 8, Data II. No grammar change.
 
 - `json.validate` and `json.patch` are `product`, not `linear`: validation visits pairs of
   instance and schema nodes, and each patch operation may copy a path through the document

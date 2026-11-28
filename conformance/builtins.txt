@@ -59,7 +59,7 @@ context.breakdown	(conv: Conversation) -> Breakdown?	engine	-
 context.store	(text: Untrusted<Str>, name: Str? = none) -> Artefact	engine	-
 context.read_artefact	(a: Artefact, offset: Int = 0, limit: Int = 32000) -> Untrusted<Str>	engine	-
 context.chunks	(a: Artefact, chunk_tokens: Int) -> [Untrusted<Str>]	engine	-
-retry	<T>(f: fn() -> T, attempts: Int = 3, backoff: Backoff = Backoff.exponential(1s, 2.0, 30s), on: [ErrorKind] = [ModelFailed, RateLimited, Timeout]) -> T	as f, plus effect	-
+retry	<T>(f: fn() -> T, attempts: Int = 3, backoff: Backoff = Backoff.exponential { start: 1s, factor: 2.0, max: 30s }, on: [ErrorKind] = [ModelFailed, RateLimited, Timeout]) -> T	as f, plus effect	-
 timeout	<T>(d: Duration, f: fn() -> T) -> T	as f	-
 race	<T>(fs: [fn() -> T]) -> T	as fs	-
 fallback	<T>(fs: [fn() -> T], on: [ErrorKind] = [ModelFailed, RateLimited, Timeout, SchemaMismatch, Unsupported]) -> T	as fs	-
@@ -316,7 +316,7 @@ eval.tape	() -> TapeInfo?	engine	-
 eval.golden	(name: Str, value: Untrusted<Str>) -> Bool	effect	-
 eval.script_model	(replies: [ScriptedReply]) -> ()	pure	-
 eval.script_tool	(name: Str, replies: [ScriptedToolReply]) -> ()	pure	-
-memory.search	(query: Untrusted<Str>, scope: MemoryScope? = none, type: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]>	tool:memory_search	-
+memory.search	(query: Untrusted<Str>, scope: MemoryScope? = none, kind: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]>	tool:memory_search	-
 memory.read	(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry>	tool:memory_read	-
 memory.remember	(entry: NewMemory) -> ()	memory.write, tool:memory_remember	-
 memory.edit	(name: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>, scope: MemoryScope? = none) -> ()	memory.write, tool:memory_edit	-
@@ -352,12 +352,12 @@ model.generate	(p: Prompt, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
 model.generate_as	<T>(p: Prompt, opts: GenOpts = {}) -> Untrusted<T>	model ×1..1+repairs	-
 model.generate_n	(p: Prompt, n: Int, opts: GenOpts = {}) -> [Untrusted<Str>]	model ×n	-
 model.complete	(text: Str, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
-model.stream	(p: Prompt, on_text: fn(Untrusted<Str>) -> (), until: (fn(Untrusted<Str>, Untrusted<Str>) -> Bool)? = none, opts: GenOpts = {}) -> Untrusted<Streamed>	model ×1	-
+model.stream	(p: Prompt, on_text: fn(Untrusted<Str>) -> (), until: fn(Untrusted<Str>, Untrusted<Str>) -> Bool = none, opts: GenOpts = {}) -> Untrusted<Streamed>	model ×1	-
 model.logprobs	(p: Prompt, opts: GenOpts = {}) -> Untrusted<TokenText>	model ×1	-
 model.chat	(conv: Conversation, tools: ToolSet? = none, opts: GenOpts = {}) -> ModelReply	model ×1	-
 model.chat_as	<T>(conv: Conversation, instructions: Prompt? = none, opts: GenOpts = {}) -> Untrusted<T>	model ×1..1+repairs	-
-model.loop	(conv: Conversation, max_steps: Int = 50, tools: ToolSet? = none, until: (fn(ModelReply) -> Bool)? = none, concurrent: Bool = true, opts: GenOpts = {}) -> LoopResult	model ×1..max_steps, plus each dispatched tool's own permission	-
-model.classify	<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<E>	model ×1	-
+model.loop	(conv: Conversation, max_steps: Int = 50, tools: ToolSet? = none, until: fn(ModelReply) -> Bool = none, concurrent: Bool = true, opts: GenOpts = {}) -> LoopResult	model ×1..max_steps, plus each dispatched tool's own permission	-
+model.classify	<E>(input: Untrusted<Str>, opts: GenOpts = {}) -> Classified<Untrusted<E>>	model ×1	-
 model.choose	(input: Untrusted<Str>, options: [Str], opts: GenOpts = {}) -> Chosen	model ×1	-
 model.extract	<T>(input: Untrusted<Str>, what: Str? = none, opts: GenOpts = {}) -> Untrusted<T>	model ×1..3	-
 model.summarize	(input: Untrusted<Str>, max_words: Int = 150, focus: Str? = none, opts: GenOpts = {}) -> Untrusted<Str>	model ×1..2	-
@@ -399,16 +399,16 @@ session.scratch_folder	() -> Str?	engine	-
 session.usage	() -> Spent	engine	-
 session.queued	() -> [UserText]	engine	-
 session.emit	(name: Str, data: Json) -> ()	effect	-
-state.get	() -> S	sees:state	-
-state.set	(v: S) -> ()	sees:state, entry	-
-state.update	(f: fn(S) -> S) -> S	sees:state, entry	-
+state.get	() -> State	sees:state	-
+state.set	(v: State) -> ()	sees:state, entry	-
+state.update	(f: fn(State) -> State) -> State	sees:state, entry	-
 state.reset	() -> ()	sees:state, entry	-
 think.steps	<A>(p: Prompt, steps: [Str], visible: Bool = true, opts: GenOpts = {}) -> Stepped<A>	model ×1..3	-
 think.scratchpad	() -> Scratchpad	pure	-
 think.note	(pad: Scratchpad, text: Untrusted<Str>) -> ()	pure	-
 think.notes	(pad: Scratchpad, last: Int? = none) -> Untrusted<Str>	pure	-
 think.step_back	(question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
-think.until	<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float? = none) -> Iterated<T>	as step	-
+think.until	<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float = none) -> Iterated<T>	as step	-
 think.plan	(goal: Untrusted<Str>, context: Prompt? = none, max_steps: Int = 8, opts: GenOpts = {}) -> Untrusted<Plan>	model ×1..3	-
 think.replan	(plan: Untrusted<Plan>, step: Untrusted<Str>, reason: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Plan>	model ×1..3	-
 think.decompose	(task: Untrusted<Str>, max_parts: Int = 6, opts: GenOpts = {}) -> Untrusted<[Subtask]>	model ×1..3	-
@@ -427,9 +427,9 @@ think.best_of	<T>(n: Int, sample: fn() -> T, score: fn(T) -> Float, parallel: Bo
 think.consensus	<T>(answers: [T], method: ConsensusMethod = majority, show: fn(T) -> Untrusted<Str> = text.show, opts: GenOpts = {}) -> Consensus<T>	pure, or model ×1 for judge	-
 think.reconcile	(answers: [Untrusted<Str>], question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str>	model ×1	-
 think.debate	(question: Untrusted<Str>, sides: [fn(DebateTurn) -> Untrusted<Str>], judge: fn(DebateRecord) -> Untrusted<Judgement>, rounds: Int = 2) -> DebateResult	as callbacks	-
-think.tree_search	<S>(root: S, expand: fn(S) -> [S], score: fn(S) -> Float, is_goal: fn(S) -> Bool, strategy: SearchStrategy = best_first, beam: Int? = none, max_nodes: Int = 64, max_depth: Int = 6) -> SearchResult<S>	as callbacks	-
-think.beam_search	<S>(init: [S], expand: fn(S) -> [S], score: fn(S) -> Float, width: Int = 3, depth: Int = 4) -> [Scored<S>]	as callbacks	-
-think.mcts	<S>(root: S, expand: fn(S) -> [S], rollout: fn(S) -> Float, iterations: Int = 32, exploration: Float = 1.4) -> SearchResult<S>	as callbacks	-
+think.tree_search	<N>(root: N, expand: fn(N) -> [N], score: fn(N) -> Float, is_goal: fn(N) -> Bool, strategy: SearchStrategy = best_first, beam: Int? = none, max_nodes: Int = 64, max_depth: Int = 6) -> SearchResult<N>	as callbacks	-
+think.beam_search	<N>(init: [N], expand: fn(N) -> [N], score: fn(N) -> Float, width: Int = 3, depth: Int = 4) -> [Scored<N>]	as callbacks	-
+think.mcts	<N>(root: N, expand: fn(N) -> [N], rollout: fn(N) -> Float, iterations: Int = 32, exploration: Float = 1.4) -> SearchResult<N>	as callbacks	-
 think.confidence	(question: Untrusted<Str>, answer: Untrusted<Str>, method: ConfidenceMethod = self_report, n: Int = 5, opts: GenOpts = {}) -> Confidence	model ×1 or ×n	-
 think.uncertainty	(keys: [Untrusted<Str>]) -> Float	pure	-
 think.clarify	(missing_parameter: Str, options: [Untrusted<Str>], question: Str? = none, confidence: Float? = none) -> UserText?	user	-
@@ -450,8 +450,8 @@ tools.browser_read	() -> Untrusted<PageView>	tool:browser_read	-
 tools.browser_click	(selector: Untrusted<Str>) -> Untrusted<PageView>	tool:browser_click	-
 tools.browser_type	(selector: Untrusted<Str>, text: Untrusted<Str>, submit: Bool = false) -> Untrusted<PageView>	tool:browser_type	-
 tools.browser_tabs	() -> Untrusted<[TabInfo]>	tool:browser_tabs	-
-tools.browser_switch	(tab: Str) -> Untrusted<PageView>	tool:browser_switch	-
-tools.browser_close	(tab: Str) -> ()	tool:browser_close	-
+tools.browser_switch	(tab: Untrusted<Str>) -> Untrusted<PageView>	tool:browser_switch	-
+tools.browser_close	(tab: Untrusted<Str>) -> ()	tool:browser_close	-
 tools.browser_screenshot	() -> Image	tool:browser_screenshot	-
 tools.browser_download	(url: Untrusted<Str>, filename: Str? = none) -> Untrusted<Downloaded>	tool:browser_download	-
 tools.preview_open	(target: PreviewTarget) -> Preview	tool:preview_open	-

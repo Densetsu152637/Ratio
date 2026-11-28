@@ -166,6 +166,7 @@ constrains it to a list of strings and returns the chosen option as untrusted te
 Every iterative built-in takes a `Stop` value, and loops in programs use the same helpers:
 
 ```ratio
+type Round = { round: Int, score?: Float }   // what `until` sees: the round, and its score when known
 type Stop = {
   max_rounds?: Int,                 // hard cap on iterations
   until?: fn(Round) -> Bool,        // stop when the predicate holds (e.g. the critic passes)

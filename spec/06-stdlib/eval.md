@@ -27,7 +27,7 @@ in the output's `ratio.metrics` (chapter 08).
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `eval.task` | `() -> EvalTask?` | In a headless run, the task: `{ id, prompt, raw: Json }` (the task file's other fields, as `task.raw` in the output); `none` in an ordinary session | — | `engine` |
+| `eval.task` | `() -> EvalTask?` | In a headless run, the task: `{ id, text, raw: Json }` (`text` is the task's prompt) (the task file's other fields, as `task.raw` in the output); `none` in an ordinary session | — | `engine` |
 | `eval.is_headless` | `() -> Bool` | Whether the session is an evaluation session | — | `engine` |
 | `eval.fixture` | `(name: Str) -> Json` | A named fixture: in a headless run, `ratio_fixtures.<name>` of the task file; in `test` blocks, a fixture declared next to the package (`<package>.fixtures/<name>.json`) | `NotFound` | `engine` |
 
@@ -45,5 +45,5 @@ Only available in `test` blocks; elsewhere they raise `Invalid`.
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `eval.script_model` | `(replies: [ScriptedReply]) -> ()` | Queues model replies for the scripted host: `{ match?: Str, text?: Str, json?: Json, tool_calls?: [ToolCall], error?: ErrorKind }`. Each model call takes the first reply whose `match` occurs in the rendered request (or the next unmatched reply) | `Invalid` (outside tests) | `pure` |
-| `eval.script_tool` | `(name: Str, replies: [ScriptedToolReply]) -> ()` | Queues results for a tool: `{ match?: Json, ok: Bool, text: Str, denied?: DeniedBy }` | `Invalid` (outside tests) | `pure` |
+| `eval.script_model` | `(replies: [ScriptedReply]) -> ()` | Queues model replies for the scripted host: `{ when?: Str, text?: Str, json?: Json, tool_calls?: [ToolCall], error?: ErrorKind }`. Each model call takes the first reply whose `when` occurs in the rendered request (or the next unmatched reply) | `Invalid` (outside tests) | `pure` |
+| `eval.script_tool` | `(name: Str, replies: [ScriptedToolReply]) -> ()` | Queues results for a tool: `{ when?: Json, ok: Bool, text: Str, denied?: DeniedBy }` | `Invalid` (outside tests) | `pure` |

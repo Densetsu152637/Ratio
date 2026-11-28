@@ -48,8 +48,8 @@ budgets in the engine (chapter 10).
 | `agents.worktree` | `(task: Task<Report>) -> WorktreeInfo?` | For a writer subagent (`access: write`): `{ branch: Untrusted<Str>, path: Str, files: [Untrusted<Str>], commits: Int, merges_cleanly: Bool, conflicts: [Untrusted<Str>] }` from its worktree (`docs/14-projects-and-automation.md#worktrees`); `none` for readers | `NotFound` | `engine` |
 | `agents.merge` | `(task: Task<Report>) -> MergeResult` | Merges a finished writer's branch into the working folder's branch with git, as the root would; conflicts are reported (`{ merged: Bool, conflicts: [Untrusted<Str>] }`), never resolved. Decided as the pseudo-tool `agent_merge`, which asks by default | `Denied`, `Invalid` (running, not a writer) | `tool:`*`agent_merge`* |
 | `agents.list` | `() -> [AgentSummary]` | Every agent of the session, root first, as `list_agents` (including tasks the model spawned and running harness agents) | `Denied` | `sees:agents` |
-| `agents.current` | `() -> AgentInfo` | The agent this frame runs in: `{ id, role: root \| subagent \| harness \| knowledge_fork, parent?, title }` | — | `engine` |
-| `agents.named` | `() -> [AgentFileInfo]` | The agent files the session can use, `{ name, description, origin, tools?, model?, harness? }` (`docs/06-extensibility.md#named-agents-implemented`) | — | `engine` |
+| `agents.current` | `() -> AgentInfo` | The agent this frame runs in: `{ id, role: root \| subagent \| harness_agent \| knowledge_fork, parent?, title }` | — | `engine` |
+| `agents.named` | `() -> [AgentFileInfo]` | The agent files the session can use, `{ name, description, origin, tools?, model?, package? }` (`docs/06-extensibility.md#named-agents-implemented`) | — | `engine` |
 
 ## Knowledge agents
 

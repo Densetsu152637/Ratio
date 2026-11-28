@@ -253,10 +253,11 @@ network | delegate | any_tool | model)`, `@tool(name)`, `@secrecy_sink`, `@schem
 (the result is the person's answer), `@secret_answers`, `@loads`, `@state` (the `state`
 built-ins, below) and `@local` (its effects keep its arguments on the machine: not a secrecy
 sink). A name that is a Ratio keyword is written with a trailing `_` (`meta.harness_`,
-`model.loop_`, `memory.search`'s `type_`), which the checker drops; such a parameter can be
-passed only by position. The same holds for the fields and variants of prelude types
-(`MemoryHit.type_` reads as `h.type`), though a program cannot write such a field in a record
-literal. The type-parameter names `S` (any text, normalised to `Str` or `Untrusted<Str>`) and
+`model.loop_`, `session.start`'s `prompt_`), which the checker drops; such a parameter can be
+passed only by position. Since draft 0.18 no field or variant of a shared type has a keyword's
+name (`MemoryHit.kind`, `ScriptedReply.when`, `EvalTask.text`, `SessionInfo.package`,
+`Hypothesis.check`, `AgentRole.harness_agent`), since a record literal could not write one; the
+checker would read a trailing `_` off one too. The type-parameter names `S` (any text, normalised to `Str` or `Untrusted<Str>`) and
 `Num` (`Int`, `Float`, `Duration`, `Money`) carry chapter 06's bounds.
 
 **Stage C (checker-complete).** The table has every built-in of `agents`, `context`, `control`
@@ -310,9 +311,10 @@ come from stage 10's frames block (below). How the attributes were decided:
   `think.steps` take their type parameter only as an output schema; `rand.*`, `meta.signature`
   and the `data` built-ins compute on the machine. `model.count_tokens` takes chapter 06's
   `Countable` only (text, a `Prompt` or a `Conversation`), as the bound `Countable`.
-- **Optional callbacks** (`model.stream`'s and `model.loop`'s `until`) are declared
-  `fn(..) -> Bool = none`, since chapter 06's `(fn(..) -> Bool)?` is an option of a
-  one-element tuple; a closure where an optional function is expected is shaped by it.
+- **Optional callbacks** (`model.stream`'s and `model.loop`'s `until`, `think.until`'s
+  `score`) are `fn(..) -> B = none`, as chapter 06 writes them since draft 0.18 (`(fn(..) -> B)?`
+  would be an option of a one-element tuple); a closure where an optional function is expected
+  is shaped by it.
 
 **Scope cut**: `math` to `codec` are completed by stage 9; `tests/signatures.rs` lists them
 as pending and checks everything else against

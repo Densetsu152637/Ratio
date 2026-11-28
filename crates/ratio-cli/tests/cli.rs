@@ -396,47 +396,12 @@ fn a_file_over_the_size_limit_is_refused_without_reading_it() {
     );
 }
 
-/// The diagnostics chapter 09's examples are known to give, each a spec erratum or a warning
-/// a reviewer is meant to see: `(example, line in the example, code)`. Examples are numbered by
-/// their order in `spec/09-examples.md`.
-const EXAMPLE_FINDINGS: &[(usize, u32, &str, &str)] = &[
-    // `std:plan_execute_verify`: the loop runs what a model-written plan says (by design).
-    (
-        1,
-        69,
-        "C0039",
-        "model.loop guarded by a model-written plan's step status",
-    ),
-    (
-        1,
-        70,
-        "C0039",
-        "a harness call guarded by a model-written plan's step status",
-    ),
-    // `std:self_consistency`: `let n = math.clamp(n, 1, 9)` shadows the parameter.
-    (2, 21, "C0031", "a shadowed binding"),
-    // `tree_of_thought`: `eval.label`'s value is `Str`, `text.show` gives `Untrusted<Str>`.
-    (
-        4,
-        19,
-        "C0035",
-        "erratum: eval.label(key, text.show(found.goal_reached))",
-    ),
-    // `std:consul_escalation`: dispatching the calls the model made (the agent loop itself).
-    (
-        6,
-        55,
-        "C0039",
-        "tools.dispatch_all of a model's calls under a model-derived guard",
-    ),
-    // `std:tdd_fix`: `eval.metric`'s tags are `Map<Str, Str>`, `text.show` is untrusted.
-    (
-        7,
-        38,
-        "C0035",
-        "erratum: tags: { attempt: text.show(attempt) }",
-    ),
-];
+/// The diagnostics chapter 09's examples are known to give: `(example, line in the example,
+/// code, why)`, numbered by their order in `spec/09-examples.md`. Draft 0.18 fixed the errata
+/// this list held (a shadowed parameter, two untrusted texts in `eval` records) and marked the
+/// two loops whose effects are meant to be the model's decision `@allow(model_guard)`, so the
+/// examples now check clean but for stage 9's built-ins.
+const EXAMPLE_FINDINGS: &[(usize, u32, &str, &str)] = &[];
 
 /// Whether a diagnostic of an example comes from a built-in a later stage adds (stage 9's
 /// `math` to `codec`): a missing signature, a missing list method, or a closure whose parameter

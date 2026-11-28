@@ -180,18 +180,21 @@ release, then removed with the research session's agreement.
 ## The Consul escalation workflow (roadmap item 64)
 
 Item 64 asks for a workflow in which Consul takes over a subagent that keeps being rejected.
-Ratio expresses it as the built-in package `std:consul_escalation`, whose full source is
-[example 7](09-examples.md#7-consul-escalation-roadmap-item-64).
+Emperor and Consul are two Ratio harnesses over one model, Princeps (the `princeps` model table
+id): Emperor is the root's loop and Consul the reviewer the package calls (`consul`). Ratio
+expresses the workflow as the built-in package `std:consul_escalation`, whose source is
+[example 7](09-examples.md#7-consul-escalation-roadmap-item-64) (Consul's own wording there is
+illustrative; it is the Harnesses session's).
 
 | Item 64 requirement | In `std:consul_escalation` |
 | --- | --- |
 | A workflow, not a setting; no per-environment threshold; no off switch | A package with the threshold as a constant (`TAKEOVER_AFTER = 2`, a user decision, chapter 11); users opt in by selecting it for subagents, or replace it with their own package |
 | Rejections: the user declines an approval; a critic or judge refuses a result; a tool or command fails | `tools.dispatch` results with `outcome: Denied { by: user }`; a critique that does not pass; results with `outcome: failed` (tool errors and non-zero command exits) |
 | Counted per subagent task, within a single turn | The counter is a local of the `@task` entry's call, which is one turn of one subagent |
-| Consul takes over after two rejections, continuing from the current state | The same conversation continues with `opts: { model: CONSUL }` on every later `model.chat` of the turn; nothing is restarted or summarised |
+| Consul takes over after two rejections, continuing from the current state | The `consul` harness reads the conversation so far and its direction is put into the same conversation, which continues for the rest of the turn; nothing is restarted or summarised |
 | Hands back when finished, or when unsure with a question for whoever dispatched the work | The entry returns its report; when the working model ends with a question, the entry raises `Question`, which reaches the dispatcher (chapter 04, questions) |
-| Consul critiques work by any model | Before takeover, Consul critiques the subagent's results. After takeover Consul is the worker, so a different critic (a frontier route, never Consul) reviews its results; a model does not grade its own work |
-| In particular Emperor's planning | The `@turn` entry has Consul critique the root's plan. **Before execution only when `update_plan` arrives alone** in a reply: the plan is dispatched, critiqued, and the critique is in the conversation before the model's next call can act on it. When `update_plan` arrives together with other tool calls, those calls run in the same dispatch, so the critique necessarily comes after them |
+| Consul critiques work by any model | Before takeover, the `consul` harness reviews the subagent's results. After takeover Consul directs the work, so a different critic (a frontier route, never Consul) reviews its results; a reviewer does not grade work it directed |
+| In particular Emperor's planning | The `@turn` entry (Emperor) calls `consul` on the root's plan. **Before execution only when `update_plan` arrives alone** in a reply: the plan is dispatched, critiqued, and the critique is in the conversation before the model's next call can act on it. When `update_plan` arrives together with other tool calls, those calls run in the same dispatch, so the critique necessarily comes after them |
 
 The rejection counting and the handover are app work in item 64; with Ratio they are this package,
 and the app work reduces to the harness switch and per-subagent selection of item 58.

@@ -46,7 +46,7 @@ while tool gating already lets an entry withhold them from every callee.
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
 | `session.id` | `() -> Str` | The session id | — | `engine` |
-| `session.info` | `() -> SessionInfo` | `{ id, title, environment, folders: [Str], model, effort, mode, attended, harness, turn_index, max_steps }`, where `max_steps` is `agents.max_steps` (or a headless run's `max_steps` flag) | — | `engine` |
+| `session.info` | `() -> SessionInfo` | `{ id, title, environment, folders: [Str], model, effort, mode, attended, package, turn_index, max_steps }`, where `package` is the harness package the session runs, where `max_steps` is `agents.max_steps` (or a headless run's `max_steps` flag) | — | `engine` |
 | `session.turn` | `() -> Turn` | The current turn's input (the `@turn` entry's argument); attachments are empty unless `sees.attachments` | `Denied` | `sees:turn` |
 | `session.attended` | `() -> Bool` | Whether this frame may talk to the person | — | `engine` |
 | `session.mode` | `() -> PermissionMode` | The frame's effective permission mode after attenuation | — | `engine` |
@@ -63,7 +63,7 @@ own frame or a `fork` frame of it, and are refused inside concurrent branches.
 
 | Built-in | Signature | Semantics | Fails with | Needs |
 | --- | --- | --- | --- | --- |
-| `state.get` | `() -> S` | The current value of the package's state (type `S` as declared) | `Denied`, `Invalid` (no `state` declared) | `sees:state` |
-| `state.set` | `(v: S) -> ()` | Replaces it; written at the end of the turn | `Invalid` (over 64 KiB, inside a concurrent branch) | `sees:state`, `entry` |
-| `state.update` | `(f: fn(S) -> S) -> S` | Applies `f` and stores the result, which it returns | as `set`; errors of `f` | `sees:state`, `entry` |
+| `state.get` | `() -> State` | The current value of the package's state (`State` is the type it is declared with, fixed at each call: never inferred or given) | `Denied`, `Invalid` (no `state` declared) | `sees:state` |
+| `state.set` | `(v: State) -> ()` | Replaces it; written at the end of the turn | `Invalid` (over 64 KiB, inside a concurrent branch) | `sees:state`, `entry` |
+| `state.update` | `(f: fn(State) -> State) -> State` | Applies `f` and stores the result, which it returns | as `set`; errors of `f` | `sees:state`, `entry` |
 | `state.reset` | `() -> ()` | Back to the declared initialiser | as `set` | `sees:state`, `entry` |

@@ -445,28 +445,7 @@ const EFFECTS: &[(&str, &str)] = &[
 
 /// Parameter types the table writes differently from chapter 06, each for a documented reason
 /// (`src/builtins.rs` and the crate README): `(built-in, parameter, the table's type)`.
-const TYPE_DIFFERENCES: &[(&str, &str, &str)] = &[
-    // `(fn(..) -> B)?` is an option of a one-element tuple; the table declares `fn(..) -> B = none`.
-    (
-        "model.stream",
-        "until",
-        "fn(Untrusted<Str>, Untrusted<Str>) -> Bool",
-    ),
-    ("model.loop", "until", "fn(ModelReply) -> Bool"),
-    // `S` means text in the table; package state and search states use other names.
-    ("state.set", "v", "Q"),
-    ("state.update", "f", "fn(Q) -> Q"),
-    ("think.tree_search", "root", "N"),
-    ("think.tree_search", "expand", "fn(N) -> [N]"),
-    ("think.tree_search", "score", "fn(N) -> Float"),
-    ("think.tree_search", "is_goal", "fn(N) -> Bool"),
-    ("think.beam_search", "init", "[N]"),
-    ("think.beam_search", "expand", "fn(N) -> [N]"),
-    ("think.beam_search", "score", "fn(N) -> Float"),
-    ("think.mcts", "root", "N"),
-    ("think.mcts", "expand", "fn(N) -> [N]"),
-    ("think.mcts", "rollout", "fn(N) -> Float"),
-];
+const TYPE_DIFFERENCES: &[(&str, &str, &str)] = &[];
 
 /// Combinators chapter 06 writes `as f` that are not `@pure` here: `once` stores its result in
 /// the session's journal, like `cached` with `session` scope (chapter 06, caching).

@@ -82,7 +82,8 @@ harness accept(step: Untrusted<PlanStep>, work: Transcript) -> Untrusted<Judgeme
   model.judge(text.show(context.snapshot(conv)), rubric: "Pass only if the files show the criterion holds.")
 }
 
-@turn
+/// The loop runs the steps a model-written plan lists: that decision is meant to be the model's.
+@turn @allow(model_guard)
 pub harness turn(turn: Turn) -> Reply
   with { context: main }
 {
@@ -169,8 +170,8 @@ type Voted = { answer: Untrusted<Str>, agreement: Float, samples: Int, adjudicat
 pub harness solve(question: Untrusted<Str>, n: Int = 7) -> Voted
   with { context: none, sampling: { temperature: 0.7 }, budget: { model_calls: 32 } }
 {
-  let n = math.clamp(n, 1, 9)
-  let vote = think.self_consistency(n,
+  let samples = math.clamp(n, 1, 9)
+  let vote = think.self_consistency(samples,
     || model.generate_as::<Solution>(prompt {
       instruct "Solve the problem given as data. Work briefly in `reasoning`, then give only the final answer."
       data question as "problem"
@@ -179,7 +180,7 @@ pub harness solve(question: Untrusted<Str>, n: Int = 7) -> Voted
     key: |s| normalise(s.answer))
 
   if vote.agreement >= 0.5 {
-    return { answer: vote.key, agreement: vote.agreement, samples: n, adjudicated: false }
+    return { answer: vote.key, agreement: vote.agreement, samples, adjudicated: false }
   }
 
   let candidates = vote.counts.keys()
@@ -189,7 +190,7 @@ pub harness solve(question: Untrusted<Str>, n: Int = 7) -> Voted
     data text.join(candidates, "\n") as "candidate answers"
     format Adjudication
   }, opts: { model: model.route(tier: frontier), effort: high, sampling: { temperature: 0.0 } })
-  { answer: normalise(pick.answer), agreement: vote.agreement, samples: n, adjudicated: true }
+  { answer: normalise(pick.answer), agreement: vote.agreement, samples, adjudicated: true }
 }
 
 fn normalise(a: Untrusted<Str>) -> Untrusted<Str> {
@@ -230,7 +231,7 @@ fn argue(t: DebateTurn, side: Str) -> Untrusted<Str> {
 }
 
 harness pro(t: DebateTurn) -> Untrusted<Str>
-  with { model: "consul", context: none, effort: high }
+  with { model: "princeps", context: none, effort: high }
 {
   argue(t, "for")
 }
@@ -293,7 +294,7 @@ pub harness search(problem: UserText) -> Untrusted<Str>
     is_goal: |n| rate(n).solved,
     strategy: best_first, beam: 3, max_nodes: 30, max_depth: 6)
   eval.metric("expanded", math.to_float(found.expanded))
-  eval.label("goal_reached", text.show(found.goal_reached))
+  eval.label("goal_reached", if found.goal_reached { "yes" } else { "no" })
   if found.goal_reached {
     text.join(found.best.steps, "\n")
   } else {
@@ -451,11 +452,15 @@ is private is only known when it is read.
 
 ## 7. Consul escalation (roadmap item 64)
 
-The `@task` entry runs a subagent's turn with the native loop's structure, counts rejections, and
-switches the rest of the turn to Consul after the second; after the takeover, Consul's own results
-are reviewed by a different model. The `@turn` entry has Consul critique the root's plan whenever
-it changes, before execution when the plan arrives alone. Chapter 08 maps each requirement of
-item 64 to this code.
+Emperor and Consul are two harnesses over one model, Princeps: Emperor is the root's loop, Consul
+the reviewer this package calls. The `@task` entry runs a subagent's turn with the native loop's
+structure and has `consul` review each result; it counts rejections, and after the second Consul
+takes over: it reads the conversation so far and its direction goes into the same conversation,
+which carries on from where it stands. After the takeover, results are reviewed by an
+independent critic, since Consul directed the work. The `@turn` entry has Consul review the
+root's plan whenever it changes, before execution when the plan arrives alone. Chapter 08 maps
+each requirement of item 64 to this code. Consul's own wording is the Harnesses session's; the
+harness here is illustrative.
 
 ```ratio
 meta {
@@ -464,9 +469,9 @@ meta {
   description: "Consul takes over a subagent's task after two rejections in one turn, and critiques the root's plans",
 }
 
-/// The model table id of Imperium's house model Consul.
-const CONSUL: ModelRef = "consul"
-/// Reviews Consul's own results after a takeover: a model does not grade its own work.
+/// The model table id of Princeps, the one model Emperor and Consul run on.
+const PRINCEPS: ModelRef = "princeps"
+/// Reviews the results after a takeover: Consul directed that work, so it does not grade it.
 const INDEPENDENT_CRITIC: ModelRef = model.route(tier: frontier)
 /// Rejections, within one turn of one subagent task, before Consul takes over. Not a setting.
 const TAKEOVER_AFTER = 2
@@ -474,7 +479,30 @@ const RESULT_RUBRIC = "Accept only a result that does what the task asked, says 
 const PLAN_RUBRIC = "A good plan has steps in a workable order, an acceptance check for each step that can actually be checked, and no step that needs information nobody has."
 const QUESTION_MARK = "QUESTION:"
 
-@task
+/// What Consul is asked to look at.
+enum Review { result, takeover, plan }
+
+/// Consul: reviews an artifact against goals on Princeps, given its earlier review if any.
+pub harness consul(artifact: Untrusted<Str>, goals: Str, kind: Review, prior: Untrusted<Critique>?) -> Untrusted<Critique>
+  with { model: PRINCEPS, context: none, effort: high }
+{
+  let what = match kind {
+    result => "a subagent's result",
+    takeover => "a subagent's conversation, which you now direct: say what to do next",
+    plan => "the root agent's plan",
+  }
+  model.generate_as::<Critique>(prompt {
+    system "You are Consul. Review {what} against the goals, and say plainly what does not meet them."
+    instruct goals
+    data artifact as "the work"
+    data text.show(prior) as "your earlier review, if any"
+    format Critique
+  })
+}
+
+/// The loop dispatches the calls the model makes, as the native loop does: that decision is
+/// meant to be the model's.
+@task @allow(model_guard)
 pub harness task(task: TaskInput) -> Report
   with { context: main }
 {
@@ -483,7 +511,8 @@ pub harness task(task: TaskInput) -> Report
   context.notice(conv, "If you cannot continue without an answer from whoever gave you this task, reply with one line starting {QUESTION_MARK} and nothing else.")
 
   var rejections = 0
-  var consul = false
+  var taken_over = false
+  var last_review: Untrusted<Critique>? = none
   var steps = 0
   let max_steps = session.info().max_steps
 
@@ -491,8 +520,7 @@ pub harness task(task: TaskInput) -> Report
     if steps >= max_steps {
       break { text: "Stopped at the step limit before the task was finished.", ok: false }
     }
-    let opts: GenOpts = if consul { { model: CONSUL } } else { {} }
-    let reply = model.chat(conv, opts: opts)
+    let reply = model.chat(conv)
     steps += 1
 
     if reply.tool_calls.is_empty() {
@@ -501,10 +529,14 @@ pub harness task(task: TaskInput) -> Report
         raise question(q.trim())
       }
       // A result is reviewed before it is reported; a refusal is a rejection.
-      let critic: ModelRef = if consul { INDEPENDENT_CRITIC } else { CONSUL }
-      let review = think.critique(reply.text, RESULT_RUBRIC, opts: { model: critic })
+      let review = if taken_over {
+        think.critique(reply.text, RESULT_RUBRIC, opts: { model: INDEPENDENT_CRITIC })
+      } else {
+        consul(reply.text, RESULT_RUBRIC, Review.result, last_review)
+      }
+      last_review = review
       if review.pass {
-        eval.label("finished_by", if consul { "consul" } else { "subagent" })
+        eval.label("finished_by", if taken_over { "consul" } else { "subagent" })
         break { text: reply.text, ok: true }
       }
       rejections += 1
@@ -516,11 +548,13 @@ pub harness task(task: TaskInput) -> Report
       rejections += results.count(is_rejection)
     }
 
-    if not consul and rejections >= TAKEOVER_AFTER {
-      consul = true
+    if not taken_over and rejections >= TAKEOVER_AFTER {
+      taken_over = true
       eval.metric("consul_takeovers", 1.0)
       session.notify("Consul is taking over \"{task.title}\" after {rejections} rejections.")
-      context.notice(conv, "From here a stronger model continues this task. Read the conversation so far and carry on from where it stands; do not start again.")
+      let direction = consul(text.show(context.snapshot(conv)), RESULT_RUBRIC, Review.takeover, last_review)
+      context.notice(conv, "Consul has taken over this task. Follow its direction below and carry on from where the conversation stands; do not start again.",
+        data: text.show(direction))
     }
   }
 }
@@ -533,8 +567,8 @@ fn is_rejection(r: ToolResult) -> Bool {
   }
 }
 
-/// The root agent: the default loop, plus a Consul critique of every new or changed plan.
-@turn
+/// The root agent, Emperor: the default loop, plus a Consul review of every new or changed plan.
+@turn @allow(model_guard)
 pub harness turn(turn: Turn) -> Reply
   with { context: main }
 {
@@ -566,7 +600,7 @@ pub harness turn(turn: Turn) -> Reply
     if h != last_plan_hash {
       last_plan_hash = h
       if let p = plan {
-        let review = think.critique(text.show(p), PLAN_RUBRIC, opts: { model: CONSUL })
+        let review = consul(text.show(p), PLAN_RUBRIC, Review.plan, none)
         if not review.pass {
           let advice = if plan_alone {
             "Consul reviewed your new plan before any step ran and found problems. Revise the plan with update_plan before acting on it."
@@ -582,7 +616,8 @@ pub harness turn(turn: Turn) -> Reply
 ```
 
 The rubric is passed positionally (`think.critique(work, rubric, opts:)`), so positional
-arguments come before the named `opts`. `session.notify` interpolates `task.title`, which is
+arguments come before the named `opts`. `consul` has a trusted `goals` parameter, so it is not
+runnable by models (chapter 07); the package calls it directly. `session.notify` interpolates `task.title`, which is
 untrusted; notifications accept untrusted text and show it as plain text.
 
 ## 8. Test-driven code fix
@@ -628,7 +663,7 @@ pub harness fix(task: TaskInput) -> Report
     }
 
     let after = eval.run_tests(command)
-    eval.metric("failing_after_attempt", math.to_float(after.failed), tags: { attempt: text.show(attempt) })
+    eval.metric("failing_after_attempt", math.to_float(after.failed), tags: { attempt: "{attempt}" })
     if after.ok {
       eval.score("tests", 1.0)
       return { text: "Fixed in {attempt} attempt(s): {after.passed} tests pass (were {before.failed} failing).", ok: true }

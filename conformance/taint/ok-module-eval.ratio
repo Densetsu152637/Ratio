@@ -19,7 +19,7 @@ fn about_run() -> Untrusted<Str> {
   let mode = eval.mode()
   let tape = eval.tape()
   let fixture = eval.fixture("inputs")
-  if let t = eval.task() { t.prompt } else { "no task" }
+  if let t = eval.task() { t.text } else { "no task" }
 }
 
 test "the host answers from the script" {

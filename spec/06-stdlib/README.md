@@ -150,7 +150,11 @@ enum FoldOrder { index, completion }
 type Folded<A> = { value: A, delivered: Int, stopped: Bool }
 enum StreamStop { done, until, max_tokens }                        // model.stream
 type Streamed = { text: Str, stopped: StreamStop }
-// Stop: chapter 05
+// Stop and Round: chapter 05
+enum Backoff { fixed { delay: Duration }, exponential { start: Duration, factor: Float, max: Duration } }
+                                                                   // retry (control)
+enum CacheScope { turn, frame, session }                           // cached (control)
+// Countable (model.count_tokens): a bound, not a type: Str or Untrusted<Str>, Prompt, Conversation
 ```
 
 `ModelReply` is the reply of one chat model call; `Reply` is what a `@turn` entry returns. A
@@ -172,20 +176,27 @@ particular, a `ToolCall`'s name and id are what the model wrote, and a plan's te
 - Every built-in that makes model calls says how many in its row, as `model ×n`.
 - A parameter whose name is a reserved keyword (`prompt`, `type`, …) can be passed only by
   position, since a named argument is an identifier (chapter 02): `session.start`'s `prompt`,
-  `memory.search`'s `type`, `tools.media_image`'s `prompt`. A parameter added later is not given
-  a keyword's name.
+  `tools.media_image`'s `prompt`. A parameter added later is not given a keyword's name, and
+  neither is a field of a shared type: a record literal cannot write one.
+- An optional callback is written `f: fn(A) -> B = none`: it may be passed or left out, not
+  passed as `none`. (`(fn(A) -> B)?` would be an option of a one-element tuple, chapter 02.)
+- A type parameter named `S` is always the text bound of `data`; other type parameters use
+  other names (`N` for the states of `think`'s searches, `State` for the package state).
 - Every rule a built-in imposes on its arguments also holds when it is used as a function value.
   A built-in whose rule can be checked only where it is called may only be called, never used as
   a value (the checker refuses naming one otherwise, `C0036`): every **trust site** (its type and
   reason are fixed at the call), every **source or sink** whose rule depends on the call's
   written arguments, and every **generic secrecy sink** (a secret type argument is
   visible only at the call). Today these are `trust`, `as_task` and `declassify` (trust sites),
-  `session.ask` (its answers are labelled from the questions written at the call) and
-  `meta.harness` (each load is listed by the name it is called with).
+  `session.ask` (its answers are labelled from the questions written at the call),
+  `meta.harness` (each load is listed by the name it is called with), `state.get`, `set`,
+  `update` and `reset` (their type is the package's declared state, fixed at the call), and the
+  generic secrecy sinks `model.rank` and `think.consensus` (their items reach a model).
 
 ## Built-in prompts
 
 Built-ins in `model` and `think` that make model calls use prompt texts shipped with the standard
 library (`std/prompts/*.md` in the crate), one per built-in. They are part of the IR hash, so an
-eval records exactly which wording ran. Every such built-in takes `instructions: Prompt?` to
-replace its default wording; the output schema stays fixed.
+eval records exactly which wording ran. To change a built-in's wording, a harness writes it in
+Ratio (each is a short program over `model.*`); the rows list no `instructions` parameter yet.
+The output schema stays fixed.

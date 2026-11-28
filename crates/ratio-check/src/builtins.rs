@@ -19,14 +19,13 @@
 //! `@loads` `meta.harness`, `@state` the `state` built-ins (whose type parameter is the package's
 //! declared `state` type, never inferred or given), and `@local` effectful built-ins that keep
 //! their arguments on the machine (not secrecy sinks; every `@local` entry is reviewed against
-//! the rule on `Traits::local`). A name that is a keyword in Ratio (`harness`, `loop`, `type`,
+//! the rule on `Traits::local`). A name that is a keyword in Ratio (`harness`, `loop`,
 //! `prompt`) is written with a trailing `_` (`harness_`), which the checker drops, since a
-//! declaration cannot be called by a keyword; so is a field or variant of a prelude type. A
-//! parameter so written can be passed only by position, as chapter 06 says.
+//! declaration cannot be called by a keyword. A parameter so written can be passed only by
+//! position, as chapter 06 says.
 //!
-//! Chapter 06 writes an optional callback as `(fn(A) -> B)? = none`, but `(T)` is a
-//! one-element tuple type (chapter 02), so the table declares it `fn(A) -> B = none`: the
-//! callback may be passed or left out, not passed as `none` (a spec erratum).
+//! An optional callback is `fn(A) -> B = none` (chapter 06's convention): it may be passed or
+//! left out, not passed as `none`.
 //!
 //! A type parameter that only parameters left to their defaults mention (`log.info("done")`'s
 //! `data: T?`) is `()` at that call: no value comes from it and none goes to it.
@@ -299,8 +298,8 @@ fn once<T>(key: Str, f: fn() -> T) -> T {}
 @effect(network) @tool(browser_click) @secrecy_sink fn browser_click(selector: Untrusted<Str>) -> Untrusted<PageView> {}
 @effect(network) @tool(browser_type) @secrecy_sink fn browser_type(selector: Untrusted<Str>, text: Untrusted<Str>, submit: Bool = false) -> Untrusted<PageView> {}
 @effect(network) @tool(browser_tabs) @secrecy_sink fn browser_tabs() -> Untrusted<[TabInfo]> {}
-@effect(network) @tool(browser_switch) @secrecy_sink fn browser_switch(tab: Str) -> Untrusted<PageView> {}
-@effect(network) @tool(browser_close) @secrecy_sink fn browser_close(tab: Str) -> () {}
+@effect(network) @tool(browser_switch) @secrecy_sink fn browser_switch(tab: Untrusted<Str>) -> Untrusted<PageView> {}
+@effect(network) @tool(browser_close) @secrecy_sink fn browser_close(tab: Untrusted<Str>) -> () {}
 @effect(network) @tool(browser_screenshot) @secrecy_sink fn browser_screenshot() -> Image {}
 @effect(network) @effect(write) @tool(browser_download) @secrecy_sink fn browser_download(url: Untrusted<Str>, filename: Str? = none) -> Untrusted<Downloaded> {}
 @effect(command) @tool(preview_open) @secrecy_sink fn preview_open(target: PreviewTarget) -> Preview {}
@@ -462,9 +461,9 @@ fn span<T>(name: Str, f: fn() -> T) -> T {}
     (
         "state",
         r"
-@state @local fn get<Q>() -> Q {}
-@state fn set<Q>(v: Q) -> () {}
-@state fn update<Q>(f: fn(Q) -> Q) -> Q {}
+@state @local fn get<State>() -> State {}
+@state fn set<State>(v: State) -> () {}
+@state fn update<State>(f: fn(State) -> State) -> State {}
 @state fn reset() -> () {}
 ",
     ),
@@ -476,7 +475,7 @@ fn span<T>(name: Str, f: fn() -> T) -> T {}
 @pure fn note(pad: Scratchpad, text: Untrusted<Str>) -> () {}
 @pure fn notes(pad: Scratchpad, last: Int? = none) -> Untrusted<Str> {}
 @effect(model) fn step_back(question: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Str> {}
-@pure fn until<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float? = none) -> Iterated<T> {}
+@pure fn until<T>(init: T, step: fn(T) -> T, stop: Stop, score: fn(T) -> Float = none) -> Iterated<T> {}
 @effect(model) fn plan(goal: Untrusted<Str>, context: Prompt? = none, max_steps: Int = 8, opts: GenOpts = {}) -> Untrusted<Plan> {}
 @effect(model) fn replan(plan: Untrusted<Plan>, step: Untrusted<Str>, reason: Untrusted<Str>, opts: GenOpts = {}) -> Untrusted<Plan> {}
 @effect(model) fn decompose(task: Untrusted<Str>, max_parts: Int = 6, opts: GenOpts = {}) -> Untrusted<[Subtask]> {}
@@ -506,7 +505,7 @@ fn span<T>(name: Str, f: fn() -> T) -> T {}
     (
         "memory",
         r"
-@tool(memory_search) @secrecy_sink fn search(query: Untrusted<Str>, scope: MemoryScope? = none, type_: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]> {}
+@tool(memory_search) @secrecy_sink fn search(query: Untrusted<Str>, scope: MemoryScope? = none, kind: MemoryType? = none, limit: Int = 8) -> Untrusted<[MemoryHit]> {}
 @tool(memory_read) fn read(name: Untrusted<Str>, scope: MemoryScope? = none) -> Untrusted<MemoryEntry> {}
 @effect(write) @tool(memory_remember) @secrecy_sink fn remember(entry: NewMemory) -> () {}
 @effect(write) @tool(memory_edit) @secrecy_sink fn edit(name: Untrusted<Str>, old: Untrusted<Str>, new: Untrusted<Str>, scope: MemoryScope? = none) -> () {}

@@ -131,10 +131,9 @@ enum BudgetKind { tokens, cost, steps, wall, model_calls, tool_calls, depth, cal
 //
 // Where a module's page gives a record only in prose (`{ id, title, ... }`), the field types
 // here are provisional: chosen by the effect rule of chapter 03 (every string an effect returns
-// is untrusted unless it is an engine-generated identifier), and marked so. A field or variant
-// whose chapter 06 name is a keyword (`type`, `match`, `prompt`, `harness`, `test`) is written
-// with a trailing `_`, which the checker drops for the built-in declarations, as for function
-// names: a program reads it as `x.type`, but cannot write it in a record literal (an erratum).
+// is untrusted unless it is an engine-generated identifier), and marked so. No field or variant
+// has a keyword's name (draft 0.18 renamed them), since a record literal could not write it; a
+// field or variant written with a trailing `_` would be read without it, as for functions.
 
 // Results and stopping (chapter 06 README, shared types; chapter 05, stopping criteria)
 enum Fold<A> { Next { acc: A }, Stop { acc: A } }
@@ -187,7 +186,7 @@ type Stepped<A> = { answer: Untrusted<A>, trace: [Untrusted<StepNote>] }
 type Iterated<T> = { value: T, rounds: Int, stopped: StopReason, best_score?: Float }
 enum SubtaskKind { research, change, check }
 type Subtask = { title: Str, brief: Str, depends_on: [Str], kind: SubtaskKind }
-type Hypothesis = { statement: Str, test_: Str, likelihood: Float }
+type Hypothesis = { statement: Str, check: Str, likelihood: Float }
 type Reflection = { what_happened: Str, mistakes: [Str], lessons: [Str] }
 enum Severity { blocker, major, minor }
 type Issue = { severity: Severity, location?: Str, problem: Str, fix?: Str }
@@ -264,12 +263,11 @@ type WorktreeInfo = {
   merges_cleanly: Bool, conflicts: [Untrusted<Str>],
 }
 type MergeResult = { merged: Bool, conflicts: [Untrusted<Str>] }
-// `harness` is a keyword: the variant is declared `harness_` (read as `AgentRole.harness`).
-enum AgentRole { root, subagent, harness_, knowledge_fork }
+enum AgentRole { root, subagent, harness_agent, knowledge_fork }
 type AgentInfo = { id: Str, role: AgentRole, parent?: Str, title: Untrusted<Str> }
 type AgentFileInfo = {
   name: Str, description: Untrusted<Str>, origin: ExtensionOrigin, tools?: [Str], model?: Str,
-  harness_?: Str,
+  package?: Str,
 }
 type KnowledgeCard = { id: Str, title: Untrusted<Str>, topic: Untrusted<Str>, sources: [Untrusted<Str>] }
 
@@ -287,16 +285,16 @@ type Breakdown = { categories: [BreakdownCategory], tokens: Int, window?: Int, m
 enum MemoryScope { global, environment }
 enum MemoryType { user, feedback, project, reference, lesson }
 enum MemoryConfidence { confirmed, inferred }
-type MemoryHit = { name: Str, scope: MemoryScope, type_: MemoryType, description: Str, snippet: Str, score: Float }
+type MemoryHit = { name: Str, scope: MemoryScope, kind: MemoryType, description: Str, snippet: Str, score: Float }
 type MemoryEntry = {
-  name: Str, description: Str, type_: MemoryType, scope: MemoryScope, created: Instant,
+  name: Str, description: Str, kind: MemoryType, scope: MemoryScope, created: Instant,
   source: Str, confidence: MemoryConfidence, body: Str,
 }
 type NewMemory = {
-  name: Untrusted<Str>, description: Untrusted<Str>, type_: MemoryType, scope: MemoryScope,
+  name: Untrusted<Str>, description: Untrusted<Str>, kind: MemoryType, scope: MemoryScope,
   body: Untrusted<Str>, confidence: MemoryConfidence,
 }
-type IndexLine = { name: Str, description: Str, type_: MemoryType }
+type IndexLine = { name: Str, description: Str, kind: MemoryType }
 type SessionHit = { session_id: Str, title: Str, at: Instant, kind: Str, snippet: Str, score: Float }
 
 // session
@@ -307,7 +305,7 @@ type AidStateChange = { entities?: [Untrusted<Str>], goals?: [Untrusted<Str>], c
 type SessionRef = { id: Str, title?: Untrusted<Str> }
 type SessionInfo = {
   id: Str, title: Untrusted<Str>, environment: Str, folders: [Str], model: Str,
-  effort?: Effort, mode: PermissionMode, attended: Bool, harness_: Str, turn_index: Int,
+  effort?: Effort, mode: PermissionMode, attended: Bool, package: Str, turn_index: Int,
   max_steps: Int,
 }
 
@@ -318,11 +316,11 @@ type TestCase = { name: Str, status: TestStatus, message?: Str }
 type TestReport = {
   passed: Int, failed: Int, skipped: Int, ok: Bool, cases: [TestCase], exit_code: Int, raw: Str,
 }
-type EvalTask = { id: Str, prompt_: Untrusted<Str>, raw: Json }
+type EvalTask = { id: Str, text: Untrusted<Str>, raw: Json }
 enum TapeMode { live, record, replay }
 type TapeInfo = { path?: Str, entries: Int, replayed: Int, diverged: Bool }
-type ScriptedReply = { match_?: Str, text?: Str, json?: Json, tool_calls?: [ToolCall], error?: ErrorKind }
-type ScriptedToolReply = { match_?: Json, ok: Bool, text: Str, denied?: DeniedBy }
+type ScriptedReply = { when?: Str, text?: Str, json?: Json, tool_calls?: [ToolCall], error?: ErrorKind }
+type ScriptedToolReply = { when?: Json, ok: Bool, text: Str, denied?: DeniedBy }
 
 // meta
 enum HarnessSource { std, user, plugin, project, authored }
