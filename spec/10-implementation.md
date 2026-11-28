@@ -67,7 +67,7 @@ pub trait Host: Send + Sync + 'static {
     // Models
     fn generate(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, req: ModelRequest) -> HostFuture<Result<ModelResponse, HostError>>;
     fn embed(self: Arc<Self>, frame: FrameCtx, cx: EffectCtx, texts: Vec<Labelled<String>>, model: Option<ModelRef>) -> HostFuture<Result<Vec<Vec<f32>>, HostError>>;
-    fn count_tokens(&self, frame: &FrameCtx, what: &Countable) -> u64;
+    fn count_tokens(self: Arc<Self>, frame: FrameCtx, what: Countable) -> HostFuture<Result<u64, HostError>>;
     fn resolve_model(&self, frame: &FrameCtx, model: &ModelRef) -> Result<ModelCard, HostError>;
     // Tools: every call carries the frame's scope and the arguments' secrecy flag;
     // the engine enforces both before its own checks
@@ -108,11 +108,15 @@ tape (chapter 01).
 `FrameCtx` carries the frame path (the key by which a host finds its own record of the frame),
 its parent's path, its kind and harness name, the attenuated scope (tools, permission mode,
 extra rules, paths, location, budgets, `sees`, depth, width, attended), the ledger handle and the
-settings. **The kind and the harness name are Ratio's assertion, not proof**: a harness call
-passed off consistently as a `with` block (kind `Block`, harness `with`, its parent's depth) is
-within its parent in every dimension. A host therefore takes a frame's kind from its own
-knowledge (only its own harness loads and `run_harness` open harness frames) and requires an
-entry's frame to carry its parent's path. The tape is a wrapper (`TapeHost`) that records or
+settings, and its **origin**, filled by Ratio from the IR and consistent with its kind: an entry,
+a `with` block at a site (its package's IR hash and node), or a harness (its package, that
+package's IR hash and the harness's key). A host verifies the origin against what it loaded:
+it refuses a harness frame of a harness it did not load and a block at a site of a package it
+did not load, and requires an entry's frame to carry its parent's path. The kind is therefore
+not Ratio's word alone: a harness call passed off as a `with` block (kind `Block`, harness
+`with`, its parent's depth, within its parent in every dimension) fails on its origin. The
+evaluation and every host future may be polled from an executor other than the host's own, so
+a host on an async runtime spawns its own work and returns a `Send` future. The tape is a wrapper (`TapeHost`) that records or
 replays every input-bearing call by effect key and numbers the turn's scheduling events
 (chapter 01); because keys depend on frame paths, frames are built before the tape (stage order
 below).
@@ -132,9 +136,11 @@ does not rely on them alone: it fails a `drain` call at its declared bound itsel
 one then releases the fence, recorded `failed`), and lets the scope of a cancelled `abort` call
 the host has not acknowledged within `ABORT_GRACE` (30 s) return (recorded `unacknowledged`,
 charged all its reservation held); each of these bounds is the earlier of the host's `timer` and
-the interpreter's own clock. `count_tokens` and the `ModelCard` from `resolve_model` (its maximum
-output, window and prices) are the inputs of admission by reservation (chapter 04), and are
-recorded with each admission. `conversation_digest` returns the head of a conversation's chained
+the interpreter's own clock. `count_tokens`
+(asynchronous: an exact tokenizer may be; a failure is the model call's error) and the
+`ModelCard` from `resolve_model` (its maximum output, window and prices) are the inputs of
+admission by reservation (chapter 04), and are recorded with each admission; a replay takes the
+recorded count and never asks again. `conversation_digest` returns the head of a conversation's chained
 digest (chapter 01). Stage 11a ships `HOST_API_VERSION` 1, validated by the `RatioHost` spike;
 the operations still carried by `operate` are typed by the stages that implement them, each a
 version bump.

@@ -23,6 +23,7 @@ fn host() -> Arc<ScriptedHost> {
 
 fn run_on(p: &Arc<Prepared>, name: &str, args: Vec<Value>, h: &Arc<ScriptedHost>) -> Finished {
     let entry = p.find("main.ratio", name).expect("an entry");
+    h.load(p);
     let session = h.session();
     let dynh: Arc<dyn Host> = Arc::clone(h) as Arc<dyn Host>;
     let eval = ratio_eval::evaluate_with(

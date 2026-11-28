@@ -10,7 +10,9 @@ mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ratio_eval::frame::{Card, FrameCtx, FrameKind, Ledgers, Location, Scope, Settings};
+use ratio_eval::frame::{
+    Card, FrameCtx, FrameKind, FrameOrigin, Ledgers, Location, Scope, Settings,
+};
 use ratio_eval::host::{
     ChatRequest, ConvId, DeniedBy, EffectCtx, EffectKey, Guard, Host, HostError, ModelCard,
     ModelRef, SinkRule, ToolClass, operation_rule, sink_rule,
@@ -119,7 +121,8 @@ fn f1_every_model_built_in_is_guarded_and_admitted() {
             ..Card::default()
         },
     })
-    .reply("hi", Labels::NONE);
+    .reply("hi", Labels::NONE)
+    .load(&p);
     let s = h.session();
     let f = run(&p, "capped_as", Vec::new(), dynh(&h), &s, None, None);
     assert_eq!(shown(&p, &f), "raise Budget model_calls");
@@ -380,6 +383,17 @@ fn frame(path: &str, parent: Option<&str>, kind: FrameKind, harness: &str) -> Fr
         ledgers,
         node,
         settings: Arc::new(Settings::default()),
+        origin: match kind {
+            FrameKind::Entry => FrameOrigin::Entry,
+            FrameKind::Block => FrameOrigin::Block {
+                site: ([0x22; 32], 3),
+            },
+            FrameKind::Harness => FrameOrigin::Harness {
+                package: Arc::from("app"),
+                entry_hash: [0x22; 32],
+                key: Arc::from("main.ratio::h"),
+            },
+        },
     }
 }
 
@@ -394,11 +408,120 @@ fn f6_frame_kinds_come_from_the_hosts_own_knowledge() {
         h.open_frame(&root, &elsewhere).is_err(),
         "an entry under another path"
     );
-    h.harness_at("turn/with@s9#0");
-    let forged = frame("turn/with@s9#0", Some("turn"), FrameKind::Block, "with");
-    assert!(h.open_frame(&root, &forged).is_err());
+    // A block of a package the host never loaded (a harness call forged consistently as a
+    // block) is refused by its origin; once the package is loaded, the block opens.
     let block = frame("turn/with@s8#0", Some("turn"), FrameKind::Block, "with");
+    assert!(h.open_frame(&root, &block).is_err());
+    h.load_packages([(Arc::from("app"), [0x22; 32])], []);
     assert!(h.open_frame(&root, &block).is_ok());
+    // A harness the host never loaded is refused, a loaded one opens.
+    let mut harness = frame("turn/h@s1#0", Some("turn"), FrameKind::Harness, "h");
+    let mut scope = (*harness.scope).clone();
+    scope.depth += 1;
+    scope.context = ratio_eval::frame::Context::Fresh;
+    harness.scope = Arc::new(scope);
+    assert!(h.open_frame(&root, &harness).is_err());
+    h.load_packages([], [harness.origin.clone()]);
+    let r = h.open_frame(&root, &harness);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+const HARNESS: &str = r#"
+harness helper(n: Int) -> Int { n + 1 }
+fn main() -> Int { helper(1) }
+fn modelled() -> Untrusted<Str> { model.generate(prompt { task "hi" }) }
+"#;
+
+/// The spike's finding 1: Ratio fills every frame's origin from the IR, and a host refuses a
+/// harness it did not load; loaded, the same program runs.
+#[test]
+fn frame_origins_come_from_the_ir_and_are_checked_against_what_was_loaded() {
+    let p = support::prepared(HARNESS);
+    let h = scripted();
+    let s = h.session();
+    let f = run(&p, "main", Vec::new(), dynh(&h), &s, None, None);
+    assert_eq!(shown(&p, &f), "raise Denied attenuation");
+    let (packages, harnesses) = p.loaded();
+    assert_eq!(packages.len(), 1);
+    let FrameOrigin::Harness {
+        package,
+        entry_hash,
+        key,
+    } = &harnesses[0]
+    else {
+        panic!("a harness origin");
+    };
+    assert_eq!(
+        (&**package, entry_hash, &**key),
+        (&*packages[0].0, &packages[0].1, "main.ratio::helper")
+    );
+    let h = scripted();
+    h.load(&p);
+    let s = h.session();
+    let f = run(&p, "main", Vec::new(), dynh(&h), &s, None, None);
+    assert_eq!(shown(&p, &f), "2");
+}
+
+/// The spike's finding 2: `count_tokens` is asynchronous; admission waits for it, a failure
+/// is the model call's error, and a replay takes the recorded count without asking again.
+#[test]
+fn token_counts_are_awaited_and_replayed_from_the_admission() {
+    let p = support::prepared(HARNESS);
+    let local = || ModelCard {
+        name: Arc::from("default"),
+        location: Location::Local,
+        card: Card {
+            local: true,
+            ..Card::default()
+        },
+    };
+    // A tokenizer that takes several polls.
+    let inner = scripted();
+    inner.card(local()).reply("hello", Labels::NONE).jitter(5);
+    let s = inner.session();
+    let t = Arc::new(TapeHost::record(
+        dynh(&inner),
+        RecordOptions::new([1; 32]).unwrap(),
+    ));
+    let f = run(
+        &p,
+        "modelled",
+        Vec::new(),
+        Arc::clone(&t) as Arc<dyn Host>,
+        &s,
+        Some(Arc::clone(&t)),
+        None,
+    );
+    assert_eq!(shown(&p, &f), "\"hello\"");
+    let text = t.tape();
+    assert!(
+        text.contains("\"model\":{\"input\":"),
+        "the count is on the admission"
+    );
+    // A failing tokenizer fails the call, before any admission.
+    let h = scripted();
+    h.card(local())
+        .reply("hello", Labels::NONE)
+        .failing_tokenizer();
+    let s = h.session();
+    let f = run(&p, "modelled", Vec::new(), dynh(&h), &s, None, None);
+    assert_eq!(shown(&p, &f), "raise ModelFailed ");
+    assert!(h.model_calls().is_empty());
+    // Replay never asks the tokenizer: it fails, and the replay still passes.
+    let live = scripted();
+    live.card(local()).failing_tokenizer();
+    let s = live.session();
+    let r = Arc::new(TapeHost::replay(dynh(&live), &text, ReplayOptions::default()).unwrap());
+    let f = run(
+        &p,
+        "modelled",
+        Vec::new(),
+        Arc::clone(&r) as Arc<dyn Host>,
+        &s,
+        Some(r),
+        None,
+    );
+    assert_eq!(shown(&p, &f), "\"hello\"");
 }
 
 /// Notes: an approval's labelled text reaches the host as a placeholder naming its label.

@@ -56,6 +56,7 @@ fn the_guard_refuses_every_sink_before_a_host_that_checks_nothing() {
         ledgers,
         node,
         settings: Arc::new(Settings::default()),
+        origin: ratio_eval::frame::FrameOrigin::Entry,
     };
     for mut call in [
         calls.network,

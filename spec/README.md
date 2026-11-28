@@ -14,8 +14,11 @@ grammar change.
   the interpreter built; `cancelled(frame)` gives way to the evaluation's cancellation token;
   `timer`, `is_secret_path`, `source_labels` and `conversation_labels` are new; `emit` can refuse;
   agents, memory and session go through `operate` until their stages type them (chapter 10).
-- A frame's kind and harness name are Ratio's assertion: a host takes the kind from its own
-  knowledge and checks an entry's path; the contract suite uses the consistent forgery
+- Every frame carries its origin (entry; block by site; harness by package, IR hash and key),
+  filled from the IR and consistent with its kind; a host verifies it against what it loaded
+  and checks an entry's path, so a harness forged as a block fails on its origin; the contract
+  suite checks each case (chapter 10).
+- `count_tokens` is asynchronous; admission awaits it and replay takes the recorded count
   (chapter 10).
 - The contract suite holds the host-level cases; the cancellation cases that need a program run
   against `ScriptedHost` in the interpreter's tests (chapter 10).

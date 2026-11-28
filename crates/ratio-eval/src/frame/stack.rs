@@ -47,6 +47,40 @@ pub struct FrameCtx {
     pub ledgers: Ledgers,
     pub node: NodeId,
     pub settings: Arc<Settings>,
+    /// What opened the frame, from the program's IR, for the host to verify against what it
+    /// loaded: the kind alone is Ratio's assertion, the origin is checkable.
+    pub origin: FrameOrigin,
+}
+
+/// What opened a frame (consistent with [`FrameCtx::kind`]; the interpreter refuses to open a
+/// frame whose origin and kind disagree).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FrameOrigin {
+    /// An entry's own frame, or the session's.
+    Entry,
+    /// A `with { … } { … }` block at this site: the IR hash of its package and the node index.
+    /// A host refuses a block whose package it never loaded.
+    Block { site: ([u8; 32], u32) },
+    /// A harness call entering `key` (`<module path>::<name>`) of `package`, whose IR hash is
+    /// `entry_hash`. A host refuses a harness it never loaded, by package, hash and key.
+    Harness {
+        package: Arc<str>,
+        entry_hash: [u8; 32],
+        key: Arc<str>,
+    },
+}
+
+impl FrameOrigin {
+    /// Whether the origin fits `kind`.
+    #[must_use]
+    pub fn fits(&self, kind: FrameKind) -> bool {
+        matches!(
+            (self, kind),
+            (FrameOrigin::Entry, FrameKind::Entry)
+                | (FrameOrigin::Block { .. }, FrameKind::Block)
+                | (FrameOrigin::Harness { .. }, FrameKind::Harness)
+        )
+    }
 }
 
 /// One element of a branch path: `c<construct site>#<occurrence>.b<branch index>`.
@@ -124,6 +158,7 @@ impl FrameStack {
             ledgers: ledgers.clone(),
             node,
             settings: Arc::new(Settings::default()),
+            origin: FrameOrigin::Entry,
         };
         let mut s = FrameStack {
             frames: vec![Frame {
@@ -233,7 +268,19 @@ impl FrameStack {
         name: &Arc<str>,
         site: u32,
         loc: Loc,
+        origin: FrameOrigin,
     ) -> Result<(), OpenError> {
+        if !origin.fits(kind) {
+            return Err(OpenError {
+                refusal: Refusal {
+                    depth: false,
+                    dimension: super::scope::Dimension::Tools,
+                    message: "a frame whose origin does not fit its kind (an interpreter bug)"
+                        .to_owned(),
+                },
+                scope: 0,
+            });
+        }
         self.flush(steps);
         let index = u32::try_from(self.frames.len()).unwrap_or(u32::MAX);
         let parent = self.top();
@@ -297,6 +344,7 @@ impl FrameStack {
                 ledgers: self.ledgers.clone(),
                 node,
                 settings: Arc::new(settings),
+                origin,
             },
             branch: Vec::new(),
             occ: HashMap::new(),

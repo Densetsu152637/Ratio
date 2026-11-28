@@ -1130,8 +1130,13 @@ impl Host for TapeHost {
         Arc::clone(&self.inner).embed(frame, cx, texts, model)
     }
 
-    fn count_tokens(&self, frame: &FrameCtx, what: &Countable) -> u64 {
-        self.inner.count_tokens(frame, what)
+    fn count_tokens(
+        self: Arc<Self>,
+        frame: FrameCtx,
+        what: Countable,
+    ) -> HostFuture<Result<u64, HostError>> {
+        // In replay the count is the admission's recorded input, never asked again.
+        Arc::clone(&self.inner).count_tokens(frame, what)
     }
 
     fn resolve_model(&self, frame: &FrameCtx, model: &ModelRef) -> Result<ModelCard, HostError> {

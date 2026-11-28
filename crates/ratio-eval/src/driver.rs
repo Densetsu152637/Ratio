@@ -104,6 +104,10 @@ struct Pending {
     class: ToolClass,
     /// The ledger epoch a waiting admission retries after.
     epoch: Option<(Ledgers, u64)>,
+    /// A model call's input tokens, once counted.
+    input: Option<u64>,
+    /// The host counting them.
+    count: Option<HostFuture<Result<u64, HostError>>>,
 }
 
 enum State {
@@ -466,7 +470,23 @@ impl Scheduler {
                         State::Pool(w)
                     }
                 }
-                State::Waiting(p) => {
+                State::Waiting(mut p) => {
+                    if let Some(count) = &mut p.count {
+                        match count.as_mut().poll(cx) {
+                            Poll::Ready(Ok(n)) => {
+                                progressed = true;
+                                let p = *p;
+                                self.start_call(id, p.req, p.call, p.class, cx, Some(n));
+                            }
+                            Poll::Ready(Err(e)) => {
+                                progressed = true;
+                                let e = self.rt(id, e, p.req.loc);
+                                self.resume(id, Err(e));
+                            }
+                            Poll::Pending => self.tasks[id].state = State::Waiting(p),
+                        }
+                        continue;
+                    }
                     let ready = match &p.epoch {
                         Some((l, epoch)) => !l.register_waker(*epoch, cx.waker()),
                         None => self.fence.total() == 0,
@@ -474,7 +494,7 @@ impl Scheduler {
                     if ready {
                         progressed = true;
                         let p = *p;
-                        self.start_call(id, p.req, p.call, p.class, cx);
+                        self.start_call(id, p.req, p.call, p.class, cx, p.input);
                         continue;
                     }
                     State::Waiting(p)
@@ -746,10 +766,12 @@ impl Scheduler {
                 call,
                 class,
                 epoch: None,
+                input: None,
+                count: None,
             }));
             return;
         }
-        self.start_call(id, req, call, class, cx);
+        self.start_call(id, req, call, class, cx, None);
     }
 
     /// Admits and starts a host call. Every call goes through the guard's `Host`
@@ -762,6 +784,7 @@ impl Scheduler {
         call: Call,
         class: ToolClass,
         cx: &mut Context<'_>,
+        input: Option<u64>,
     ) {
         self.tasks[id].state = State::Ready;
         let key = req.key();
@@ -800,7 +823,35 @@ impl Scheduler {
                 return;
             }
         };
-        let reservations = match self.admission(id, &key, &frame, &mut call) {
+        // A live model call's input is counted first (the host's tokenizer may be async); a
+        // replay takes the recorded admission instead.
+        let input = match (&call, input) {
+            (Call::Model(m), None) if !self.replaying() => {
+                let mut count = Arc::clone(&self.host)
+                    .count_tokens(frame.clone(), Countable::Prompt(m.prompt.clone()));
+                match count.as_mut().poll(cx) {
+                    Poll::Ready(Ok(n)) => Some(n),
+                    Poll::Ready(Err(e)) => {
+                        let e = self.rt(id, e, loc);
+                        self.resume(id, Err(e));
+                        return;
+                    }
+                    Poll::Pending => {
+                        self.tasks[id].state = State::Waiting(Box::new(Pending {
+                            req,
+                            call,
+                            class,
+                            epoch: None,
+                            input: None,
+                            count: Some(count),
+                        }));
+                        return;
+                    }
+                }
+            }
+            (_, input) => input,
+        };
+        let reservations = match self.admission(id, &key, &frame, &mut call, input.unwrap_or(0)) {
             Ok(r) => r,
             Err(Wait(epoch)) => {
                 self.record(Event::Wait {
@@ -812,10 +863,12 @@ impl Scheduler {
                         call,
                         class,
                         epoch: Some((frame.ledgers.clone(), epoch)),
+                        input,
+                        count: None,
                     }));
                 } else {
                     // Released meanwhile: try again at once.
-                    self.start_call(id, req, call, class, cx);
+                    self.start_call(id, req, call, class, cx, input);
                 }
                 return;
             }
@@ -890,6 +943,7 @@ impl Scheduler {
         key: &EffectKey,
         frame: &FrameCtx,
         call: &mut Call,
+        input: u64,
     ) -> Result<Vec<Reservation>, Blocked> {
         let loc = Loc::default();
         if let Some(t) = self.tape.as_ref().filter(|t| t.replaying()) {
@@ -951,9 +1005,6 @@ impl Scheduler {
                     .resolve_model(frame, &m.model)
                     .map_err(|e| Refusal(self.rt(id, e, loc)))?
                     .card;
-                let input = self
-                    .host
-                    .count_tokens(frame, &Countable::Prompt(m.prompt.clone()));
                 let mc = ModelCall {
                     input,
                     max_tokens: m.max_tokens,

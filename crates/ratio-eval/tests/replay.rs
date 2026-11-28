@@ -135,6 +135,7 @@ fn record(
     opts: RecordOptions,
 ) -> (Finished, String, Arc<TapeHost>, Arc<ScriptedHost>) {
     let inner = host(setup, jitter);
+    inner.load(p);
     let session = inner.session();
     let tape = Arc::new(TapeHost::record(Arc::clone(&inner) as Arc<dyn Host>, opts));
     let eval = start(p, Arc::clone(&tape) as Arc<dyn Host>, &session)
@@ -152,6 +153,7 @@ fn replay(
     permute: Option<u64>,
 ) -> Result<(Finished, Arc<TapeHost>, Arc<ScriptedHost>), String> {
     let inner = host(setup, 0);
+    inner.load(p);
     let session = inner.session();
     let tape = Arc::new(
         TapeHost::replay(

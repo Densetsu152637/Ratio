@@ -3516,6 +3516,7 @@ impl Machine {
         name: &Arc<str>,
         site: u32,
         loc: Loc,
+        origin: crate::frame::FrameOrigin,
     ) -> bool {
         // The meets are charged for the work they do (bounded by the configuration's list
         // limits, chapter 07).
@@ -3524,10 +3525,9 @@ impl Machine {
             self.fail(e);
             return false;
         }
-        match self
-            .frames
-            .open(self.steps, kind, &request, settings, name, site, loc)
-        {
+        match self.frames.open(
+            self.steps, kind, &request, settings, name, site, loc, origin,
+        ) {
             Ok(()) => {
                 // The host checks the child against its own record of the parent.
                 let Some(HostRef(host)) = self.host.clone() else {
@@ -3604,7 +3604,12 @@ impl Machine {
             return;
         };
         let merged = (Request::merge(req, over), over_settings.over(&settings));
-        if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc) {
+        let origin = if o.kind == FrameKind::Entry {
+            crate::frame::FrameOrigin::Entry
+        } else {
+            p.harness_origin(o.func)
+        };
+        if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc, origin) {
             return;
         }
         // Every parameter (given or defaulted), every configuration value and the settings
@@ -3628,7 +3633,22 @@ impl Machine {
         let Some(config) = self.config(Some(cfg), n.loc) else {
             return;
         };
-        if self.open_frame(FrameKind::Block, config, &Arc::from("with"), n.site, n.loc) {
+        let hash = p
+            .hashes
+            .get(n.loc.module as usize)
+            .copied()
+            .unwrap_or([0; 32]);
+        let origin = crate::frame::FrameOrigin::Block {
+            site: (hash, n.site),
+        };
+        if self.open_frame(
+            FrameKind::Block,
+            config,
+            &Arc::from("with"),
+            n.site,
+            n.loc,
+            origin,
+        ) {
             if self.frame_refuses(&[Some(cfg)], true, false) {
                 self.close_top(FrameOutcome::Raised);
                 let e = self.sees_refusal("a secret setting or configuration value went");

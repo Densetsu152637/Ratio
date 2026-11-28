@@ -381,10 +381,18 @@ MCP, the named tool for `tools.call_tool`, `dispatch` for the dispatch built-ins
 `tool_calls` per call they make) and the arguments by parameter name; `declassify` and
 `session.request_approval` to `approve`; `log.*`, `trace.event`, `session.emit`,
 `session.stream` and `session.notify` to `emit` (output-only, which a host may refuse); the rest
-to `operate`; a built-in the table does not know reaches no host. **`FrameCtx::kind` and
-`harness` are Ratio's assertion, not proof**: a harness call passed off consistently as a
-`with` block is within its parent in every dimension, so a host takes the kind from its own
-knowledge (only the harnesses it loads or runs open `Harness` frames).
+to `operate`; a built-in the table does not know reaches no host. **Every frame carries its
+`FrameOrigin`**, filled from the IR and consistent with its kind (the interpreter refuses to open
+one that is not): `Entry`; `Block { site }` (the package's IR hash and the node); or
+`Harness { package, entry_hash, key }` (the harness's package, that package's IR hash and the
+harness's key, `<module path>::<name>`). A host verifies it against what it loaded
+(`Prepared::loaded` lists a program's packages and harnesses; `ScriptedHost::load` takes them):
+a harness it did not load, or a block at a site of a package it did not load, is refused, so a
+harness call forged as a block fails on its origin. `count_tokens` is asynchronous (an exact
+tokenizer may be); admission awaits it, a failure is the model call's error, and a replay takes
+the count recorded with the admission instead. Host futures and `timer` may be polled from any
+executor: a host on tokio spawns its own work and hands back a `Send` future (`host::Sleep` is a
+timer on the standard library alone).
 
 **The guard** ([`src/host/guard.rs`](src/host/guard.rs)) wraps every host an evaluation is
 given, and the scheduler calls the host through it for every effect; no host can opt out. It

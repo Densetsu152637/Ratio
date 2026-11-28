@@ -38,8 +38,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use crate::frame::{
-    BudgetKind, Caps, Context as Ctx, Folder, FrameCtx, FrameKind, Ledgers, Location, Mode, Paths,
-    Rules, Scope, Sees, SeesItem, Settings, ToolPat, ToolSet,
+    BudgetKind, Caps, Context as Ctx, Folder, FrameCtx, FrameKind, FrameOrigin, Ledgers, Location,
+    Mode, Paths, Rules, Scope, Sees, SeesItem, Settings, ToolPat, ToolSet,
 };
 use crate::host::{
     CancelClass, CancelOutcome, DeniedBy, EffectCtx, EffectKey, Host, HostError, HostFuture,
@@ -87,9 +87,9 @@ pub trait Fixture {
     fn stop_session(&self, host: &Arc<dyn Host>);
     /// A hosted model the scripted endpoint answers.
     fn hosted_model(&self) -> ModelRef;
-    /// The host itself starts a harness at `path` (its own harness load or `run_harness`):
-    /// a frame opened there is a harness frame, whatever kind Ratio presents it as.
-    fn harness_started(&self, host: &Arc<dyn Host>, path: &str);
+    /// A harness the host has loaded, as the origin its frames carry (its package, the
+    /// package's IR hash and its key): the suite opens frames of it, and forges others.
+    fn loaded_harness(&self, host: &Arc<dyn Host>) -> FrameOrigin;
 }
 
 /// The engine operations that are secrecy sinks (briefs, steering and questions to other
@@ -204,8 +204,20 @@ pub fn narrow_scope() -> Scope {
 }
 
 fn ctx(path: &str, parent: Option<&str>, kind: FrameKind, harness: &str, scope: Scope) -> FrameCtx {
+    ctx_from(path, parent, kind, harness, scope, FrameOrigin::Entry)
+}
+
+fn ctx_from(
+    path: &str,
+    parent: Option<&str>,
+    kind: FrameKind,
+    harness: &str,
+    scope: Scope,
+    origin: FrameOrigin,
+) -> FrameCtx {
     let (ledgers, node) = Ledgers::new(scope.budget, scope.width.max(1));
     FrameCtx {
+        origin,
         path: Arc::from(path),
         parent: parent.map(Arc::from),
         kind,
@@ -277,27 +289,34 @@ pub fn frames(f: &dyn Fixture) {
     let scope = narrow_scope();
     let host = f.host(&scope);
     let parent = root(&scope);
-    let ok = ctx(
-        "turn/h@s1#0",
-        Some("turn"),
-        FrameKind::Harness,
-        "h",
-        child_of(&scope),
-    );
+    let known = f.loaded_harness(&host);
+    let FrameOrigin::Harness {
+        package,
+        entry_hash,
+        key,
+    } = known.clone()
+    else {
+        panic!("the fixture's loaded harness must be a harness origin");
+    };
+    let harness = |path: &str, scope: Scope, origin: &FrameOrigin| {
+        ctx_from(
+            path,
+            Some("turn"),
+            FrameKind::Harness,
+            "h",
+            scope,
+            origin.clone(),
+        )
+    };
     assert!(
-        host.open_frame(&parent, &ok).is_ok(),
-        "a child within its parent must open"
+        host.open_frame(&parent, &harness("turn/h@s1#0", child_of(&scope), &known))
+            .is_ok(),
+        "a loaded harness within its parent must open"
     );
     // A forged parent: its context claims the widest scope; the host's record is narrow.
     let forged = ctx("turn", None, FrameKind::Entry, "turn", Scope::session());
     for (i, (dim, wide)) in widenings(&scope).into_iter().enumerate() {
-        let child = ctx(
-            &format!("turn/w@s{}#0", i + 10),
-            Some("turn"),
-            FrameKind::Harness,
-            "w",
-            wide,
-        );
+        let child = harness(&format!("turn/w@s{}#0", i + 10), wide, &known);
         assert!(
             refused_by_attenuation(&host.open_frame(&parent, &child)),
             "a child wider in `{dim}` must be refused"
@@ -307,20 +326,71 @@ pub fn frames(f: &dyn Fixture) {
             "a child wider in `{dim}` than the host's record must be refused under a forged parent"
         );
     }
-    // A harness call passed off consistently as a block: kind `Block`, harness `with`, the
-    // parent's depth. Its scope is within the parent, and only the host's own knowledge (it
-    // started a harness there) can tell; the kind is Ratio's assertion, never proof.
-    f.harness_started(&host, "turn/with@s2#0");
-    let as_block = ctx(
-        "turn/with@s2#0",
+    // A harness the host never loaded: another IR hash, or another key.
+    let mut other_hash = entry_hash;
+    other_hash[0] ^= 0xff;
+    for (what, origin) in [
+        (
+            "another package hash",
+            FrameOrigin::Harness {
+                package: Arc::clone(&package),
+                entry_hash: other_hash,
+                key: Arc::clone(&key),
+            },
+        ),
+        (
+            "another harness",
+            FrameOrigin::Harness {
+                package: Arc::clone(&package),
+                entry_hash,
+                key: Arc::from("main.ratio::never_loaded"),
+            },
+        ),
+    ] {
+        assert!(
+            refused_by_attenuation(
+                &host.open_frame(&parent, &harness("turn/x@s5#0", child_of(&scope), &origin))
+            ),
+            "a harness frame of {what} must be refused"
+        );
+    }
+    // A block at a site of a loaded package opens.
+    let block = |path: &str, hash: [u8; 32]| {
+        ctx_from(
+            path,
+            Some("turn"),
+            FrameKind::Block,
+            "with",
+            scope.clone(),
+            FrameOrigin::Block { site: (hash, 7) },
+        )
+    };
+    assert!(
+        host.open_frame(&parent, &block("turn/with@s6#0", entry_hash))
+            .is_ok(),
+        "a block of a loaded package must open"
+    );
+    // A harness call passed off consistently as a block (kind `Block`, harness `with`, the
+    // parent's depth): within its parent in every dimension, it fails on its origin, a site of
+    // a package the host never loaded.
+    assert!(
+        refused_by_attenuation(&host.open_frame(&parent, &block("turn/with@s2#0", other_hash))),
+        "a harness frame forged consistently as a block must be refused by its origin"
+    );
+    // An origin that does not fit the kind.
+    let mismatched = ctx_from(
+        "turn/h@s3#0",
         Some("turn"),
-        FrameKind::Block,
-        "with",
-        scope.clone(),
+        FrameKind::Harness,
+        "h",
+        child_of(&scope),
+        FrameOrigin::Block {
+            site: (entry_hash, 7),
+        },
     );
     assert!(
-        refused_by_attenuation(&host.open_frame(&parent, &as_block)),
-        "a harness frame forged consistently as a block must be refused"
+        refused_by_attenuation(&host.open_frame(&parent, &mismatched)),
+        "a harness frame with a block's origin must be refused"
     );
     // A parent the host never opened.
     let unknown = ctx(
@@ -832,7 +902,14 @@ impl Fixture for ScriptedFixture {
         ModelRef(Arc::from("hosted"))
     }
 
-    fn harness_started(&self, host: &Arc<dyn Host>, path: &str) {
-        self.scripted(host).harness_at(path);
+    fn loaded_harness(&self, host: &Arc<dyn Host>) -> FrameOrigin {
+        let origin = FrameOrigin::Harness {
+            package: Arc::from("app"),
+            entry_hash: [0x11; 32],
+            key: Arc::from("main.ratio::h"),
+        };
+        self.scripted(host)
+            .load_packages([(Arc::from("app"), [0x11; 32])], [origin.clone()]);
+        origin
     }
 }

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use crate::frame::{FrameCtx, FrameKind, Location, Scope, check_within};
+use crate::frame::{FrameCtx, FrameKind, FrameOrigin, Location, Scope, check_within};
 use crate::host::{
     ApprovalRequest, CancelClass, CancelOutcome, ChatRequest, ConvId, ConvSelector, Countable,
     DeniedBy, Digest, EffectCtx, FrameOutcome, Host, HostError, HostFuture, Labelled, ModelCard,
@@ -161,7 +161,9 @@ struct State {
     barriers: HashMap<String, Barrier>,
     gates: Vec<(String, Arc<ApprovalGate>)>,
     session_allowed: HashSet<String>,
-    harnesses: HashSet<String>,
+    /// The packages loaded (name and IR hash) and the harnesses they hold.
+    packages: HashSet<(Arc<str>, [u8; 32])>,
+    harnesses: HashSet<FrameOrigin>,
     ops_seen: Vec<SeenOp>,
     asked: Vec<ApprovalRequest>,
     conversation_labels: HashMap<u64, Labels>,
@@ -180,6 +182,7 @@ pub struct ScriptedHost {
     jitter: AtomicU64,
     rogue: AtomicBool,
     frozen: AtomicBool,
+    count_fails: AtomicBool,
 }
 
 impl std::fmt::Debug for ScriptedHost {
@@ -204,6 +207,7 @@ impl ScriptedHost {
             jitter: AtomicU64::new(0),
             rogue: AtomicBool::new(false),
             frozen: AtomicBool::new(false),
+            count_fails: AtomicBool::new(false),
         }
     }
 
@@ -272,11 +276,22 @@ impl ScriptedHost {
         self
     }
 
-    /// The host itself starts a harness at `path` (as Imperium's harness loads and
-    /// `run_harness` do): a frame opened there must be a harness frame, whatever kind it is
-    /// presented as.
-    pub fn harness_at(&self, path: &str) -> &Self {
-        lock(&self.st).harnesses.insert(path.to_owned());
+    /// Loads a program, as a host loads the packages it runs: their names and IR hashes, and
+    /// the harnesses in them. Frames are checked against what was loaded.
+    pub fn load(&self, program: &crate::Prepared) -> &Self {
+        let (packages, harnesses) = program.loaded();
+        self.load_packages(packages, harnesses)
+    }
+
+    /// Loads packages (name and IR hash) and the harnesses they hold.
+    pub fn load_packages(
+        &self,
+        packages: impl IntoIterator<Item = (Arc<str>, [u8; 32])>,
+        harnesses: impl IntoIterator<Item = FrameOrigin>,
+    ) -> &Self {
+        let mut st = lock(&self.st);
+        st.packages.extend(packages);
+        st.harnesses.extend(harnesses);
         self
     }
 
@@ -290,6 +305,12 @@ impl ScriptedHost {
     /// (for the scheduler's own bounds).
     pub fn rogue(&self) -> &Self {
         self.rogue.store(true, Ordering::SeqCst);
+        self
+    }
+
+    /// A host whose tokenizer fails.
+    pub fn failing_tokenizer(&self) -> &Self {
+        self.count_fails.store(true, Ordering::SeqCst);
         self
     }
 
@@ -842,11 +863,26 @@ impl Host for ScriptedHost {
         Box::pin(async move { Ok(v) })
     }
 
-    fn count_tokens(&self, _: &FrameCtx, what: &Countable) -> u64 {
-        match what {
+    fn count_tokens(
+        self: Arc<Self>,
+        _: FrameCtx,
+        what: Countable,
+    ) -> HostFuture<Result<u64, HostError>> {
+        let n = match &what {
             Countable::Text(t) => (t.value.len() as u64).div_ceil(4),
             Countable::Prompt(v) => v.weight().div_ceil(4),
-        }
+        };
+        let polls = self.polls();
+        let fail = self.count_fails.load(Ordering::SeqCst);
+        Box::pin(async move {
+            Polls(polls).await;
+            if fail {
+                return Err(HostError::ModelFailed {
+                    message: Labelled::plain("the tokenizer failed".to_owned()),
+                });
+            }
+            Ok(n)
+        })
     }
 
     fn resolve_model(&self, _: &FrameCtx, model: &ModelRef) -> Result<ModelCard, HostError> {
@@ -938,20 +974,29 @@ impl Host for ScriptedHost {
                 message: format!("no record of the frame `{}`", parent.path),
             });
         };
-        // The kind must fit the path: a block is `with`, a harness call is not; an entry's
-        // frame has its parent's path, every other frame names its parent. And the kind comes
-        // from the host's own knowledge where it has any: a frame at a path where the host
-        // itself started a harness is a harness frame, however it is presented.
+        // The kind must fit the path and the origin: a block is `with`, a harness call is not;
+        // an entry's frame has its parent's path, every other frame names its parent. The origin
+        // is checked against what the host loaded: a harness by package, IR hash and key; a
+        // block by the package of its site.
         let block = &*child.harness == "with";
         let parent_ok = match child.kind {
             FrameKind::Entry => child.path == parent.path,
             FrameKind::Harness | FrameKind::Block => child.parent.as_deref() == Some(&*parent.path),
         };
-        let known_harness = st.harnesses.contains(&*child.path);
-        if (child.kind == FrameKind::Block) != block
-            || !parent_ok
-            || known_harness && child.kind != FrameKind::Harness
-        {
+        let origin_ok = child.origin.fits(child.kind)
+            && match &child.origin {
+                FrameOrigin::Entry => true,
+                FrameOrigin::Block { site } => st.packages.iter().any(|(_, h)| *h == site.0),
+                FrameOrigin::Harness {
+                    package,
+                    entry_hash,
+                    ..
+                } => {
+                    st.packages.contains(&(Arc::clone(package), *entry_hash))
+                        && st.harnesses.contains(&child.origin)
+                }
+            };
+        if (child.kind == FrameKind::Block) != block || !parent_ok || !origin_ok {
             return Err(HostError::Denied {
                 by: DeniedBy::Attenuation,
                 message: format!("the frame `{}` does not fit its kind", child.path),

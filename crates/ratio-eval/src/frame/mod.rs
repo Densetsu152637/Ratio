@@ -34,7 +34,7 @@ pub use scope::{
     Location, MAX_DEPTH, MAX_WIDTH, Mode, Paths, Refusal, Request, Rules, Scope, Sees, SeesItem,
     SeesPatch, ToolPat, ToolRequest, ToolSet, attenuate, check_within,
 };
-pub use stack::{FrameCtx, Session};
+pub use stack::{FrameCtx, FrameOrigin, Session};
 
 #[cfg(debug_assertions)]
 #[doc(hidden)]

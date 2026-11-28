@@ -7,6 +7,18 @@
 //! concurrently, so an implementation uses interior mutability and serialises per resource
 //! (per conversation) itself.
 //!
+//! **Executors.** The evaluation, and so every host future and `timer`, may be polled from any
+//! executor, not only the host's own (a test drives it with [`crate::block_on`]). A host built
+//! on tokio must therefore not rely on a tokio context when its futures are polled: it spawns
+//! its own work on its runtime and hands back a `Send` future that waits for the result (and
+//! a timer that does not need a tokio context to fire). [`Sleep`] is a timer on the standard
+//! library alone.
+//!
+//! **Frames and their origin.** Every frame carries its [`FrameOrigin`](crate::frame::FrameOrigin),
+//! filled from the program's IR: an entry; a `with` block at a site (its package's IR hash and
+//! node); or a harness, by package, the package's IR hash and the harness's key. A host checks
+//! it against what it loaded, so the kind is no longer Ratio's word alone.
+//!
 //! **Async without a runtime.** The asynchronous methods take `self: Arc<Self>` and return a
 //! [`HostFuture`], a boxed `Send + 'static` future. The trait is therefore object-safe (an
 //! engine holds an `Arc<dyn Host>`, and the wrappers [`Guard`] and [`crate::tape::TapeHost`]
@@ -530,9 +542,14 @@ pub trait Host: Send + Sync + 'static {
         model: Option<ModelRef>,
     ) -> HostFuture<Result<Vec<Vec<f32>>, HostError>>;
 
-    /// Counts the input tokens of `what` for `frame`'s model: an input of admission, recorded
-    /// with it.
-    fn count_tokens(&self, frame: &FrameCtx, what: &Countable) -> u64;
+    /// Counts the input tokens of `what` for `frame`'s model (asynchronously: an exact
+    /// tokenizer may be): an input of admission, recorded with it. A failure is the model
+    /// call's error.
+    fn count_tokens(
+        self: Arc<Self>,
+        frame: FrameCtx,
+        what: Countable,
+    ) -> HostFuture<Result<u64, HostError>>;
 
     /// The card of a model: its location, maximum output, window and prices.
     ///
@@ -606,14 +623,15 @@ pub trait Host: Send + Sync + 'static {
     /// (looked up by `parent.path`, never from `parent.scope`), that `child.scope` is within
     /// it in every dimension (`frame::check_within`), and records the child.
     ///
-    /// **`child.kind` and `child.harness` are asserted by Ratio, not proved.** A harness call
-    /// passed off consistently as a `with` block (kind `Block`, harness `with`, the parent's
-    /// depth) is within its parent in every dimension and would not count towards the depth
-    /// limit. A host must therefore take the kind from its own knowledge, never from the
-    /// context: only the harnesses the host itself loaded or ran (Imperium's harness loads and
-    /// `run_harness`) open `Harness` frames, so a frame at a path the host knows is a harness
-    /// call is refused under any other kind. The contract suite checks it with the consistent
-    /// forgery.
+    /// **The kind is checked through `child.origin`**, filled by Ratio from the program's IR
+    /// and consistent with `child.kind`: a host verifies it against what it loaded. A
+    /// [`FrameOrigin::Harness`](crate::frame::FrameOrigin::Harness) must name a harness the
+    /// host loaded (its package, the package's IR hash and the harness's key); a
+    /// [`FrameOrigin::Block`](crate::frame::FrameOrigin::Block) a site in a package the host
+    /// loaded; an entry's frame carries its parent's path. So a harness call passed off as a
+    /// `with` block (kind `Block`, harness `with`, the parent's depth, within its parent in
+    /// every dimension) fails on its origin unless its site is one the host loaded. The
+    /// contract suite checks each case, the consistent forgery included.
     ///
     /// # Errors
     ///
@@ -692,8 +710,12 @@ impl Host for NoHost {
         unsupported("model.embed")
     }
 
-    fn count_tokens(&self, _: &FrameCtx, _: &Countable) -> u64 {
-        0
+    fn count_tokens(
+        self: Arc<Self>,
+        _: FrameCtx,
+        _: Countable,
+    ) -> HostFuture<Result<u64, HostError>> {
+        Box::pin(async { Ok(0) })
     }
 
     fn resolve_model(&self, _: &FrameCtx, m: &ModelRef) -> Result<ModelCard, HostError> {
@@ -789,4 +811,6 @@ impl Host for NoHost {
     }
 }
 
-pub(crate) mod sleep;
+pub mod sleep;
+
+pub use sleep::Sleep;

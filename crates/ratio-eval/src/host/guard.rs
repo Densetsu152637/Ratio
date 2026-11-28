@@ -285,8 +285,12 @@ impl Host for Guard {
         Arc::clone(&self.inner).embed(frame, cx, texts, model)
     }
 
-    fn count_tokens(&self, frame: &FrameCtx, what: &Countable) -> u64 {
-        self.inner.count_tokens(frame, what)
+    fn count_tokens(
+        self: Arc<Self>,
+        frame: FrameCtx,
+        what: Countable,
+    ) -> HostFuture<Result<u64, HostError>> {
+        Arc::clone(&self.inner).count_tokens(frame, what)
     }
 
     fn resolve_model(&self, frame: &FrameCtx, model: &ModelRef) -> Result<ModelCard, HostError> {
@@ -356,6 +360,15 @@ impl Host for Guard {
     }
 
     fn open_frame(&self, parent: &FrameCtx, child: &FrameCtx) -> Result<(), HostError> {
+        if !child.origin.fits(child.kind) {
+            return Err(HostError::Denied {
+                by: DeniedBy::Attenuation,
+                message: format!(
+                    "the frame `{}` has an origin that does not fit its kind",
+                    child.path
+                ),
+            });
+        }
         if let Err(d) = check_within(&parent.scope, &child.scope, child.kind) {
             return Err(HostError::Denied {
                 by: DeniedBy::Attenuation,
