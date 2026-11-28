@@ -396,6 +396,15 @@ impl Traits {
     }
 }
 
+/// The words of every `@name(…)` attribute among `attrs`.
+pub(crate) fn attr_words(attrs: &[ratio_syntax::ast::Attribute], name: &str) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|a| a.name.name == name)
+        .flat_map(|a| a.args.iter().flatten().filter_map(|arg| word(&arg.value)))
+        .collect()
+}
+
 /// An attribute argument as a word: a name, or a string literal without interpolations.
 fn word(e: &ratio_syntax::ast::Expr) -> Option<String> {
     use ratio_syntax::ast::{ExprKind, Lit, StrPart};
@@ -528,6 +537,18 @@ pub(crate) const FRAME_MODULES: &[(&str, &str)] = &[
         "control",
         r"
 @pure fn question(text: Untrusted<Str>, options: [Untrusted<Str>] = []) -> Error {}
+",
+    ),
+    // The scheduler's constructs (stage 11a). They run their functions concurrently and send
+    // nothing anywhere themselves (`@local`); the effects are their functions'.
+    (
+        "control",
+        r"
+@local fn par<T>(fs: [fn() -> T], limit: Int? = none) -> [T] {}
+@local fn race<T>(fs: [fn() -> T]) -> T {}
+@local fn par_map<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [U] {}
+@local fn par_map_settled<T, U>(xs: [T], f: fn(T) -> U, limit: Int = 4) -> [Result<U>] {}
+@local fn timeout<T>(d: Duration, f: fn() -> T) -> T {}
 ",
     ),
     (

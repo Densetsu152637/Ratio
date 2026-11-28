@@ -14,6 +14,13 @@
 //! Stage 7 adds the `text` and `re` built-ins (the latter over a linear-time regex engine) and
 //! the bounded [`Pool`] large pure built-ins run on, with at most [`JOBS_IN_FLIGHT`] jobs per
 //! session, while the machine waits ([`Suspend::Wait`]).
+//!
+//! Stage 11a adds the [`host`] boundary (the [`Host`](host::Host) trait, the sink
+//! [`Guard`](host::Guard) every evaluation wraps its host in), the scheduler that runs
+//! concurrent branches with real concurrency under the width ([`Evaluation`]), the
+//! [`ScriptedHost`](scripted::ScriptedHost) test host, the [`tape`] (record and verified
+//! replay), per-branch random generators ([`rng`]) and, behind the `host-tests` feature, the
+//! host contract suite (`host_tests`).
 
 #![allow(
     clippy::many_single_char_names,
@@ -33,8 +40,10 @@ pub mod builtins;
 mod driver;
 mod drop;
 mod error;
+pub mod fork;
 pub mod frame;
 mod heap;
+pub mod host;
 mod json;
 mod jsonedit;
 mod labels;
@@ -49,11 +58,17 @@ mod prepare;
 #[cfg(test)]
 mod properties;
 mod re;
+pub mod rng;
 mod schema;
+pub mod scripted;
 pub mod sink;
 mod stack;
+pub mod tape;
 mod value;
 pub mod work;
+
+#[cfg(feature = "host-tests")]
+pub mod host_tests;
 
 use std::sync::Arc;
 
@@ -63,8 +78,8 @@ pub use heap::{Heap, HeapLedger};
 pub use json::MAX_JSON_DEPTH;
 pub use labels::Labels;
 pub use machine::{
-    BuiltinWork, CHECKPOINT, CancelToken, EffectRequest, Limits, Machine, Outcome, StartError,
-    Suspend,
+    BuiltinWork, CHECKPOINT, CancelToken, Cancelled, EffectRequest, Limits, Machine, Outcome,
+    StartError, Suspend,
 };
 pub use plist::List;
 pub use pmap::Map;
@@ -106,6 +121,27 @@ pub fn evaluate_in(
     session: &frame::Session,
 ) -> Result<Evaluation, StartError> {
     Machine::with_session(prepared, entry, args, limits, cancel, session).map(Evaluation::new)
+}
+
+/// Starts an evaluation of `entry` in `session` whose effects `host` answers. The
+/// interpreter wraps `host` in the sink [`Guard`](host::Guard) (no host can opt out of it);
+/// to record or replay the turn, pass a [`tape::TapeHost`] as the host and give the evaluation
+/// the same tape host ([`Evaluation::with_tape`]).
+///
+/// # Errors
+///
+/// As [`evaluate`].
+pub fn evaluate_with(
+    prepared: Arc<Prepared>,
+    entry: Entry,
+    args: Vec<Value>,
+    limits: Limits,
+    cancel: CancelToken,
+    session: &frame::Session,
+    host: Arc<dyn host::Host>,
+) -> Result<Evaluation, StartError> {
+    Machine::with_session(prepared, entry, args, limits, cancel, session)
+        .map(|m| Evaluation::with_host(m, host))
 }
 
 /// The value as compact JSON, without its type (as the conformance runner prints results):

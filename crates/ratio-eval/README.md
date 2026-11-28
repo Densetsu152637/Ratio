@@ -26,17 +26,16 @@ A tree walker over the prepared form with an **explicit continuation stack** on 
 program's nesting, recursion and callbacks never touch the Rust stack, whoever polls the
 evaluation. `Machine::run` returns at every 1,000-step checkpoint (`Suspend::Yield`, after
 checking cancellation) and at every effect (`Suspend::Effect`), and continues where it stopped.
-`Evaluation` is the `Future` over it: it yields to the runtime at each checkpoint and, in this
-stage, answers every effect with `Unsupported`. Stage 11's host plugs in there: the driver awaits
-`host.call(request)` and passes the answer to `Machine::resume_effect`. Built-ins that call back
+`Evaluation` is the `Future` over it: it yields to the runtime at each checkpoint, and awaits
+the host at each effect (`evaluate_with`; `evaluate` and `evaluate_in` use a host that answers
+every effect with `Unsupported`), passing the answer to `Machine::resume_effect`. Built-ins that call back
 into the program (`list.map`, `result`, …) are small state machines the walk drives, so program
 code always runs on the walk's own stack. Values are `Send + Sync`, and so is the evaluation.
 
-`par` and `race` run their branches in written order in this stage (a valid schedule; stage 11
-brings real concurrency) and enforce the branch restriction: a `var` declared outside a branch
-cannot be assigned inside it. That is a program defect, not a recoverable error: it raises
-`Invalid` with the class `Fatal`, which no `catch`, `result` or sibling `race` branch can
-swallow. `with timeout` and `state` raise `Unsupported` until the host (stage 11) exists;
+`par` and `race` run their branches concurrently (the scheduler, below) and enforce the branch
+restriction: a `var` declared outside a branch cannot be assigned inside it. That is a program
+defect, not a recoverable error: it raises `Invalid` with the class `Fatal`, which no `catch`,
+`result` or sibling `race` branch can swallow. `state` raises `Unsupported` until stage 11b;
 harness calls, `with` blocks, call overrides and tool sets open frames (below).
 
 ## Values and secrecy labels
@@ -361,6 +360,150 @@ element named `with`. `meta.frame`, `meta.caller`, `meta.depth`, `meta.limits` a
 builds the `Question` error a callee raises to its caller, which propagates and is caught like
 any error (and is refused by `sees` like any other value).
 
+## The host, the scheduler and the tape (stage 11a)
+
+**The `Host` trait** ([`src/host/`](src/host/mod.rs), `HOST_API_VERSION` 1) is everything outside
+the interpreter: model calls (`generate`, `embed`, `count_tokens`, `resolve_model`), tool calls
+(`call_tool`, `tool_class`, `is_secret_path`, `source_labels`), conversations (`conversation`,
+`conversation_digest`, `conversation_labels`, `chat`), frames (`open_frame`, `close_frame`), the engine's operations
+(`operate`, for agents, memory, session, context, eval and time until their stages type them),
+approvals (`approve`), and the recorded, authority-free `now`, `seed`, `timer` and `emit`. The
+asynchronous methods take `self: Arc<Self>` and return a `HostFuture`, a boxed `Send + 'static`
+future: the trait is object-safe (`Arc<dyn Host>`), the futures borrow nothing (the scheduler
+keeps many in flight next to the machines; a host may spawn them on its runtime), and no runtime
+or `async_trait` is needed. Every asynchronous call gets an `EffectCtx`: the effect key
+(`frame path / branch path / e<node>#<occurrence>`), a cancellation token and the deadline.
+Values cross with their labels (`Value`s carry their own; text is `Labelled<String>`). How the
+machine's effects map to these calls is [`src/host/bridge.rs`](src/host/bridge.rs), read from
+the checker's table of built-ins: every `@effect(model)` built-in to `generate` (admitted by
+reservation); `tools.*` built-ins to `call_tool` with the tool's name (`mcp__server__tool` for
+MCP, the named tool for `tools.call_tool`, `dispatch` for the dispatch built-ins, admitted one
+`tool_calls` per call they make) and the arguments by parameter name; `declassify` and
+`session.request_approval` to `approve`; `log.*`, `trace.event`, `session.emit`,
+`session.stream` and `session.notify` to `emit` (output-only, which a host may refuse); the rest
+to `operate`; a built-in the table does not know reaches no host. **Every frame carries its
+`FrameOrigin`**, filled from the IR and consistent with its kind (the interpreter refuses to open
+one that is not): `Entry`; `Block { site }` (the package's IR hash and the node); or
+`Harness { package, entry_hash, key }` (the harness's package, that package's IR hash and the
+harness's key, `<module path>::<name>`). A host verifies it against what it loaded
+(`Prepared::loaded` lists a program's packages and harnesses; `ScriptedHost::load` takes them):
+a harness it did not load, or a block at a site of a package it did not load, is refused, so a
+harness call forged as a block fails on its origin. `count_tokens` is asynchronous (an exact
+tokenizer may be); admission awaits it, a failure is the model call's error, and a replay takes
+the count recorded with the admission instead. Host futures and `timer` may be polled from any
+executor: a host on tokio spawns its own work and hands back a `Send` future (`host::Sleep` is a
+timer on the standard library alone).
+
+**The guard** ([`src/host/guard.rs`](src/host/guard.rs)) wraps every host an evaluation is
+given, and the scheduler calls the host through it for every effect; no host can opt out. It
+recomputes the per-call secrecy flag from the labels and refuses (`Denied { by: secrecy }`,
+before the host sees anything) a labelled value at every sink of chapter 03. Its rules fail
+closed, from the checker's table: a tool or operation is a sink unless the table marks it
+`@local` or `@pure` (so `web_*`, `run_command`, `run_background`, every `agents.*` built-in,
+memory writes, `session.emit`, `eval` metrics and any built-in the table does not know are
+sinks); `tools.call_tool`, `tools.mcp_call` and the dispatch built-ins are sinks whatever they
+name; `write_file` and `edit_file` may write a secret only to a path in `ratio.secret_paths`;
+a model whose card does not say `local` may receive no secret (a prompt's sections included,
+so a secret reaching a hosted model through a prompt's `data` is refused at run time), and
+neither may a call on a labelled conversation (`conversation_labels`; an unreadable one counts
+as labelled). Logs, traces and streams pass with the flag set, for the host to redact. The
+labelled parts of an approval's summary and detail, and of a `@user` built-in's arguments (`session.ask`'s
+questions), reach the host as `[secret: source N]`. It
+also repeats `frame::check_within` on every frame it forwards.
+
+**The scheduler** ([`src/driver.rs`](src/driver.rs)) is the `Evaluation` future. `par { … }`,
+`race { … }`, `par([…])`, `race([…])`, `par_map` and `par_map_settled` suspend their machine
+(`Suspend::Branches`, [`src/fork.rs`](src/fork.rs)); each branch becomes a machine of its own
+(`Machine::spawn`: the same program, heap ledger and frames with the branch element on the
+path, the locals it may read, its own step count), and the construct is answered with
+`Machine::join`. All the tasks are polled on the thread that polls the evaluation, and their
+effects run concurrently as host futures. A task holds a running slot on its frame's ledgers
+while it evaluates or awaits a host effect; a task waiting for its branches is parked and gives
+its slot back, and resumes ahead of every other waiter. Waiting branches start in branch-path
+order within each construct's `limit:` (default 4 for `par_map`). Every tool call is admitted
+with one `tool_calls` and every model call by reservation (`count_tokens`, the card from
+`resolve_model`, the effective `max_tokens` the request is sent with; below the reply floor it
+waits on `Ledgers::register_waker`, never blocking the thread); a refusal raises `Budget`.
+Branches debit the same ledgers between their slices, so a frame's `steps` cap binds them all.
+
+A branch is cancelled (a race lost, a `par` sibling failed, its construct cancelled) at its next
+effect boundary or checkpoint. An `abort` call in flight is stopped and the branch waits for the
+host's acknowledgement; a `drain` call is left running as an outstanding drain, re-parented to
+the frame of the nearest enclosing construct whose task is not itself being cancelled (or the
+turn's), and the branch unwinds at once, so harness frames inside the cancelled scope close at
+once. The fence (`fork::Fence`) then holds that frame's close (the machine reports
+`Suspend::Fence`), every later `drain`-class call of the frame tree (`defer` blocks and
+`tools.command_stop` excepted) and the end of the turn, until the drain finishes and is debited
+its actual charge. The scheduler bounds calls itself, whatever the host does: a `drain` call
+(an engine write operation too) is failed at its declared bound (at most 3600 s; an
+outstanding one releases the fence there, recorded `failed`), and a cancelled `abort` call the
+host has not acknowledged within `ABORT_GRACE` (30 s) is recorded `unacknowledged`, charged
+all its reservation held, and its scope returns. Each bound is the earlier of the host's timer and
+Ratio's own clock, so a host whose timer never fires cannot lift it. Effects in `defer` blocks are not cancelled. `with timeout d { … } else { … }`
+and `timeout(d, f)` are scopes of their machine (no branch element on the path): the scheduler
+sets the deadline when it first sees the scope, arms the host's `timer`, and fires the scope by
+cancelling it, which unwinds to it (running `defer` blocks) and becomes the `else` block or
+`Timeout`. Every effect carries the earliest deadline of its scopes, its ancestors' and its
+frame's `wall` budget (measured from the start of the evaluation). A `return`, `break` or
+`continue` cannot leave a branch (`Invalid`).
+
+**`ScriptedHost`** ([`src/scripted.rs`](src/scripted.rs)) answers from scripts: a tool table
+(class, declared bound, behaviour: a reply, a delay, a failure, never, a barrier that answers
+only under real concurrency, a sequence, answers by first argument, an approval gate), model
+replies and cards, operation and approval answers, secret paths and the session's scope. It
+checks frames against its own records (a forged parent or kind is refused), enforces the sinks
+from the per-call flag as an engine's dispatch does, honours tokens by class, bounds calls by
+deadlines and declared bounds, and records what it saw (calls with their start and end times
+and deadlines, outcomes, events, frames). `jitter(seed)` delays answers by pseudo-random numbers
+of polls, for random completion orders.
+
+**The contract suite** ([`src/host_tests.rs`](src/host_tests.rs), feature `host-tests`) is what
+every host must do, driven through the raw trait without the guard: `frames` (a child wider than
+its parent in any dimension is refused, against the host's record, also under a forged parent
+or kind), `sinks` (the network, command and write tools and a hosted model refuse a call with
+the secrecy flag set) and `cancellation` (an abort call is aborted, a remote one abandoned,
+every listed tool declares a bound of at most 3600 s and unlisted or server-claimed read-only
+tools are `drain`, a never-ending drain call is failed at its bound, a call ends at its
+deadline, an approval-pending call is withdrawn and a later answer changes nothing, an answer
+first runs the call, a session stop drains). A host supplies a `Fixture`; `ScriptedFixture` is
+`ScriptedHost`'s. The scheduler's own cancellation cases (race and the fence, re-parenting,
+`defer`, a command killed by its timeout but not by a race) are `tests/scheduler.rs`.
+
+**The tape** ([`src/tape/`](src/tape/mod.rs), `TAPE_VERSION` 1) is a JSON Lines file
+(uncompressed: `.jsonl.zst` compression is the host's, applied to the file): a header (tape and
+IR versions, the library version, the mode, the turn's seed, the session frame's caps and
+width), blob lines (a body above 1 KiB, once, named by its BLAKE3 digest; in a headless tape a
+labelled body is not stored and is named only by the redaction digest, HMAC-SHA-256 with the
+session's key, which `RecordOptions::new` requires and refuses when all zero; in a headless tape
+every request, output and reply digest over labelled data is keyed the same way, `k:<hmac>`),
+entry lines for input-bearing effects (key, request digest over the built-in and
+its named arguments without labels, and the value or error with its labels), event lines
+numbered on one turn sequence, digest-only lines for output-only effects in `full` mode, and the
+end line with the reply digest. The events: frame opens with their caps, admissions with their
+reservation and the inputs of their arithmetic, waits, refusals, completions, each branch's step
+total, cancellation points `(effects, steps)`, how cancelled calls ended (a drained call's
+discarded answer is its entry), re-parentings, race winners, failing `par` branches, fired
+timeouts and branches that never started. Approvals and every `@user` built-in (`session.ask`) are never answered from a tape: a replay asks the user live, under its own
+session's rules, and a declassification's request digest covers a keyed digest of what was
+declassified. Recording stops at the size limit (64 MiB, blobs and held events counted); the
+tape then says it was truncated and replay refuses it. `TapeHost::record` writes it; `TapeHost::replay`
+loads it within fixed bounds (64 MiB, 2^20 lines, nesting 64, numbers of at most 20 digits),
+checks every blob against its digest and the versions, then verifies it against itself:
+numbered without gaps; the ledgers rebuilt from the frame events reproduce every admission (its
+held amounts and effective `max_tokens`), refusal (by the same budget) and completion in
+sequence order; the step totals stay within the turn's limit; every outcome agrees with the
+entries. In replay, effects are answered by key after the request digest is checked (lenient
+mode falls through to a live call), answers wait permuted numbers of polls when asked,
+admissions, refusals, cancellation points, timeouts, winners and failing branches come from the
+tape, each branch stops at its recorded step total, output-only effects are suppressed (the
+replay never calls `emit`), replayed values keep their labels and gain those the replaying
+host's source rules give them (`Host::source_labels`), and the reply digest is compared at the
+end. Any failure raises `Replay`.
+
+**Per-branch random generators** ([`src/rng.rs`](src/rng.rs)): `ChaCha20` keyed by
+`BLAKE3(seed, frame path, 0, branch path)`, for stage 11b's `rand`. BLAKE3 is
+[`src/builtins/blake3.rs`](src/builtins/blake3.rs), the same file stage 9's `hash` uses.
+
 ## Tests
 
 `tests/data_ii.rs` runs the `json.*`, `list.*` and `map.*` files of `conformance/data/`, one file per `json`, `list` and `map` row (values,
@@ -405,3 +548,26 @@ frame context effects carry, and harness entries in a host's session; `tests/reg
 holds the security review's probes (effects in defaults and configuration, secrets in
 settings and in blocks, bounded and charged opening, freed ledger nodes, which scope catches a
 `Budget`).
+
+Stage 11a: `tests/scheduler.rs` (real concurrency through a barrier only concurrent calls pass;
+running branches never above the width and starting in branch-path order; nested fan-out at
+width 2; a `race` returning before a losing `drain` write, which a later write and the turn wait
+for; a cancelled nested harness closing at once with its write re-parented; a `defer` write not
+fenced; a command killed when its timeout fires, with the deadline the host received, and not
+aborted by a `race`; an abort call aborted; concurrent calls never passing a `tool_calls` cap;
+every secrecy sink refused at the guard before the host, and the allowed flows passing with the
+flag set); `tests/contract.rs` (the contract suite against `ScriptedHost`, and the guard refusing
+in front of a host that checks nothing); `tests/replay.rs` (`conformance/replay/` recorded under
+four completion orders and replayed under three permutations each, with identical results and
+event streams, and the crafted step totals; the determinism property over sixteen completion
+orders with budgets below demand; every divergence mutation: a sequence number, a refusal, an
+input count, a card limit, a price, a step total, a drained and a withdrawn outcome, a blob;
+suppression and the reply digest, and `full` mode; labels kept and gained in replay; labelled
+blobs of a headless tape named by the redaction digest only; crafted tapes; the tape's size);
+`conformance/eval/width-nested-fanout.ratio`; and `src/rng.rs`'s `ChaCha20` vector.
+
+The security review of stage 11a, round 1: `tests/review_11a.rs` (every model built-in guarded and
+admitted; the guard failing closed; approvals never answered from a tape; keyed digests in
+headless tapes and the required key; truncated tapes refused; the scheduler bounding drains and
+unacknowledged aborts on a host that breaks the contract; frame kinds from the host's own
+knowledge; approvals redacted; labelled conversations refused to hosted models).

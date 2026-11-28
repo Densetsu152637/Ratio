@@ -22,7 +22,9 @@ fn a_host_runs_a_pure_function_through_the_facade() {
     let checked = ratio::check(&loaded);
     let program = ratio::lower(&loaded, &checked).unwrap();
     assert_eq!(ratio::IR_VERSION, 1);
-    assert_eq!(ratio::STAGE, 10);
+    assert_eq!(ratio::STAGE, 11);
+    assert_eq!(ratio::HOST_API_VERSION, 1);
+    assert_eq!(ratio::TAPE_VERSION, 1);
     assert_eq!(program.packages[0].hash_hex().len(), 64);
     let prepared = ratio::prepare(&program).unwrap();
     let entry = prepared.find("main.ratio", "twice").unwrap();
@@ -41,4 +43,10 @@ fn a_host_runs_a_pure_function_through_the_facade() {
     };
     assert_eq!(v.as_text(), Some("abab"));
     assert_eq!(v.labels(), secret);
+}
+
+/// A host in another crate runs the contract suite through the facade's re-exports.
+#[test]
+fn the_contract_suite_runs_from_another_crate() {
+    ratio_eval::host_tests::run_all(&ratio_eval::host_tests::ScriptedFixture::default());
 }

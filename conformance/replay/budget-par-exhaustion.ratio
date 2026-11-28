@@ -1,0 +1,11 @@
+// expect: runtime-error Budget
+// fixture: reads
+
+// Three concurrent reads under a cap of two tool calls: which branch is refused depends on
+// timing when recorded; the replay refuses the same one, from the tape (design PC-1).
+fn main() -> Str {
+  with { budget: { tool_calls: 2 } } {
+    par { tools.read_file("a"); tools.read_file("b"); tools.read_file("c") }
+  }
+  "done"
+}

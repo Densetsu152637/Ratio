@@ -19,6 +19,13 @@
 //! and call-depth limits ([`Limits`]), and effects suspended for the host (stage 11). Stage 10,
 //! frames ([`frame`]): harness calls, entries and `with` blocks open frames attenuated from
 //! their caller's in every dimension, with budget ledgers that admit effects by reservation.
+//! Stage 11a, the host, the tape and the scheduler: the [`Host`] trait every effect crosses
+//! ([`host`], [`HOST_API_VERSION`]) with the sink [`Guard`](host::Guard) the interpreter wraps
+//! around every host; [`evaluate_with`], whose concurrent branches run with real concurrency
+//! within the width; [`ScriptedHost`] for tests; the [`tape`] ([`TapeHost`], [`TAPE_VERSION`])
+//! that records a turn and replays it verified against the tape alone; per-branch random
+//! generators ([`rng`]); and, behind the `host-tests` feature, the host contract suite
+//! (`host_tests`) a host in another crate runs against itself.
 
 pub use ratio_syntax::{
     BraceKind, Code, Contextual, Diagnostic, Keyword, LexOptions, Lexed, MAX_DIAGNOSTICS,
@@ -58,13 +65,30 @@ pub use ratio_eval::{
 /// [`frame::Session`]).
 pub use ratio_eval::{evaluate_in, frame};
 
+/// Stage 11a: the host boundary. [`Host`] is the trait a host implements;
+/// [`host::Guard`] is the sink guard every evaluation wraps it in; [`host::HOST_API_VERSION`]
+/// changes whenever the trait or a type crossing it changes (assert it at compile time:
+/// `const _: () = assert!(ratio::HOST_API_VERSION == 1);`).
+pub use ratio_eval::host;
+pub use ratio_eval::host::{HOST_API_VERSION, Host};
+/// Stage 11a: the host contract suite, for a host in another crate (feature `host-tests`).
+#[cfg(feature = "host-tests")]
+pub use ratio_eval::host_tests;
+/// Stage 11a: the scripted test host, per-branch random generators, and evaluation with a
+/// host (concurrent branches, the width, cancellation, the drain fence, deadlines).
+pub use ratio_eval::scripted::ScriptedHost;
+/// Stage 11a: the effect tape: record a turn, replay it verified against the tape alone.
+pub use ratio_eval::tape;
+pub use ratio_eval::tape::{TAPE_VERSION, TapeHost};
+pub use ratio_eval::{evaluate_with, fork, rng, scripted};
+
 /// The draft of the specification (`spec/` in this repository) this release implements.
 ///
 /// The specification and the implementation live in the same repository, so they move together:
 /// a language change edits `spec/` and the code in one pull request. A test checks that this
 /// constant matches the version line of `spec/README.md`.
-pub const SPEC_DRAFT: &str = "0.16";
+pub const SPEC_DRAFT: &str = "0.17";
 
-/// The implementation stage reached (chapter 10's table): frames (stage 10), with stages 1 to 7
-/// built too (8 and 9 are in progress).
-pub const STAGE: u32 = 10;
+/// The implementation stage reached (chapter 10's table): the host, the tape and the scheduler
+/// (stage 11a), with stages 1 to 7 and 10 built too (8 and 9 are in progress; 11b follows).
+pub const STAGE: u32 = 11;

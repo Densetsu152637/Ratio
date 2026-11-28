@@ -264,7 +264,7 @@ examples on the eval suites (chapter 10, stage 24).
 | Session cache | 1 MiB | 16 MiB | Oldest entries evicted |
 | Log and event data | 16 KiB per event | — | Cut with a marker |
 | Live-view site events | 20 per second per frame (chapter 08) | 60 | Coalesced |
-| Tape per turn | 64 MiB | 1 GiB | Recording stops with a notice; the turn continues live |
+| Tape per turn | 64 MiB | 1 GiB | Recording stops with a notice; the turn continues live; the tape is marked truncated and refused for replay |
 
 Parser nesting counts the depth of the syntax tree, not only brackets: a nested expression, type
 or pattern costs one level, a `defer` block and a prompt `if` or `for` section one each, a parenthesis one, a call two, a tuple pattern two, and every link of

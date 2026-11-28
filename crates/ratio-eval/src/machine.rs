@@ -28,10 +28,12 @@ use crate::builtins::{
     BUILTINS, Builtin, Class, Compiled, Imp, PureFn, ReCache, Resume, Task, TaskStep, output_size,
     pre_work,
 };
-use crate::error::{Class as ErrClass, Kind, RtError, raise};
+use crate::error::{Class as ErrClass, Kind, RtError, raise, raise_with};
+use crate::fork::{Fence, ForkInfo, ForkKind, Joined, TimeoutScope};
 use crate::frame::stack::{FrameStack, Session};
-use crate::frame::{FrameCtx, FrameKind, Request, SeesItem, Settings};
+use crate::frame::{FrameCtx, FrameKind, NodeId as LedgerNode, Request, SeesItem, Settings};
 use crate::heap::{Charge, Heap};
+use crate::host::{EffectKey, FrameOutcome, Host};
 use crate::labels::Labels;
 use crate::ops::{self, steps_for};
 use crate::plist::{Cursor, List};
@@ -124,6 +126,40 @@ impl CancelToken {
         if !wakers.iter().any(|w| w.will_wake(waker)) {
             wakers.push(waker.clone());
         }
+        drop(wakers);
+        // A cancellation between the first check and the push took the list before the push.
+        if self.is_cancelled() {
+            waker.wake_by_ref();
+        }
+    }
+
+    /// A future that resolves once the token is cancelled.
+    #[must_use]
+    pub fn cancelled(&self) -> Cancelled {
+        Cancelled(self.clone())
+    }
+}
+
+/// Resolves once its [`CancelToken`] is cancelled ([`CancelToken::cancelled`]).
+#[derive(Debug)]
+pub struct Cancelled(CancelToken);
+
+impl std::future::Future for Cancelled {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if self.0.is_cancelled() {
+            return std::task::Poll::Ready(());
+        }
+        self.0.register(cx.waker());
+        if self.0.is_cancelled() {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
     }
 }
 
@@ -148,6 +184,24 @@ pub struct EffectRequest {
     /// The branch path within the frame (`c12#0.b2/c30#1.b0`; empty outside `par` and
     /// `race`).
     pub branch: String,
+    /// How many times this site has run before in this frame and branch path.
+    pub occurrence: u32,
+    /// Whether the effect is made in a `defer` block (exempt from cancellation and from the
+    /// drain fence).
+    pub in_defer: bool,
+}
+
+impl EffectRequest {
+    /// The effect's key (chapter 01).
+    #[must_use]
+    pub fn key(&self) -> EffectKey {
+        EffectKey {
+            frame: std::sync::Arc::clone(&self.frame.path),
+            branch: std::sync::Arc::from(self.branch.as_str()),
+            site: self.site,
+            occurrence: self.occurrence,
+        }
+    }
 }
 
 /// Why [`Machine::run`] returned.
@@ -160,6 +214,12 @@ pub enum Suspend {
     /// A built-in is running on the pool: call `run` again once the [`Waiter`] is ready (or
     /// the evaluation was cancelled, which stops the wait at once).
     Wait(Waiter),
+    /// A concurrent construct: start its branches ([`Machine::spawn`]), then answer it with
+    /// [`Machine::join`] and call `run` again.
+    Branches(ForkInfo),
+    /// A frame cannot close while it owns outstanding drains ([`Fence`]): call `run` again
+    /// once the frame's drains have finished.
+    Fence(LedgerNode),
     /// The evaluation ended.
     Done(Outcome),
 }
@@ -189,6 +249,11 @@ impl Cx<'_> {
     pub(crate) fn fault(&self, f: Fault, labels: Labels) -> RtError {
         fault(self.p, f, labels, self.loc)
     }
+}
+
+/// The error a value fault raises (for the other modules of the crate).
+pub(crate) fn fault_pub(p: &Prepared, f: Fault, labels: Labels, loc: Loc) -> RtError {
+    fault(p, f, labels, loc)
 }
 
 fn fault(p: &Prepared, f: Fault, labels: Labels, loc: Loc) -> RtError {
@@ -363,15 +428,17 @@ enum K {
         loc: Loc,
     },
     Try(NodeId),
-    Par {
+    /// The bottom of a concurrent branch's stack: its value or error is the branch's outcome.
+    BranchRoot,
+    /// A concurrent construct waits for its branches ([`Machine::join`]).
+    Join(Box<ForkState>),
+    /// A timeout's duration is being evaluated.
+    TimeoutDur(NodeId),
+    /// A timeout scope: the scheduler fires it by cancelling it (`scope` is its id), which
+    /// becomes `Timeout`, or the `else` block.
+    TimeoutScope {
         node: NodeId,
-        next: u32,
-        vals: Held,
-    },
-    Race {
-        node: NodeId,
-        next: u32,
-        first: Option<RtError>,
+        scope: TimeoutScope,
     },
     Const(u32),
     PromptRoot,
@@ -410,6 +477,37 @@ enum K {
     },
 }
 
+/// The host frames open and close through (a newtype for `Debug`).
+#[derive(Clone)]
+struct HostRef(Arc<dyn Host>);
+
+impl std::fmt::Debug for HostRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Host")
+    }
+}
+
+/// A construct's branches, kept by the machine that waits for them.
+#[derive(Debug)]
+pub(crate) struct ForkState {
+    info: ForkInfo,
+    /// The construct's node (a `par`/`race` block, or the built-in's effect node).
+    node: NodeId,
+    branches: Branches,
+    /// The labels of the list the branches came from (they shape the result).
+    own: Labels,
+}
+
+#[derive(Debug)]
+enum Branches {
+    /// `par { … }` and `race { … }`: expressions.
+    Nodes(Vec<NodeId>),
+    /// `par([…])`, `race([…])`: functions called without arguments.
+    Thunks(Vec<Value>),
+    /// `par_map`, `par_map_settled`: a function called on each element.
+    Map { f: Value, xs: Vec<Value> },
+}
+
 /// What opening a harness frame needs, kept from the call.
 #[derive(Debug)]
 struct Opening {
@@ -428,6 +526,8 @@ enum Mode {
     Effect(EffectRequest),
     /// Waiting for a built-in on the pool.
     Wait(Box<Waiting>),
+    /// A concurrent construct for the scheduler.
+    Fork(ForkInfo),
     Done,
 }
 
@@ -547,6 +647,20 @@ pub struct Machine {
     offload: Option<PoolSession>,
     /// The `re` call sites' compiled patterns.
     re_cache: ReCache,
+    /// The effects made so far (a cancellation point is `(effects, steps)`).
+    effects: u64,
+    /// The host frames are opened and closed with (the scheduler's guarded host).
+    host: Option<HostRef>,
+    /// The outstanding drains, for the fence on frame closes.
+    fence: Option<Arc<Fence>>,
+    /// A frame close the fence holds back, reported by `run`.
+    fenced: Option<LedgerNode>,
+    /// Whether the scheduler's cancellation of this branch has been delivered.
+    cancel_seen: bool,
+    /// The next timeout scope id (from 1; 0 is no scope).
+    next_scope: u32,
+    /// In replay: the step count this branch stops at (its recorded total).
+    step_cap: Option<u64>,
     #[cfg(debug_assertions)]
     work_log: Vec<BuiltinWork>,
 }
@@ -639,6 +753,13 @@ impl Machine {
             opening: 0,
             offload: None,
             re_cache: ReCache::default(),
+            effects: 0,
+            host: None,
+            fence: None,
+            fenced: None,
+            cancel_seen: false,
+            next_scope: 1,
+            step_cap: None,
             #[cfg(debug_assertions)]
             work_log: Vec::new(),
         };
@@ -763,9 +884,14 @@ impl Machine {
         }
     }
 
-    /// Runs until the next checkpoint, effect or the end.
+    /// Runs until the next checkpoint, effect, construct or the end.
     pub fn run(&mut self) -> Suspend {
+        // Concurrent branches debit the same ledgers between this machine's slices.
+        self.frames.refresh(self.steps);
         loop {
+            if let Some(node) = self.fenced.take() {
+                return Suspend::Fence(node);
+            }
             if self.yield_due {
                 self.yield_due = false;
                 if self.cancel.is_cancelled() && !matches!(self.mode, Mode::Done | Mode::Effect(_))
@@ -780,6 +906,7 @@ impl Machine {
                     );
                     self.mode = Mode::Unwind(Signal::Raise(e));
                 } else {
+                    self.frames.flush(self.steps);
                     return Suspend::Yield;
                 }
             }
@@ -791,6 +918,10 @@ impl Machine {
                     self.ctl.push(K::Effect);
                     self.pending = Some(req.clone());
                     return Suspend::Effect(req);
+                }
+                Mode::Fork(info) => {
+                    self.frames.flush(self.steps);
+                    return Suspend::Branches(info);
                 }
                 Mode::Wait(w) => match w.job.try_take() {
                     Some(Ok(ran)) => {
@@ -826,6 +957,7 @@ impl Machine {
                 },
                 Mode::Done => {
                     if let Some(o) = self.outcome.take() {
+                        self.frames.flush(self.steps);
                         return Suspend::Done(o);
                     }
                     // An effect is outstanding and was not answered.
@@ -859,7 +991,7 @@ impl Machine {
     /// Debits `n` steps, or raises `Budget { which: steps }` without debiting.
     fn charge(&mut self, n: u64, loc: Loc) -> Result<(), RtError> {
         let next = self.steps.saturating_add(n);
-        if next > self.frames.step_limit {
+        if next > self.frames.step_limit || self.step_cap.is_some_and(|c| next > c) {
             let mut e = raise(
                 &self.p,
                 Kind::Budget("steps"),
@@ -1634,30 +1766,34 @@ impl Machine {
                 self.mode = Mode::Ret(Value::unit());
             }
             PKind::Race(xs) => {
-                let Some(first) = xs.first() else {
+                if xs.is_empty() {
                     return self.invalid("an empty race", Labels::NONE, loc);
-                };
-                self.frames.enter_branch(n.site);
-                self.level += 1;
-                self.ctl.push(K::Race {
+                }
+                self.fork(
                     node,
-                    next: 1,
-                    first: None,
-                });
-                self.mode = Mode::Eval(*first);
+                    ForkKind::Race,
+                    Branches::Nodes(xs.to_vec()),
+                    None,
+                    Labels::NONE,
+                    loc,
+                );
             }
             PKind::Par(xs) => {
-                let Some(first) = xs.first() else {
+                if xs.is_empty() {
                     return self.finish(node, Vec::new());
-                };
-                self.frames.enter_branch(n.site);
-                self.level += 1;
-                self.ctl.push(K::Par {
+                }
+                self.fork(
                     node,
-                    next: 1,
-                    vals: Held::new(),
-                });
-                self.mode = Mode::Eval(*first);
+                    ForkKind::All,
+                    Branches::Nodes(xs.to_vec()),
+                    None,
+                    Labels::NONE,
+                    loc,
+                );
+            }
+            PKind::Timeout(d, _, _) => {
+                self.ctl.push(K::TimeoutDur(node));
+                self.mode = Mode::Eval(*d);
             }
             PKind::With(config, _) => {
                 self.ctl.push(K::WithCfg(node));
@@ -2417,12 +2553,17 @@ impl Machine {
                     );
                     return self.fail(e);
                 }
+                if let Some(kind) = control(name) {
+                    return self.fork_call(node, kind, &args, loc);
+                }
                 self.frames.flush(self.steps);
                 let hash = p
                     .hashes
                     .get(loc.module as usize)
                     .copied()
                     .unwrap_or([0; 32]);
+                let occurrence = self.frames.next_occ(n.site);
+                self.effects += 1;
                 self.mode = Mode::Effect(EffectRequest {
                     builtin: Arc::clone(name),
                     args,
@@ -2430,6 +2571,8 @@ impl Machine {
                     loc,
                     frame: self.frames.top().ctx.clone(),
                     branch: self.frames.branch_path(),
+                    occurrence,
+                    in_defer: self.ctl.iter().any(|k| matches!(k, K::Defers { .. })),
                 });
                 return;
             }
@@ -2751,7 +2894,12 @@ impl Machine {
                 self.dispatch(node, f, args);
             }
             K::FrameClose => {
-                self.frames.close(self.steps);
+                if self.fence_holds() {
+                    self.ctl.push(K::FrameClose);
+                    self.mode = Mode::Ret(v);
+                    return;
+                }
+                self.close_top(FrameOutcome::Returned);
                 if self.refuses_secret(&v) {
                     let e = self.sees_refusal("a harness returned a secret");
                     return self.fail(e);
@@ -2787,38 +2935,17 @@ impl Machine {
                 self.drive_task(Resume::Value(v));
             }
             K::Try(_) => self.mode = Mode::Ret(v),
-            K::Par {
-                node,
-                next,
-                mut vals,
-            } => {
-                self.level = self.level.saturating_sub(1);
-                if let Err(f) = vals.push(&self.heap, v) {
-                    return self.fault_at(f, Labels::NONE, p.node(node).loc);
-                }
-                let PKind::Par(xs) = &p.node(node).kind else {
-                    return;
-                };
-                if let Some(x) = xs.get(next as usize) {
-                    self.level += 1;
-                    self.frames.set_branch(next);
-                    self.ctl.push(K::Par {
-                        node,
-                        next: next + 1,
-                        vals,
-                    });
-                    self.mode = Mode::Eval(*x);
-                } else {
-                    self.frames.leave_branch();
-                    self.finish(node, vals.into_vals());
-                }
+            K::BranchRoot => {
+                self.outcome = Some(Outcome::Returned(v));
+                self.mode = Mode::Done;
             }
-            K::Race { .. } => {
-                // The first branch to finish successfully wins; the rest never start.
-                self.level = self.level.saturating_sub(1);
-                self.frames.leave_branch();
-                self.mode = Mode::Ret(v);
-            }
+            K::Join(_) => self.invalid(
+                "a value returned to a construct waiting for its branches",
+                Labels::NONE,
+                Loc::default(),
+            ),
+            K::TimeoutDur(node) => self.enter_timeout(node, &v),
+            K::TimeoutScope { .. } => self.mode = Mode::Ret(v),
             K::Const(i) => {
                 self.envs.pop();
                 self.consts[i as usize] = Some(v.clone());
@@ -3253,45 +3380,46 @@ impl Machine {
                         return;
                     }
                 }
-                K::Par { .. } => {
-                    self.level = self.level.saturating_sub(1);
-                    self.frames.leave_branch();
+                K::BranchRoot => {
+                    let e = match s {
+                        Signal::Raise(e) => e,
+                        Signal::Return(_) | Signal::Break(_) | Signal::Continue => raise(
+                            &self.p,
+                            Kind::Invalid,
+                            "`return`, `break` or `continue` cannot leave a concurrent branch",
+                            Labels::NONE,
+                            Loc::default(),
+                        ),
+                    };
+                    self.outcome = Some(Outcome::Raised(e));
+                    self.mode = Mode::Done;
+                    return;
+                }
+                K::Join(_) => {}
+                K::TimeoutScope { node, scope } => {
+                    if let Signal::Raise(e) = &s
+                        && e.class == ErrClass::Cancelled
+                        && e.scope == scope.id
+                    {
+                        return self.timed_out(node);
+                    }
                 }
                 K::FrameClose => {
-                    let index = self.frames.index();
-                    self.frames.close(self.steps);
-                    return self.unwind_on(self.crossing(s, index));
-                }
-                K::Race { node, next, first } => {
-                    self.level = self.level.saturating_sub(1);
-                    if let Signal::Raise(e) = s {
-                        if e.class != ErrClass::Catchable {
-                            self.frames.leave_branch();
-                            return self.unwind_on(Signal::Raise(e));
-                        }
-                        // A failed branch: try the next; when all fail, raise the failure of
-                        // the first branch in written order.
-                        let first = first.unwrap_or(e);
-                        let p = Arc::clone(&self.p);
-                        let PKind::Race(xs) = &p.node(node).kind else {
-                            return;
-                        };
-                        if let Some(x) = xs.get(next as usize) {
-                            self.level += 1;
-                            self.frames.set_branch(next);
-                            self.ctl.push(K::Race {
-                                node,
-                                next: next + 1,
-                                first: Some(first),
-                            });
-                            self.mode = Mode::Eval(*x);
-                        } else {
-                            self.frames.leave_branch();
-                            self.fail(first);
-                        }
+                    if self.fence_holds() {
+                        self.ctl.push(K::FrameClose);
+                        self.mode = Mode::Unwind(s);
                         return;
                     }
-                    self.frames.leave_branch();
+                    let index = self.frames.index();
+                    let outcome = match &s {
+                        Signal::Raise(e) if e.class == ErrClass::Cancelled => {
+                            FrameOutcome::Cancelled
+                        }
+                        Signal::Raise(_) => FrameOutcome::Raised,
+                        _ => FrameOutcome::Returned,
+                    };
+                    self.close_top(outcome);
+                    return self.unwind_on(self.crossing(s, index));
                 }
                 K::PromptRoot => {
                     self.prompts.pop();
@@ -3388,6 +3516,7 @@ impl Machine {
         name: &Arc<str>,
         site: u32,
         loc: Loc,
+        origin: crate::frame::FrameOrigin,
     ) -> bool {
         // The meets are charged for the work they do (bounded by the configuration's list
         // limits, chapter 07).
@@ -3396,11 +3525,26 @@ impl Machine {
             self.fail(e);
             return false;
         }
-        match self
-            .frames
-            .open(self.steps, kind, &request, settings, name, site, loc)
-        {
-            Ok(()) => true,
+        match self.frames.open(
+            self.steps, kind, &request, settings, name, site, loc, origin,
+        ) {
+            Ok(()) => {
+                // The host checks the child against its own record of the parent.
+                let Some(HostRef(host)) = self.host.clone() else {
+                    return true;
+                };
+                let refused = match self.frames.below_top() {
+                    Some(parent) => host.open_frame(parent, &self.frames.top().ctx).err(),
+                    None => None,
+                };
+                let Some(e) = refused else {
+                    return true;
+                };
+                self.frames.close(self.steps);
+                let e = self.host_error(e, loc);
+                self.fail(e);
+                false
+            }
             Err(o) => {
                 let mut e = if o.refusal.depth {
                     raise(
@@ -3460,13 +3604,18 @@ impl Machine {
             return;
         };
         let merged = (Request::merge(req, over), over_settings.over(&settings));
-        if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc) {
+        let origin = if o.kind == FrameKind::Entry {
+            crate::frame::FrameOrigin::Entry
+        } else {
+            p.harness_origin(o.func)
+        };
+        if !self.open_frame(o.kind, merged, &f.name, o.site, o.loc, origin) {
             return;
         }
         // Every parameter (given or defaulted), every configuration value and the settings
         // the frame inherited are what it receives: none may be a secret it may not see.
         if self.frame_refuses(&[declared, o.overrides.as_ref()], true, true) {
-            self.frames.close(self.steps);
+            self.close_top(FrameOutcome::Raised);
             let e = self.sees_refusal("a secret argument, setting or configuration value went");
             return self.fail(e);
         }
@@ -3484,15 +3633,496 @@ impl Machine {
         let Some(config) = self.config(Some(cfg), n.loc) else {
             return;
         };
-        if self.open_frame(FrameKind::Block, config, &Arc::from("with"), n.site, n.loc) {
+        let hash = p
+            .hashes
+            .get(n.loc.module as usize)
+            .copied()
+            .unwrap_or([0; 32]);
+        let origin = crate::frame::FrameOrigin::Block {
+            site: (hash, n.site),
+        };
+        if self.open_frame(
+            FrameKind::Block,
+            config,
+            &Arc::from("with"),
+            n.site,
+            n.loc,
+            origin,
+        ) {
             if self.frame_refuses(&[Some(cfg)], true, false) {
-                self.frames.close(self.steps);
+                self.close_top(FrameOutcome::Raised);
                 let e = self.sees_refusal("a secret setting or configuration value went");
                 return self.fail(e);
             }
             self.ctl.push(K::FrameClose);
             self.mode = Mode::Eval(body);
         }
+    }
+}
+
+/// The control built-ins the scheduler runs instead of a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Control {
+    Par,
+    Race,
+    ParMap,
+    ParMapSettled,
+    Timeout,
+}
+
+fn control(name: &str) -> Option<Control> {
+    Some(match name {
+        "par" => Control::Par,
+        "race" => Control::Race,
+        "par_map" => Control::ParMap,
+        "par_map_settled" => Control::ParMapSettled,
+        "timeout" => Control::Timeout,
+        _ => return None,
+    })
+}
+
+/// A `limit:` argument: at least 1 (`Err` with its labels otherwise).
+fn branch_limit(v: Option<Value>) -> Result<Option<u32>, Labels> {
+    match v {
+        None => Ok(None),
+        Some(v) if v.is_none() => Ok(None),
+        Some(v) => match v.as_int().and_then(|n| u32::try_from(n).ok()) {
+            Some(n) if n >= 1 => Ok(Some(n)),
+            _ => Err(v.labels),
+        },
+    }
+}
+
+/// Concurrent constructs, timeouts and what the scheduler needs (stage 11a).
+impl Machine {
+    /// A control built-in: `par([…])`, `race([…])`, `par_map`, `par_map_settled`, `timeout`.
+    fn fork_call(&mut self, node: NodeId, c: Control, args: &[Option<Value>], loc: Loc) {
+        let arg = |i: usize| args.get(i).cloned().flatten();
+        match c {
+            Control::Timeout => {
+                let d = arg(0).unwrap_or_default();
+                let Repr::Duration(us) = d.repr else {
+                    return self.invalid("`timeout` takes a Duration", d.labels, loc);
+                };
+                let f = arg(1).unwrap_or_default();
+                self.push_timeout(node, us);
+                self.invoke(&f, Vec::new(), &[], loc);
+            }
+            Control::Par | Control::Race => {
+                let fs = arg(0).unwrap_or_default();
+                let Some(items) = fs.elements() else {
+                    return self.invalid("a list of functions was expected", fs.labels, loc);
+                };
+                let lim = if c == Control::Par { arg(1) } else { None };
+                let lim = match branch_limit(lim) {
+                    Ok(l) => l,
+                    Err(l) => return self.invalid("`limit` must be at least 1", l, loc),
+                };
+                if items.is_empty() {
+                    if c == Control::Race {
+                        return self.invalid("an empty race", fs.labels, loc);
+                    }
+                    self.mode = Mode::Ret(Value::new_list(List::empty()).with_labels(fs.labels));
+                    return;
+                }
+                let kind = if c == Control::Par {
+                    ForkKind::All
+                } else {
+                    ForkKind::Race
+                };
+                self.fork(node, kind, Branches::Thunks(items), lim, fs.labels, loc);
+            }
+            Control::ParMap | Control::ParMapSettled => {
+                let xs = arg(0).unwrap_or_default();
+                let Some(items) = xs.elements() else {
+                    return self.invalid("`par_map` takes a list", xs.labels, loc);
+                };
+                let f = arg(1).unwrap_or_default();
+                let lim = match branch_limit(arg(2)) {
+                    Ok(l) => l.or(Some(4)),
+                    Err(l) => return self.invalid("`limit` must be at least 1", l, loc),
+                };
+                // Reading an element adds the list's own labels.
+                let own = xs.labels;
+                let items: Vec<Value> = items.into_iter().map(|x| x.with_labels(own)).collect();
+                if items.is_empty() {
+                    self.mode = Mode::Ret(Value::new_list(List::empty()).with_labels(own));
+                    return;
+                }
+                let kind = if c == Control::ParMap {
+                    ForkKind::All
+                } else {
+                    ForkKind::Settled
+                };
+                self.fork(node, kind, Branches::Map { f, xs: items }, lim, own, loc);
+            }
+        }
+    }
+
+    /// Suspends for the scheduler to run `branches`.
+    fn fork(
+        &mut self,
+        node: NodeId,
+        kind: ForkKind,
+        branches: Branches,
+        limit: Option<u32>,
+        own: Labels,
+        loc: Loc,
+    ) {
+        let count = match &branches {
+            Branches::Nodes(xs) => xs.len(),
+            Branches::Thunks(fs) => fs.len(),
+            Branches::Map { xs, .. } => xs.len(),
+        };
+        let site = self.p.node(node).site;
+        let occurrence = self.frames.next_occ(site);
+        let info = ForkInfo {
+            kind,
+            count: u32::try_from(count).unwrap_or(u32::MAX),
+            limit,
+            site,
+            occurrence,
+            frame: self.frames.top().ctx.clone(),
+            loc,
+        };
+        self.ctl.push(K::Join(Box::new(ForkState {
+            info: info.clone(),
+            node,
+            branches,
+            own,
+        })));
+        self.mode = Mode::Fork(info);
+    }
+
+    /// Branch `idx` of the construct this machine waits for, as a machine of its own: the
+    /// same program, heap ledger, frames (with the branch element on its path), locals (which
+    /// it may read but not assign) and limits, and its own step count.
+    #[must_use]
+    pub fn spawn(&self, idx: u32) -> Option<Machine> {
+        let Some(K::Join(fs)) = self.ctl.last() else {
+            return None;
+        };
+        let i = idx as usize;
+        let frames = self.frames.child(fs.info.site, fs.info.occurrence, idx);
+        let env = Env {
+            slots: self
+                .envs
+                .last()
+                .map(|e| e.slots.clone())
+                .unwrap_or_default(),
+        };
+        let mut m = Machine {
+            p: Arc::clone(&self.p),
+            ctl: vec![K::BranchRoot],
+            envs: vec![env],
+            mode: Mode::Done,
+            consts: self.consts.clone(),
+            prompts: Vec::new(),
+            heap: self.heap.clone(),
+            limits: self.limits,
+            steps: 0,
+            next_checkpoint: CHECKPOINT,
+            depth: self.depth,
+            level: self.level + 1,
+            yield_due: false,
+            cancel: self.cancel.clone(),
+            outcome: None,
+            pending: None,
+            frames,
+            pending_override: None,
+            site_hint: 0,
+            opening: 0,
+            offload: self.offload.clone(),
+            re_cache: ReCache::default(),
+            effects: 0,
+            host: self.host.clone(),
+            fence: self.fence.clone(),
+            fenced: None,
+            cancel_seen: false,
+            next_scope: 1,
+            step_cap: None,
+            #[cfg(debug_assertions)]
+            work_log: Vec::new(),
+        };
+        let loc = fs.info.loc;
+        match &fs.branches {
+            Branches::Nodes(xs) => m.mode = Mode::Eval(*xs.get(i)?),
+            Branches::Thunks(fs) => m.invoke(fs.get(i)?, Vec::new(), &[], loc),
+            Branches::Map { f, xs } => m.invoke(f, vec![Some(xs.get(i)?.clone())], &[], loc),
+        }
+        Some(m)
+    }
+
+    /// Answers the construct this machine waits for. `branch_steps` are the steps its
+    /// branches were charged (already debited on the ledgers by them).
+    pub fn join(&mut self, joined: Joined, branch_steps: u64) {
+        self.steps = self.steps.saturating_add(branch_steps);
+        self.frames.absorb(self.steps, branch_steps);
+        if self.steps >= self.next_checkpoint {
+            self.yield_due = true;
+            self.next_checkpoint = (self.steps / CHECKPOINT + 1) * CHECKPOINT;
+        }
+        let Some(K::Join(fs)) = self.ctl.pop() else {
+            return self.invalid(
+                "no construct waits for its branches",
+                Labels::NONE,
+                Loc::default(),
+            );
+        };
+        let ForkState {
+            info, node, own, ..
+        } = *fs;
+        let loc = info.loc;
+        let result = match joined {
+            Joined::Failed(e) => Err(e),
+            Joined::Won(v) => Ok(v),
+            Joined::Values(vals) => {
+                if matches!(self.p.node(node).kind, PKind::Par(_)) {
+                    return self.finish(node, vals);
+                }
+                self.branch_list(vals, own, loc)
+            }
+            Joined::Settled(rs) => {
+                let mut items = Vec::with_capacity(rs.len());
+                let mut out = Ok(());
+                for r in rs {
+                    let (ok, v) = match r {
+                        Ok(v) => (true, v),
+                        Err(e) => (false, e.value),
+                    };
+                    match crate::builtins::result_variant(&self.p, &self.heap, ok, v, loc) {
+                        Ok(v) => items.push(v),
+                        Err(e) => {
+                            out = Err(e);
+                            break;
+                        }
+                    }
+                }
+                out.and_then(|()| self.branch_list(items, own, loc))
+            }
+        };
+        match result {
+            Ok(v) => self.mode = Mode::Ret(v),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn branch_list(&self, vals: Vec<Value>, own: Labels, loc: Loc) -> Result<Value, RtError> {
+        List::from_vec(&self.heap, vals)
+            .map(|l| Value::new_list(l).with_labels(own))
+            .map_err(|f| fault(&self.p, f, own, loc))
+    }
+
+    /// Delivers the scheduler's cancellation of this branch (`scope` 0), or of its timeout
+    /// scope `scope`, at the point it is suspended: an effect it awaits is answered
+    /// `Cancelled`, a construct it waits for is failed with it, and anything else unwinds
+    /// with it. `defer` blocks then run, and observe it.
+    pub fn cancel_branch(&mut self, scope: u32) {
+        if self.outcome.is_some() {
+            return;
+        }
+        if scope == 0 {
+            if self.cancel_seen {
+                return;
+            }
+            self.cancel_seen = true;
+        }
+        let mut e = raise(
+            &self.p,
+            Kind::Cancelled,
+            if scope == 0 {
+                "the branch was cancelled"
+            } else {
+                "the timeout elapsed"
+            },
+            Labels::NONE,
+            Loc::default(),
+        );
+        e.scope = scope;
+        match self.ctl.last() {
+            Some(K::Effect) => self.resume_effect(Err(e)),
+            Some(K::Join(_)) => self.join(Joined::Failed(e), 0),
+            _ => self.mode = Mode::Unwind(Signal::Raise(e)),
+        }
+    }
+
+    /// The timeout scopes active in this machine, outermost first.
+    #[must_use]
+    pub fn timeouts(&self) -> Vec<TimeoutScope> {
+        self.ctl
+            .iter()
+            .filter_map(|k| match k {
+                K::TimeoutScope { scope, .. } => Some(*scope),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The effects made so far.
+    #[must_use]
+    pub fn effects(&self) -> u64 {
+        self.effects
+    }
+
+    /// The top frame's branch path (`c12#0.b2/c30#1.b0`; empty outside concurrent branches).
+    #[must_use]
+    pub fn branch_path(&self) -> String {
+        self.frames.branch_path()
+    }
+
+    /// The session's frame's ledger node (the turn's).
+    pub(crate) fn session_node(&self) -> LedgerNode {
+        self.frames.session_node()
+    }
+
+    /// The path of the open frame whose ledger node is `node`.
+    pub(crate) fn path_of(&self, node: LedgerNode) -> Option<Arc<str>> {
+        self.frames.path_of(node)
+    }
+
+    /// The ledger nodes of the frames open in this machine.
+    pub(crate) fn open_nodes(&self) -> Vec<LedgerNode> {
+        self.frames.nodes()
+    }
+
+    /// In replay: the branch stops at `steps`, its recorded total, with `Budget { which:
+    /// steps }` if it would pass it (chapter 01: a replay raises at the recorded steps
+    /// exhaustion, whatever its siblings spent meanwhile; a branch that completed never
+    /// reaches its cap).
+    pub(crate) fn cap_steps(&mut self, steps: u64) {
+        self.step_cap = Some(steps);
+    }
+
+    /// Frames open and close through `host` (the scheduler's guarded host), which checks
+    /// each against its own record of the parent.
+    pub(crate) fn set_host(&mut self, host: Arc<dyn Host>) {
+        self.host = Some(HostRef(host));
+    }
+
+    /// The outstanding drains a frame close must wait for.
+    pub(crate) fn set_fence(&mut self, fence: Arc<Fence>) {
+        self.fence = Some(fence);
+    }
+
+    fn push_timeout(&mut self, node: NodeId, micros: i64) {
+        let id = self.next_scope;
+        self.next_scope = self.next_scope.saturating_add(1);
+        self.ctl.push(K::TimeoutScope {
+            node,
+            scope: TimeoutScope {
+                id,
+                micros: micros.max(0),
+                frame: self.frames.top().ctx.node,
+            },
+        });
+    }
+
+    fn enter_timeout(&mut self, node: NodeId, d: &Value) {
+        let p = Arc::clone(&self.p);
+        let pn = p.node(node);
+        let (Repr::Duration(us), PKind::Timeout(_, body, _)) = (&d.repr, &pn.kind) else {
+            return self.invalid("`with timeout` takes a Duration", d.labels, pn.loc);
+        };
+        self.push_timeout(node, *us);
+        self.mode = Mode::Eval(*body);
+    }
+
+    /// A timeout scope was fired: its `else` block, or `Timeout`.
+    fn timed_out(&mut self, node: NodeId) {
+        let p = Arc::clone(&self.p);
+        let pn = p.node(node);
+        if let PKind::Timeout(_, _, Some(e)) = pn.kind {
+            self.mode = Mode::Eval(e);
+            return;
+        }
+        let e = raise(
+            &p,
+            Kind::Timeout,
+            "the timeout elapsed",
+            Labels::NONE,
+            pn.loc,
+        );
+        self.fail(e);
+    }
+
+    /// Whether the fence holds the top frame's close (it owns outstanding drains); `run`
+    /// then reports [`Suspend::Fence`].
+    fn fence_holds(&mut self) -> bool {
+        let node = self.frames.top().ctx.node;
+        if self.fence.as_ref().is_some_and(|f| f.holds(node)) {
+            self.fenced = Some(node);
+            return true;
+        }
+        false
+    }
+
+    /// Closes the top frame, telling the host.
+    fn close_top(&mut self, outcome: FrameOutcome) {
+        if let Some(HostRef(h)) = &self.host {
+            h.close_frame(&self.frames.top().ctx, outcome);
+        }
+        self.frames.close(self.steps);
+    }
+
+    /// The error a host's answer raises.
+    pub(crate) fn host_error(&self, e: crate::host::HostError, loc: Loc) -> RtError {
+        use crate::host::HostError as H;
+        let p = &self.p;
+        match e {
+            H::Denied { by, message } => {
+                raise(p, Kind::Denied(by.name()), &message, Labels::NONE, loc)
+            }
+            H::ToolFailed { message, data } => raise_with(
+                p,
+                Kind::ToolFailed,
+                Value::text(&message.value).with_labels(message.labels),
+                Some(data),
+                loc,
+            ),
+            H::ModelFailed { message } => raise_with(
+                p,
+                Kind::ModelFailed,
+                Value::text(&message.value).with_labels(message.labels),
+                None,
+                loc,
+            ),
+            H::Timeout { message } => raise(p, Kind::Timeout, &message, Labels::NONE, loc),
+            H::NotFound { message } => raise(p, Kind::NotFound, &message, Labels::NONE, loc),
+            H::Unsupported { message } => raise(p, Kind::Unsupported, &message, Labels::NONE, loc),
+            H::Invalid { message } => raise(p, Kind::Invalid, &message, Labels::NONE, loc),
+            H::RateLimited { message } => raise(p, Kind::RateLimited, &message, Labels::NONE, loc),
+            H::Cancelled(o) => raise(
+                p,
+                Kind::Cancelled,
+                &format!("the call was cancelled ({})", o.name()),
+                Labels::NONE,
+                loc,
+            ),
+        }
+    }
+
+    /// `Budget { which }` for a refusal by `node`'s ledger: catchable once it leaves the frame
+    /// whose cap it was.
+    pub(crate) fn budget_error(
+        &self,
+        which: crate::frame::BudgetKind,
+        node: LedgerNode,
+        loc: Loc,
+    ) -> RtError {
+        let mut e = raise(
+            &self.p,
+            Kind::Budget(which.name()),
+            &format!("the `{}` budget ran out", which.name()),
+            Labels::NONE,
+            loc,
+        );
+        e.scope = self.frames.index_of(node);
+        e
+    }
+
+    /// A `Replay` divergence (never catchable).
+    pub(crate) fn replay_error(&self, message: &str, loc: Loc) -> RtError {
+        raise(&self.p, Kind::Replay, message, Labels::NONE, loc)
     }
 }
 

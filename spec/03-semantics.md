@@ -564,7 +564,8 @@ is stopped unless it was handed out of the scope. A tool call in flight ends by 
 
 - an `abort`-class call is stopped at once and the host acknowledges it; a call that had already
   reached a remote server (`web_*`, MCP) is recorded `abandoned` rather than `aborted`, because the
-  remote side may still act on it;
+  remote side may still act on it; a call the host has not acknowledged within `ABORT_GRACE`
+  (30 s) is recorded `unacknowledged`, charged all it reserved, and its scope returns;
 - a `drain`-class call runs to completion (or to its deadline) and its result is discarded;
 - a call still waiting for an approval or a `tool.before` hook is **withdrawn**, whatever its
   class. The host resolves a withdrawal racing the user's answer atomically: either the answer is
@@ -577,7 +578,7 @@ call's key (and, for a drained call, the digest of its discarded response), and 
 that the same calls end the same way.
 
 **Deadlines.** Every host effect carries a deadline: the earliest of the enclosing `with timeout`
-deadlines and the end of the frame's `wall` budget. The host bounds the call by it (request
+deadlines and the end of the frame's `wall` budget, measured from the start of the evaluation. The host bounds the call by it (request
 timeouts for models and MCP calls; `run_command`'s effective timeout is the smaller of its
 argument and the time left), so a command is killed when an enclosing timeout fires, exactly as
 its own timeout would kill it. A response caused by a deadline (`Timeout`, or `timed_out: true`

@@ -120,6 +120,8 @@ pub(crate) enum PKind {
         /// The call's overrides (`f(x) with { … }`), evaluated after the arguments.
         config: Option<NodeId>,
     },
+    /// `with timeout d { body } else { … }`.
+    Timeout(NodeId, NodeId, Option<NodeId>),
     Effect {
         name: Arc<str>,
         args: Box<[NodeId]>,
@@ -309,7 +311,48 @@ pub struct Prepared {
     by_name: HashMap<(String, String), u32>,
 }
 
+/// A package a program holds: its name and IR hash.
+pub type LoadedPackage = (Arc<str>, [u8; 32]);
+
 impl Prepared {
+    /// The origin of a harness frame entering function `func`: its package, the package's IR
+    /// hash and its key (`<module path>::<name>`).
+    pub(crate) fn harness_origin(&self, func: u32) -> crate::frame::FrameOrigin {
+        let f = &self.funcs[func as usize];
+        let module = self.node(f.body).loc.module as usize;
+        let (package, path) = self
+            .modules
+            .get(module)
+            .cloned()
+            .unwrap_or_else(|| (Arc::from("?"), Arc::from("?")));
+        crate::frame::FrameOrigin::Harness {
+            package,
+            entry_hash: self.hashes.get(module).copied().unwrap_or([0; 32]),
+            key: Arc::from(format!("{path}::{}", f.name)),
+        }
+    }
+
+    /// What a host loads when it loads this program: every package's name and IR hash, and
+    /// every harness it may enter (as the [`crate::frame::FrameOrigin::Harness`] its frames
+    /// will carry).
+    #[must_use]
+    pub fn loaded(&self) -> (Vec<LoadedPackage>, Vec<crate::frame::FrameOrigin>) {
+        let mut packages: Vec<LoadedPackage> = self
+            .modules
+            .iter()
+            .zip(self.hashes.iter())
+            .map(|((p, _), h)| (Arc::clone(p), *h))
+            .collect();
+        packages.sort();
+        packages.dedup();
+        let harnesses = (0..self.funcs.len())
+            .filter(|&i| self.funcs[i].kind == FuncKind::Harness)
+            .filter_map(|i| u32::try_from(i).ok())
+            .map(|i| self.harness_origin(i))
+            .collect();
+        (packages, harnesses)
+    }
+
     /// Every item that can be looked up with [`Prepared::find`]: `(module path, name)`, in
     /// module and source order.
     #[must_use]
@@ -817,8 +860,14 @@ impl Preparer<'_> {
             E::Prompt(parts) => PKind::Prompt(self.prompt(parts)),
             E::Par(xs) => PKind::Par(self.exprs(xs)),
             E::Race(xs) => PKind::Race(self.exprs(xs)),
-            E::WithTimeout { .. } => {
-                PKind::Unsupported("`with timeout` needs the scheduler (stage 11)")
+            E::WithTimeout {
+                duration,
+                body,
+                else_,
+            } => {
+                let d = self.expr(duration);
+                let b = self.expr(body);
+                PKind::Timeout(d, b, else_.as_ref().map(|e| self.expr(e)))
             }
             E::With { config, body } => {
                 let c = self.expr(config);

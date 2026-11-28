@@ -1,0 +1,17 @@
+// expect: runtime-error Budget
+// fixture: reads
+
+// Two spinning branches share a steps budget that one of them exhausts. A tape with that
+// exhaustion removed, or with step totals summing above the limit, raises `Replay`.
+fn spin(n: Int) -> Int {
+  var i = 0
+  while i < n { i = i + 1 }
+  i
+}
+
+fn main() -> Int {
+  let (a, b) = with { budget: { steps: 30000 } } {
+    par { spin(4000); spin(4000) }
+  }
+  a + b
+}
